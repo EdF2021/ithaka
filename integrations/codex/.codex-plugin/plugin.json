@@ -1,22 +1,22 @@
 {
-  "name": "odysseus",
+  "name": "ithaka",
   "version": "0.1.1",
-  "description": "Connect Codex to a scoped Odysseus instance.",
+  "description": "Connect Codex to a scoped Ithaka instance.",
   "author": {
-    "name": "Odysseus"
+    "name": "Ithaka"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "Odysseus",
-    "shortDescription": "Use scoped Odysseus tools from Codex.",
-    "longDescription": "Connects Codex terminal sessions to Odysseus through user-controlled scoped API tokens. Codex must use /api/codex/* endpoints so Odysseus Settings can enforce tool access.",
-    "developerName": "Odysseus",
+    "displayName": "Ithaka",
+    "shortDescription": "Use scoped Ithaka tools from Codex.",
+    "longDescription": "Connects Codex terminal sessions to Ithaka through user-controlled scoped API tokens. Codex must use /api/codex/* endpoints so Ithaka Settings can enforce tool access.",
+    "developerName": "Ithaka",
     "category": "Productivity",
     "capabilities": [
       "todos",
       "email",
       "scoped-api"
     ],
-    "defaultPrompt": "Use Odysseus only through configured scoped access. Check capabilities before reading or writing data."
+    "defaultPrompt": "Use Ithaka only through configured scoped access. Check capabilities before reading or writing data."
   }
 }
