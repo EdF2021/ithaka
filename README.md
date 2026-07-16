@@ -19,11 +19,11 @@
 
 ## Quick Start
 
-> `dev` is the default branch and gets the newest changes first. Use [`main`](https://github.com/EdF2021/odysseus/tree/main) if you want the more curated branch.
+> `dev` is the default branch and gets the newest changes first. Use [`main`](https://github.com/EdF2021/ithaka/tree/main) if you want the more curated branch.
 
 ```bash
-git clone https://github.com/EdF2021/odysseus.git
-cd odysseus
+git clone https://github.com/EdF2021/ithaka.git
+cd ithaka
 cp .env.example .env
 docker compose up -d --build
 ```
