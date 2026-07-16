@@ -159,6 +159,9 @@ services:
     environment:
       - TS_USERSPACE=true
       - TS_STATE_DIR=/var/lib/tailscale
+      # Log in once and keep that auth URL stable instead of retrying every
+      # few minutes (each retry invalidates the previously printed URL).
+      - TS_AUTH_ONCE=true
     volumes:
       - tailscale-state:/var/lib/tailscale
     restart: unless-stopped
