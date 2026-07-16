@@ -148,7 +148,23 @@ services:
       - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8091}
     restart: unless-stopped
 
+  # Remote access over your private tailnet. Runs the official Tailscale
+  # client in userspace mode on the host network, so inbound connections to
+  # this node's Tailscale IP reach the app on localhost:7000. First run:
+  # `docker compose logs tailscale` prints a login URL to authorize the node.
+  tailscale:
+    image: docker.io/tailscale/tailscale:latest
+    hostname: ithaka
+    network_mode: host
+    environment:
+      - TS_USERSPACE=true
+      - TS_STATE_DIR=/var/lib/tailscale
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+
 volumes:
   searxng-data:
   chromadb-data:
   ntfy-cache:
+  tailscale-state:
