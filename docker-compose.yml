@@ -156,12 +156,12 @@ services:
     image: docker.io/tailscale/tailscale:latest
     hostname: ithaka
     network_mode: host
-    environment:
-      - TS_USERSPACE=true
-      - TS_STATE_DIR=/var/lib/tailscale
-      # Log in once and keep that auth URL stable instead of retrying every
-      # few minutes (each retry invalidates the previously printed URL).
-      - TS_AUTH_ONCE=true
+    # Run plain tailscaled instead of containerboot: containerboot's login
+    # retry loop regenerates the node key (and thus the auth URL) every few
+    # minutes, making interactive browser auth a race you can't win. With
+    # bare tailscaled the key is generated once by a single `tailscale up`
+    # and the printed auth URL stays valid until it is used.
+    entrypoint: ["tailscaled", "--tun=userspace-networking", "--statedir=/var/lib/tailscale"]
     volumes:
       - tailscale-state:/var/lib/tailscale
     restart: unless-stopped
