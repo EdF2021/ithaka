@@ -63,15 +63,27 @@ async def _local_model_slot(target_url: str, model: str, workload: Optional[str]
             from src.interactive_gate import has_foreground_activity
         except Exception:
             has_foreground_activity = lambda: False  # type: ignore
+        # Bounded: after 10 minutes the background task proceeds anyway (it
+        # still queues behind the lock) instead of starving forever on a
+        # perpetually-active browser or a leaked counter.
+        _wait_started = time.monotonic()
         while _LOCAL_MODEL_WAITING_FOREGROUND > 0 or has_foreground_activity():
+            if time.monotonic() - _wait_started > 600:
+                logger.warning(
+                    "[model-gate] background wait exceeded 600s (waiting=%d); proceeding to lock",
+                    _LOCAL_MODEL_WAITING_FOREGROUND,
+                )
+                break
             await asyncio.sleep(0.25)
 
     acquired = False
+    waiting_decremented = kind != "foreground"
     try:
         await _LOCAL_MODEL_LOCK.acquire()
         acquired = True
         if kind == "foreground":
             _LOCAL_MODEL_WAITING_FOREGROUND = max(0, _LOCAL_MODEL_WAITING_FOREGROUND - 1)
+            waiting_decremented = True
         _LOCAL_MODEL_CURRENT.clear()
         _LOCAL_MODEL_CURRENT.update({
             "task": current_task,
@@ -82,7 +94,9 @@ async def _local_model_slot(target_url: str, model: str, workload: Optional[str]
         })
         yield
     finally:
-        if kind == "foreground":
+        # Decrement exactly once per increment: normally at acquire above;
+        # here only when acquire itself raised/was cancelled first.
+        if not waiting_decremented:
             _LOCAL_MODEL_WAITING_FOREGROUND = max(0, _LOCAL_MODEL_WAITING_FOREGROUND - 1)
         if acquired and _LOCAL_MODEL_LOCK.locked():
             owner = _LOCAL_MODEL_CURRENT.get("task")
@@ -1697,13 +1711,17 @@ def list_model_ids(
                 if m.get("name") or m.get("model")
             ]
         return model_ids
-    except Exception:
+    except Exception as primary_exc:
         try:
             if ":11434" in base_chat_url or "ollama" in base_chat_url.lower():
                 root = base_chat_url.replace("/v1/chat/completions", "").replace("/chat/completions", "").rstrip("/")
                 r = httpx.get(root + "/api/tags", timeout=timeout)
                 r.raise_for_status()
                 return [m.get("name") or m.get("model") for m in (r.json().get("models") or []) if m.get("name") or m.get("model")]
+            logger.warning(
+                "Failed to fetch model list from configured endpoint %s",
+                base_chat_url, exc_info=primary_exc,
+            )
         except Exception as e:
             logger.warning("Failed to fetch model list from configured endpoint", exc_info=e)
         return []

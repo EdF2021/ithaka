@@ -1869,7 +1869,10 @@ def _build_system_prompt(
                     "EMAIL WRITING STYLE AND IDENTITY — FOLLOW FOR ANY EMAIL DRAFT OR SEND:\n" + _style,
                 )
         except Exception:
-            pass
+            logger.warning(
+                "email writing-style injection failed; drafts fall back to default style",
+                exc_info=True,
+            )
 
     # When creating email documents, instruct the AI on the format
     if relevant_tools and not suppress_local_context and (_EMAIL_TOOL_HINTS & set(relevant_tools)):
@@ -4015,14 +4018,20 @@ async def stream_agent_loop(
 
                 _tool_task = asyncio.create_task(_run_tool())
                 # Drain progress events as they arrive — block until the
-                # next event OR the tool finishes (sentinel = None).
-                while True:
-                    evt = await _progress_q.get()
-                    if evt is None:
-                        break
-                    yield (
-                        f'data: {json.dumps({"type": "tool_progress", "tool": block.tool_type, "round": round_num, **evt})}\n\n'
-                    )
+                # next event OR the tool finishes (sentinel = None). If the
+                # client closes the stream mid-drain (GeneratorExit) the tool
+                # task must be cancelled, or it runs on as an orphan.
+                try:
+                    while True:
+                        evt = await _progress_q.get()
+                        if evt is None:
+                            break
+                        yield (
+                            f'data: {json.dumps({"type": "tool_progress", "tool": block.tool_type, "round": round_num, **evt})}\n\n'
+                        )
+                except BaseException:
+                    _tool_task.cancel()
+                    raise
                 desc, result = await _tool_task
 
             # A skill the model just loaded can prescribe tools that weren't
@@ -4087,8 +4096,8 @@ async def stream_agent_loop(
                                 result["results"] = _clean
                             elif "stdout" in result:
                                 result["stdout"] = _clean
-                        except (json.JSONDecodeError, Exception):
-                            pass
+                        except json.JSONDecodeError:
+                            logger.debug("web_search SOURCES marker present but not valid JSON; skipping sources chip")
 
             # Emit doc-specific event for document tools — the frontend
             # document panel handles this; no need to show content in chat.

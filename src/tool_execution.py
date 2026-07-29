@@ -982,7 +982,7 @@ def format_tool_result(description: str, result: Dict) -> str:
     if "stdout" in result:
         if result["stdout"]:
             parts.append(f"**stdout:**\n```\n{result['stdout']}\n```")
-        if result["stderr"]:
+        if result.get("stderr"):
             parts.append(f"**stderr:**\n```\n{result['stderr']}\n```")
         parts.append(f"**exit_code:** {result.get('exit_code', 'unknown')}")
     elif "output" in result:
@@ -1004,7 +1004,7 @@ def format_tool_result(description: str, result: Dict) -> str:
         parts.append(f"Session created: **{result['name']}** (id: `{result['session_id']}`, model: {result.get('model', 'unknown')})")
     elif "success" in result:
         if result["success"]:
-            parts.append(f"File written: {result['path']} ({result['size']} bytes)")
+            parts.append(f"File written: {result.get('path', '?')} ({result.get('size', '?')} bytes)")
         else:
             parts.append(f"Error: {result.get('error', 'unknown')}")
     elif "action" in result:

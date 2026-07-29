@@ -240,7 +240,10 @@ class ChatHandler:
                                     if _m is not None:
                                         _m["vision"] = _vtext
                             except Exception:
-                                pass
+                                logger.warning(
+                                    "vision cache read failed for %s; falling back to raw pixels",
+                                    att_id, exc_info=True,
+                                )
                     else:
                         # Main model is text-only — use VL model for description.
                         # Prefer the cached/user-edited text in UPLOAD_DIR/.vision/{id}.txt
@@ -269,7 +272,9 @@ class ChatHandler:
                                         _vf.write(vl_desc)
                                     _sync_upload_vision_to_gallery(file_info, owner, vl_desc)
                                 except Exception:
-                                    pass
+                                    logger.warning(
+                                        "vision cache write failed for %s", att_id, exc_info=True,
+                                    )
                         enhanced_message = f"{enhanced_message}\n\n[Image: {file_info['name']}]\n{vl_desc}"
                         # Surface the description to the client live so it renders as a
                         # collapsible "image description" on the user bubble (not just
