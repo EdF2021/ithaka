@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Ithaka is Ed's private fork of `pewdiepie-archdaemon/odysseus` (detached, no upstream remote): a self-hosted AI workspace (chat/agents, cookbook model serving, deep research, documents, email, notes/tasks/calendar) built on FastAPI + a vanilla-JS frontend. AGPL-3.0. Branch model: `dev` is the default working branch, `main` is the curated/stable branch — PRs target `dev`.
 
-Session logs live in `docs/sessions/` — read the most recent one before starting substantial work.
+Session logs live in `docs/sessions/` — read the most recent one before starting substantial work. Operational guides (setup, backup/restore, security CI, PR-blocker audit) live in `docs/`.
 
 ## Commands
 
@@ -15,7 +15,7 @@ The local virtualenv is **`.venv`** (repo docs say `./venv` — that's stale; us
 ```bash
 # Docker stack (canonical way to run): app + chromadb + searxng + ntfy + tailscale sidecar
 docker compose up -d --build          # containers ithaka-*, app on http://localhost:7000
-docker compose logs --tail=120 ithaka
+docker compose logs --tail=120 ithaka  # first admin password is printed here on a fresh data volume
 docker compose config                  # validate after compose changes
 
 # Native dev server
@@ -38,7 +38,7 @@ ITHAKA_DATA_DIR=<fresh-dir> .venv/bin/python -m uvicorn app:app --port 7001
 node --check static/js/<changed-file>.js
 ```
 
-Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*` (security, routes, services, cli, js, helpers, unit, uncategorized) plus a finer `sub_*` marker, so `-m "area_services and sub_cookbook"` also works. Testing rules live in `tests/TESTING_STANDARD.md` (policy) and `tests/README.md` (helper reference).
+Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*` (security, routes, services, cli, js, helpers, unit, uncategorized) plus a finer `sub_*` marker, so `-m "area_services and sub_cookbook"` also works. Pytest runs with `asyncio_mode = "auto"` — async test functions need no marker. Testing rules live in `tests/TESTING_STANDARD.md` (policy) and `tests/README.md` (helper reference). There is no linter/formatter configured; the checks are pytest plus the syntax checks below.
 
 ## Architecture
 
