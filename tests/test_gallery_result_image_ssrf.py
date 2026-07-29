@@ -8,6 +8,8 @@ SSRF primitive (cloud-metadata credential exfil).
 The client-supplied ``_endpoint`` is already validated through
 ``check_outbound_url`` before the first request; this pins the same guard on the
 *result* URL pulled from the response body, which previously went unchecked.
+The fetch now runs through ``safe_httpx_request_async`` (policy check + DNS pin
++ per-hop redirect revalidation).
 """
 import base64
 
@@ -18,6 +20,8 @@ import routes.gallery_routes as gallery_routes
 
 
 class _FakeResp:
+    headers: dict = {}
+
     def __init__(self, status_code: int, content: bytes = b""):
         self.status_code = status_code
         self.content = content
@@ -36,8 +40,8 @@ class _FakeAsyncClient:
     async def __aexit__(self, *exc):
         return False
 
-    async def get(self, url, **kwargs):
-        self.gets.append(url)
+    async def request(self, method, url, **kwargs):
+        self.gets.append(str(url))
         return _FakeResp(200, b"PNGDATA")
 
 

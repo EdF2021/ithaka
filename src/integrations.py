@@ -402,20 +402,19 @@ async def execute_api_call(
 
     url = _join_integration_url(base_url, path)
 
-    # SSRF guard — same check used by the gallery endpoint, embeddings,
-    # CardDAV, and the reminder webhook sender. Link-local / metadata
-    # addresses (169.254.x.x — the cloud credential-exfil vector) are always
-    # rejected; INTEGRATION_API_BLOCK_PRIVATE_IPS=true also blocks RFC-1918 /
-    # loopback for locked-down deployments. Private stays allowed by default
-    # because LAN integrations (Home Assistant, Miniflux, ntfy) are the
-    # primary use case.
-    from src.url_safety import check_outbound_url
+    # SSRF guard — same policy as the gallery endpoint, embeddings, CardDAV,
+    # and the reminder webhook sender. Link-local / metadata addresses
+    # (169.254.x.x — the cloud credential-exfil vector) are always rejected;
+    # INTEGRATION_API_BLOCK_PRIVATE_IPS=true also blocks RFC-1918 / loopback
+    # for locked-down deployments. Private stays allowed by default because
+    # LAN integrations (Home Assistant, Miniflux, ntfy) are the primary use
+    # case. The fetch goes through safe_httpx_request_async, which pins the
+    # vetted DNS resolution onto the connection (no rebinding TOCTOU) and
+    # re-validates every redirect hop.
+    from src.url_safety import UnsafeOutboundURL, safe_httpx_request_async
     block_private = os.getenv(
         "INTEGRATION_API_BLOCK_PRIVATE_IPS", "false"
     ).lower() == "true"
-    ok, reason = check_outbound_url(url, block_private=block_private)
-    if not ok:
-        return {"error": f"URL rejected: {reason}", "exit_code": 1}
 
     method = method.upper()
 
@@ -455,15 +454,19 @@ async def execute_api_call(
             auth = httpx.BasicAuth(parts[0], parts[1])
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.request(
+        try:
+            response = await safe_httpx_request_async(
                 method,
                 url,
                 params=params,
                 json=body if body is not None else None,
                 headers=headers,
                 auth=auth,
+                block_private=block_private,
+                timeout=30.0,
             )
+        except UnsafeOutboundURL as exc:
+            return {"error": f"URL rejected: {exc}", "exit_code": 1}
 
         content_type = response.headers.get("content-type", "")
         status = response.status_code

@@ -106,6 +106,9 @@ async def test_api_call_root_path_has_no_trailing_slash():
     with (
         patch.object(integrations, "_find_integration", return_value=DISCORD_INTEGRATION),
         patch("httpx.AsyncClient", return_value=mock_client),
+        # This test is about URL joining; stub the SSRF guard open so no real
+        # DNS resolve happens and no IP pin rewrites the asserted URL.
+        patch("src.url_safety.check_outbound_url", return_value=(True, "ok")),
     ):
         result = await integrations.execute_api_call(
             "discord_test", "POST", "/", body={"content": "test"}

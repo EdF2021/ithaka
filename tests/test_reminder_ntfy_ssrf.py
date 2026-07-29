@@ -35,7 +35,8 @@ def _settings(**extra):
 
 
 class _SpyAsyncClient:
-    """Stands in for httpx.AsyncClient; records posts, returns success."""
+    """Stands in for httpx.AsyncClient (as used by safe_httpx_request_async);
+    records requests, returns success."""
     calls = []
 
     def __init__(self, **kwargs):
@@ -47,8 +48,8 @@ class _SpyAsyncClient:
     async def __aexit__(self, *a):
         pass
 
-    async def post(self, url, **kw):
-        _SpyAsyncClient.calls.append(url)
+    async def request(self, method, url, **kw):
+        _SpyAsyncClient.calls.append(str(url))
         resp = MagicMock()
         resp.is_success = True
         resp.status_code = 200

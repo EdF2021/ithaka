@@ -47,32 +47,22 @@ def test_rejects_non_github():
 
 
 def test_fetch_bytes_rejects_cross_host_redirect(monkeypatch):
-    class _Resp:
-        url = "https://evil.example/secret"
-        status_code = 200
-        content = b"x"
+    """The safe fetch helper follows redirects manually; a hop that leaves the
+    GitHub host allowlist must be refused before it is fetched."""
+    import httpx
 
-        def raise_for_status(self):
-            return None
+    real_client = httpx.Client
 
-    class _Client:
-        def __init__(self, *args, **kwargs):
-            pass
+    def handler(request):
+        # DNS is pinned, so the hostname travels in the Host header.
+        assert request.headers.get("host") == "raw.githubusercontent.com"
+        return httpx.Response(302, headers={"location": "https://evil.example/secret"})
 
-        def __enter__(self):
-            return self
+    def fake_client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), follow_redirects=False)
 
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url, headers=None):
-            return _Resp()
-
-    monkeypatch.setattr("services.memory.skill_importer.httpx.Client", _Client)
-    monkeypatch.setattr(
-        "services.memory.skill_importer.check_outbound_url",
-        lambda url: (True, ""),
-    )
+    monkeypatch.setattr(httpx, "Client", fake_client)
+    monkeypatch.setattr("src.url_safety._default_resolver", lambda host: ["93.184.216.34"])
     with pytest.raises(SkillImportError, match="redirect target"):
         _fetch_bytes("https://raw.githubusercontent.com/o/r/main/SKILL.md")
 
@@ -89,14 +79,11 @@ def test_list_github_dir_accepts_api_github_response(monkeypatch):
         "services.memory.skill_importer._fetch_text",
         lambda url: "# skill\n",
     )
-    monkeypatch.setattr(
-        "services.memory.skill_importer.check_outbound_url",
-        lambda url: (True, ""),
-    )
 
     class _Resp:
         url = "https://api.github.com/repos/o/r/contents?ref=main"
         status_code = 200
+        headers: dict = {}
 
         def raise_for_status(self):
             return None
@@ -108,20 +95,7 @@ def test_list_github_dir_accepts_api_github_response(monkeypatch):
                 "download_url": "https://raw.githubusercontent.com/o/r/main/SKILL.md",
             }]
 
-    class _Client:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def get(self, url, headers=None):
-            return _Resp()
-
-    monkeypatch.setattr("services.memory.skill_importer.httpx.Client", _Client)
+    _mock_httpx_client(monkeypatch, _Resp())
 
     out = {}
     src = ResolvedSource(owner="o", repo="r", ref="main", path="")
@@ -130,6 +104,8 @@ def test_list_github_dir_accepts_api_github_response(monkeypatch):
 
 
 def _mock_httpx_client(monkeypatch, response):
+    """Stub the safe fetch helper's httpx.Client and hold its URL policy open
+    (the mocked hostnames don't resolve in the test environment)."""
     class _Client:
         def __init__(self, *args, **kwargs):
             pass
@@ -140,13 +116,13 @@ def _mock_httpx_client(monkeypatch, response):
         def __exit__(self, *args):
             return False
 
-        def get(self, url, headers=None):
+        def request(self, method, url, **kwargs):
             return response
 
-    monkeypatch.setattr("services.memory.skill_importer.httpx.Client", _Client)
+    monkeypatch.setattr("src.url_safety.httpx.Client", _Client)
     monkeypatch.setattr(
-        "services.memory.skill_importer.check_outbound_url",
-        lambda url: (True, ""),
+        "src.url_safety.check_outbound_url",
+        lambda url, **kwargs: (True, "ok"),
     )
 
 
@@ -154,6 +130,7 @@ def test_list_github_dir_surfaces_rate_limit(monkeypatch):
     class _Resp:
         url = "https://api.github.com/repos/o/r/contents?ref=main"
         status_code = 403
+        headers: dict = {}
 
         def json(self):
             return {"message": "API rate limit exceeded for 203.0.113.1"}
@@ -169,6 +146,7 @@ def test_fetch_bytes_surfaces_github_error_detail(monkeypatch):
         url = "https://raw.githubusercontent.com/o/r/main/SKILL.md"
         status_code = 403
         content = b""
+        headers: dict = {}
 
         def json(self):
             return {"message": "Forbidden"}

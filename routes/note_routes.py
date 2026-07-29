@@ -447,19 +447,27 @@ async def dispatch_reminder(
                         # CalDAV, search, and embeddings. Blocks link-local / metadata
                         # addresses (169.254.x.x) by default; set
                         # REMINDER_WEBHOOK_BLOCK_PRIVATE_IPS=true to also block
-                        # RFC-1918 ranges for locked-down deployments.
+                        # RFC-1918 ranges for locked-down deployments. The fetch
+                        # helper pins the vetted DNS resolution onto the connection
+                        # and re-validates every redirect hop.
                         import os as _os
-                        from src.url_safety import check_outbound_url as _chk
+                        from src.url_safety import (
+                            UnsafeOutboundURL as _Unsafe,
+                            safe_httpx_request_async as _safe_fetch,
+                        )
                         _block = _os.getenv("REMINDER_WEBHOOK_BLOCK_PRIVATE_IPS", "false").lower() == "true"
-                        _ok, _reason = _chk(url, block_private=_block)
-                        if not _ok:
-                            webhook_error = f"Webhook URL rejected: {_reason}"
+                        try:
+                            resp = await _safe_fetch(
+                                "POST", url,
+                                content=rendered.encode(), headers=hdrs,
+                                timeout=10.0, block_private=_block,
+                            )
+                        except _Unsafe as _rej:
+                            webhook_error = f"Webhook URL rejected: {_rej}"
                         else:
-                            async with httpx.AsyncClient(timeout=10.0) as client:
-                                resp = await client.post(url, content=rendered.encode(), headers=hdrs)
-                                webhook_sent = resp.is_success
-                                if not webhook_sent:
-                                    webhook_error = f"Webhook returned HTTP {resp.status_code}"
+                            webhook_sent = resp.is_success
+                            if not webhook_sent:
+                                webhook_error = f"Webhook returned HTTP {resp.status_code}"
         except Exception as e:
             webhook_error = str(e) or e.__class__.__name__
             logger.warning(f"Reminder webhook send failed: {e}")
@@ -483,22 +491,30 @@ async def dispatch_reminder(
                 api_key = intg.get("api_key", "")
                 if api_key:
                     hdrs["Authorization"] = f"Bearer {api_key}"
-                # SSRF guard — same check (and env knob) as the webhook branch
+                # SSRF guard — same policy (and env knob) as the webhook branch
                 # above: link-local / metadata addresses are always rejected;
                 # REMINDER_WEBHOOK_BLOCK_PRIVATE_IPS=true also blocks RFC-1918
-                # so a ntfy base_url can't be pointed at internal services.
+                # so a ntfy base_url can't be pointed at internal services. The
+                # fetch helper pins the vetted DNS resolution and re-validates
+                # every redirect hop.
                 import os as _os
-                from src.url_safety import check_outbound_url as _chk
+                from src.url_safety import (
+                    UnsafeOutboundURL as _Unsafe,
+                    safe_httpx_request_async as _safe_fetch,
+                )
                 _block = _os.getenv("REMINDER_WEBHOOK_BLOCK_PRIVATE_IPS", "false").lower() == "true"
-                _ok, _reason = _chk(f"{base}/{topic}", block_private=_block)
-                if not _ok:
-                    ntfy_error = f"ntfy URL rejected: {_reason}"
+                try:
+                    resp = await _safe_fetch(
+                        "POST", f"{base}/{topic}",
+                        content=ntfy_body, headers=hdrs,
+                        timeout=10.0, block_private=_block,
+                    )
+                except _Unsafe as _rej:
+                    ntfy_error = f"ntfy URL rejected: {_rej}"
                 else:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        resp = await client.post(f"{base}/{topic}", content=ntfy_body, headers=hdrs)
-                        ntfy_sent = resp.is_success
-                        if not ntfy_sent:
-                            ntfy_error = f"ntfy returned HTTP {resp.status_code}"
+                    ntfy_sent = resp.is_success
+                    if not ntfy_sent:
+                        ntfy_error = f"ntfy returned HTTP {resp.status_code}"
             else:
                 ntfy_error = "No enabled ntfy integration"
         except Exception as e:

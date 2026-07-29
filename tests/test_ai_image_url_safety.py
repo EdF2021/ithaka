@@ -1,3 +1,7 @@
+"""do_generate_image downloads a provider-returned image URL server-side; that
+URL is controlled by the upstream image API, so it must go through the
+SSRF-safe fetch helper (policy check + DNS pin + per-hop redirect
+revalidation) instead of a bare httpx.get."""
 from src import ai_interaction
 
 
@@ -49,51 +53,40 @@ def _patch_generation(monkeypatch, image_url):
     )
 
 
-async def test_generate_image_validates_provider_url_before_download(monkeypatch):
-    import httpx
+async def test_generate_image_downloads_provider_url_via_safe_fetch(monkeypatch):
     import src.url_safety as url_safety
 
     provider_url = "https://images.example.com/generated.png?sig=abc"
     events = []
     _patch_generation(monkeypatch, provider_url)
 
-    def _check_outbound_url(url, *, block_private=False):
-        events.append(("check", url, block_private))
-        return True, "ok"
-
-    def _get(url, *, timeout):
-        events.append(("get", url, timeout))
+    def _safe_fetch(method, url, *, timeout=None, block_private=False, **kw):
+        events.append(("fetch", method, url, timeout, block_private))
         return _DownloadResponse()
 
-    monkeypatch.setattr(url_safety, "check_outbound_url", _check_outbound_url)
-    monkeypatch.setattr(httpx, "get", _get)
+    monkeypatch.setattr(url_safety, "safe_httpx_request", _safe_fetch)
 
     result = await ai_interaction.do_generate_image("draw a chair\ndall-e-3")
 
+    # 503 download → falls back to the external URL, matching prior behavior.
     assert result["image_url"] == provider_url
-    assert events == [
-        ("check", provider_url, False),
-        ("get", provider_url, 60),
-    ]
+    assert events == [("fetch", "GET", provider_url, 60, False)]
 
 
 async def test_generate_image_rejects_unsafe_provider_url_without_download(monkeypatch):
-    import httpx
     import src.url_safety as url_safety
 
     unsafe_url = "http://169.254.169.254/latest/meta-data"
     events = []
     _patch_generation(monkeypatch, unsafe_url)
 
-    def _check_outbound_url(url, *, block_private=False):
-        events.append(("check", url, block_private))
-        return False, "link-local address blocked (SSRF metadata risk): 169.254.169.254"
+    def _safe_fetch(method, url, *, timeout=None, block_private=False, **kw):
+        events.append(("fetch", method, url))
+        raise url_safety.UnsafeOutboundURL(
+            "link-local address blocked (SSRF metadata risk): 169.254.169.254"
+        )
 
-    def _get(url, *, timeout):
-        raise AssertionError("unsafe provider image URL must not be downloaded")
-
-    monkeypatch.setattr(url_safety, "check_outbound_url", _check_outbound_url)
-    monkeypatch.setattr(httpx, "get", _get)
+    monkeypatch.setattr(url_safety, "safe_httpx_request", _safe_fetch)
 
     result = await ai_interaction.do_generate_image("draw a chair\ndall-e-3")
 
@@ -101,4 +94,4 @@ async def test_generate_image_rejects_unsafe_provider_url_without_download(monke
         "Image API returned unsafe image URL: "
         "link-local address blocked (SSRF metadata risk): 169.254.169.254"
     )
-    assert events == [("check", unsafe_url, False)]
+    assert events == [("fetch", "GET", unsafe_url)]

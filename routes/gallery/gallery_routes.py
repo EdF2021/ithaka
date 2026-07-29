@@ -148,23 +148,26 @@ async def _fetch_result_image_b64(url: str) -> Optional[str]:
 
     The URL comes from the diffusion/OpenAI server's response, not from our own
     config, so a malicious or compromised endpoint could otherwise steer this
-    fetch at an internal or cloud-metadata address. Validate it the same way the
-    client-supplied endpoint is validated before the first request.
+    fetch at an internal or cloud-metadata address. The fetch helper applies the
+    same policy as the client-supplied endpoint validation, pins the vetted DNS
+    resolution onto the connection, and re-validates every redirect hop.
     """
     import base64
-    import httpx
-    from src.url_safety import check_outbound_url
+    from src.url_safety import UnsafeOutboundURL, safe_httpx_request_async
 
-    ok, reason = check_outbound_url(
-        url,
-        block_private=os.getenv("IMAGE_BLOCK_PRIVATE_IPS", "false").lower() == "true",
-    )
-    if not ok:
-        raise HTTPException(502, f"Upstream returned an unsafe image URL: {reason}")
-    async with httpx.AsyncClient(timeout=60) as c2:
-        ir = await c2.get(url)
-        if ir.status_code == 200:
-            return base64.b64encode(ir.content).decode()
+    try:
+        ir = await safe_httpx_request_async(
+            "GET",
+            url,
+            timeout=60,
+            block_private=os.getenv("IMAGE_BLOCK_PRIVATE_IPS", "false").lower() == "true",
+        )
+    except UnsafeOutboundURL as unsafe_reason:
+        # UnsafeOutboundURL carries the curated policy reason (same strings as
+        # check_outbound_url), not raw exception internals — safe for clients.
+        raise HTTPException(502, f"Upstream returned an unsafe image URL: {unsafe_reason}")
+    if ir.status_code == 200:
+        return base64.b64encode(ir.content).decode()
     return None
 
 

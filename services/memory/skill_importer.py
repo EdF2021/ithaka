@@ -10,7 +10,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from src.url_safety import check_outbound_url
+from src.url_safety import UnsafeOutboundURL, safe_httpx_request
 
 logger = logging.getLogger(__name__)
 
@@ -75,23 +75,24 @@ def parse_skill_source(url: str) -> ResolvedSource:
         raise SkillImportError("URL is required")
 
     # skills.sh often links to GitHub; try to unwrap ?url= or redirect target later.
+    # safe_httpx_request pins the vetted DNS resolution per hop and re-validates
+    # every redirect, so a rebinding name or a 302 into the metadata range fails.
     if "skills.sh" in raw and "github.com" not in raw:
-        ok, reason = check_outbound_url(raw)
-        if not ok:
-            raise SkillImportError(reason)
-        with httpx.Client(follow_redirects=True, timeout=20.0) as client:
-            r = client.get(raw)
-            if r.status_code >= 400:
-                raise _github_response_error(r)
-            final = str(r.url)
-            _assert_github_url(final, context="redirect target")
-            # Page may embed a github link; prefer final URL if redirected.
-            if "github.com" in final:
-                raw = final
-            else:
-                m = re.search(r"https?://github\.com/[^\s\"')]+", r.text or "")
-                if m:
-                    raw = m.group(0).rstrip(".,)")
+        try:
+            r = safe_httpx_request("GET", raw, timeout=20.0)
+        except UnsafeOutboundURL as e:
+            raise SkillImportError(str(e))
+        if r.status_code >= 400:
+            raise _github_response_error(r)
+        final = str(r.extensions.get("final_url") or raw)
+        _assert_github_url(final, context="redirect target")
+        # Page may embed a github link; prefer final URL if redirected.
+        if "github.com" in final:
+            raw = final
+        else:
+            m = re.search(r"https?://github\.com/[^\s\"')]+", r.text or "")
+            if m:
+                raw = m.group(0).rstrip(".,)")
 
     parsed = urlparse(raw)
     host = _github_host(raw)
@@ -164,18 +165,28 @@ def _github_response_error(response: httpx.Response) -> SkillImportError:
     return SkillImportError(f"GitHub request failed ({status})")
 
 
+def _github_get(url: str) -> httpx.Response:
+    """GET a GitHub URL through the SSRF-safe fetch helper: the vetted DNS
+    resolution is pinned per hop and every redirect must stay on GitHub."""
+    try:
+        return safe_httpx_request(
+            "GET",
+            url,
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=30.0,
+            allowed_hosts=_GITHUB_HOSTS,
+        )
+    except UnsafeOutboundURL as e:
+        raise SkillImportError(str(e))
+
+
 def _fetch_bytes(url: str) -> bytes:
-    ok, reason = check_outbound_url(url)
-    if not ok:
-        raise SkillImportError(reason)
-    with httpx.Client(follow_redirects=True, timeout=30.0) as client:
-        r = client.get(url, headers={"Accept": "application/vnd.github+json"})
-        if r.status_code >= 400:
-            raise _github_response_error(r)
-        _assert_github_url(str(r.url), context="redirect target")
-        if len(r.content) > MAX_FILE_BYTES:
-            raise SkillImportError(f"file too large: {url}")
-        return r.content
+    r = _github_get(url)
+    if r.status_code >= 400:
+        raise _github_response_error(r)
+    if len(r.content) > MAX_FILE_BYTES:
+        raise SkillImportError(f"file too large: {url}")
+    return r.content
 
 
 def _fetch_text(url: str) -> str:
@@ -190,15 +201,10 @@ def _list_github_dir(src: ResolvedSource, rel_dir: str, out: Dict[str, str], *, 
     if depth > 4 or len(out) >= MAX_FILES:
         return
     url = _api_contents_url(src, rel_dir)
-    ok, reason = check_outbound_url(url)
-    if not ok:
-        raise SkillImportError(reason)
-    with httpx.Client(follow_redirects=True, timeout=30.0) as client:
-        r = client.get(url, headers={"Accept": "application/vnd.github+json"})
-        if r.status_code >= 400:
-            raise _github_response_error(r)
-        _assert_github_url(str(r.url), context="redirect target")
-        entries = r.json()
+    r = _github_get(url)
+    if r.status_code >= 400:
+        raise _github_response_error(r)
+    entries = r.json()
     if not isinstance(entries, list):
         raise SkillImportError("expected a directory on GitHub")
     total = sum(len(v.encode("utf-8")) for v in out.values())
