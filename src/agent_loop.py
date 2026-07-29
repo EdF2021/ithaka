@@ -1540,11 +1540,69 @@ def _build_system_prompt(
     suppress_skills: bool = False,
     active_email: Optional[Dict[str, str]] = None,
 ) -> List[Dict]:
-    """Build agent system prompt, inject MCP/document context, merge consecutive system msgs."""
-    global _cached_base_prompt, _cached_base_prompt_key
+    """Build agent system prompt, inject MCP/document context, merge consecutive system msgs.
+
+    Assembly only: each independent context source lives in its own builder
+    function below. The order of the builder calls (and of the message
+    insertions in _assemble_prompt_messages) mirrors the original inline code
+    exactly, as do the cache-invalidation semantics in
+    _cached_agent_base_prompt.
+    """
     if suppress_local_context:
         active_document = None
 
+    agent_prompt, _skill_index_block = _cached_agent_base_prompt(
+        disabled_tools, mcp_mgr, needs_admin, relevant_tools, mcp_disabled_map,
+        compact, owner, suppress_local_context, suppress_skills, active_document,
+    )
+
+    # Dynamic parts that change per request
+    mcp_schemas = []
+    if mcp_mgr:
+        mcp_schemas = mcp_mgr.get_all_openai_schemas(mcp_disabled_map or {})
+
+    set_active_model(model)
+
+    _datetime_message = _build_datetime_context_message()
+    _doc_message, _active_doc_is_email_doc = _build_active_document_context(
+        active_document, messages,
+    )
+    _email_message = _build_active_email_context(active_email, _active_doc_is_email_doc)
+    _email_prompt_suffix, _email_style_message = _build_email_prompt_additions(
+        active_document, relevant_tools, messages, suppress_local_context,
+    )
+    agent_prompt += _email_prompt_suffix
+    _skills_message = _build_skills_context_message(
+        messages, owner, _skill_index_block, suppress_local_context, suppress_skills,
+    )
+    _integ_message = _build_integrations_context_message(suppress_local_context)
+    _mcp_desc_message = _build_mcp_descriptions_message(mcp_mgr, mcp_disabled_map)
+
+    merged = _assemble_prompt_messages(
+        messages, agent_prompt, _doc_message, _email_message, _email_style_message,
+        _integ_message, _mcp_desc_message, _skills_message, _datetime_message,
+    )
+    return merged, mcp_schemas
+
+
+def _cached_agent_base_prompt(
+    disabled_tools,
+    mcp_mgr,
+    needs_admin,
+    relevant_tools,
+    mcp_disabled_map,
+    compact,
+    owner,
+    suppress_local_context,
+    suppress_skills,
+    active_document,
+):
+    """Base agent prompt + skill index, with the module-level prompt cache.
+
+    Extracted from _build_system_prompt; cache-key computation and
+    cache-invalidation semantics are unchanged.
+    """
+    global _cached_base_prompt, _cached_base_prompt_key
     # With RAG tools, cache key includes the selected tools
     _rt_key = frozenset(relevant_tools) if relevant_tools else None
     # Include a signature of the built-in overrides so editing one in the
@@ -1582,14 +1640,10 @@ def _build_system_prompt(
         if not active_document:
             _cached_base_prompt = agent_prompt
             _cached_base_prompt_key = cache_key
+    return agent_prompt, _skill_index_block
 
-    # Dynamic parts that change per request
-    mcp_schemas = []
-    if mcp_mgr:
-        mcp_schemas = mcp_mgr.get_all_openai_schemas(mcp_disabled_map or {})
 
-    set_active_model(model)
-
+def _build_datetime_context_message() -> Optional[Dict]:
     # Current date/time for every agent request. This is user-local when the
     # browser provided timezone headers, with a server-local fallback.
     #
@@ -1608,19 +1662,18 @@ def _build_system_prompt(
         _datetime_message = current_datetime_context_message()
     except Exception as e:
         logger.warning("Failed to build datetime context message", exc_info=e)
+    return _datetime_message
 
-    # Document context is kept as a SEPARATE message (not merged into the tool
-    # prompt) so the context trimmer doesn't destroy it when truncating the
-    # massive tool-description system prompt.
+
+def _build_active_document_context(active_document, messages):
+    """Active-editor-document context builder.
+
+    Returns (doc_message | None, active_doc_is_email_doc). Document context is
+    kept as a SEPARATE message (not merged into the tool prompt) so the
+    context trimmer doesn't destroy it when truncating the massive
+    tool-description system prompt.
+    """
     _doc_message = None
-    # Matched-skills block: same treatment (separate user-role message with
-    # metadata.trusted=False) so user-editable skill content can't inject into
-    # the trusted system role. Bound up front so the insert block below can
-    # always check it.
-    _skills_message = None
-    _email_style_message = None
-    _integ_message = None
-    _mcp_desc_message = None
     _active_doc_is_email_doc = False
     if active_document:
         set_active_document(active_document.id)
@@ -1761,7 +1814,10 @@ def _build_system_prompt(
             )
     else:
         set_active_document(None)
+    return _doc_message, _active_doc_is_email_doc
 
+
+def _build_active_email_context(active_email, _active_doc_is_email_doc):
     # Active email reader — frontend told us the user has an email open.
     # Inject a context block so "reply", "summarize this", "what does it say"
     # resolve to the real UID instead of the agent inventing a fresh .md
@@ -1822,21 +1878,34 @@ def _build_system_prompt(
         )
         _email_message = untrusted_context_message("active email reader", email_ctx)
         _email_message["_protected"] = True
+    return _email_message
 
+
+_EMAIL_TOOL_HINTS = {
+    "list_email_accounts", "send_email", "reply_to_email", "list_emails", "read_email",
+    "bulk_email", "archive_email", "delete_email", "mark_email_read",
+    "resolve_contact", "ui_control",
+    "mcp__email__list_email_accounts",
+    "mcp__email__send_email", "mcp__email__reply_to_email",
+    "mcp__email__list_emails", "mcp__email__read_email",
+    "mcp__email__bulk_email", "mcp__email__archive_email",
+    "mcp__email__delete_email", "mcp__email__mark_email_read",
+}
+
+
+def _build_email_prompt_additions(active_document, relevant_tools, messages, suppress_local_context):
+    """Email writing-style + email-document-format prompt additions.
+
+    Returns (trusted_prompt_suffix, email_style_message | None). The suffix is
+    appended verbatim to the trusted system prompt by the assembler; the style
+    message is user-editable content and therefore untrusted.
+    """
+    _prompt_suffix = ""
+    _email_style_message = None
     # Inject writing style for any email writing path. This is deliberately
     # broader than read/list: models may compose via send_email, reply_to_email,
     # or ui_control open_email_reply after the first tool round.
     _inject_style = False
-    _EMAIL_TOOL_HINTS = {
-        "list_email_accounts", "send_email", "reply_to_email", "list_emails", "read_email",
-        "bulk_email", "archive_email", "delete_email", "mark_email_read",
-        "resolve_contact", "ui_control",
-        "mcp__email__list_email_accounts",
-        "mcp__email__send_email", "mcp__email__reply_to_email",
-        "mcp__email__list_emails", "mcp__email__read_email",
-        "mcp__email__bulk_email", "mcp__email__archive_email",
-        "mcp__email__delete_email", "mcp__email__mark_email_read",
-    }
     if active_document and active_document.language == "email":
         _inject_style = True
     elif relevant_tools and (_EMAIL_TOOL_HINTS & set(relevant_tools)):
@@ -1857,7 +1926,7 @@ def _build_system_prompt(
             _style = (_load_settings().get("email_writing_style", "") or "").strip()
             if _style:
                 # Hardcoded identity/style rules stay in the trusted system prompt.
-                agent_prompt += (
+                _prompt_suffix += (
                     "\n\n"
                     "Hard identity rule: write as the user/mailbox owner only. Do not sign as, speak as, "
                     "or imply you are the recipient, original sender, quoted sender, spouse, assistant, "
@@ -1881,7 +1950,7 @@ def _build_system_prompt(
 
     # When creating email documents, instruct the AI on the format
     if relevant_tools and not suppress_local_context and (_EMAIL_TOOL_HINTS & set(relevant_tools)):
-        agent_prompt += (
+        _prompt_suffix += (
             '\n\n📧 EMAIL DOCUMENT FORMAT: If no email draft is already open and you need to create an email draft, use create_document with language="email". '
             'The content format is:\n'
             'To: recipient@example.com\n'
@@ -1893,7 +1962,23 @@ def _build_system_prompt(
             'The user can then edit and click Send or Draft in the editor. If an email draft is already open, '
             'that open draft is the target: use update_document/edit_document on it instead of creating another document.'
         )
+    return _prompt_suffix, _email_style_message
 
+
+def _build_skills_context_message(
+    messages,
+    owner,
+    _skill_index_block,
+    suppress_local_context,
+    suppress_skills,
+):
+    """Matched-skills context block.
+
+    Separate user-role message with metadata.trusted=False so user-editable
+    skill content can't inject into the trusted system role. Returns the
+    message or None.
+    """
+    _skills_message = None
     # Inject relevant skills based on the user's last message. The
     # SkillsManager does a Jaccard token-match over published skills'
     # name + description + when_to_use + procedure, returning the top
@@ -2002,7 +2087,12 @@ def _build_system_prompt(
                     _skills_message = None
         except Exception as _sk_err:
             logger.debug(f"skill injection failed (non-fatal): {_sk_err}")
+    return _skills_message
 
+
+def _build_integrations_context_message(suppress_local_context):
+    """Integrations context message (user-editable fields → untrusted role)."""
+    _integ_message = None
     # Integration descriptions — user-editable fields, must not be in system role.
     if not suppress_local_context:
         try:
@@ -2012,7 +2102,12 @@ def _build_system_prompt(
                 _integ_message = untrusted_context_message("integrations", _integ_prompt)
         except Exception as _integ_err:
             logger.debug(f"Integration prompt injection skipped: {_integ_err}")
+    return _integ_message
 
+
+def _build_mcp_descriptions_message(mcp_mgr, mcp_disabled_map):
+    """MCP tool-description context message (external servers → untrusted role)."""
+    _mcp_desc_message = None
     # MCP tool descriptions — sourced from external servers, must not be in system role.
     if mcp_mgr:
         try:
@@ -2021,7 +2116,23 @@ def _build_system_prompt(
                 _mcp_desc_message = untrusted_context_message("MCP tools", _mcp_desc)
         except Exception as _mcp_err:
             logger.debug(f"MCP description injection skipped: {_mcp_err}")
+    return _mcp_desc_message
 
+
+def _assemble_prompt_messages(
+    messages,
+    agent_prompt,
+    _doc_message,
+    _email_message,
+    _email_style_message,
+    _integ_message,
+    _mcp_desc_message,
+    _skills_message,
+    _datetime_message,
+):
+    """Message-array surgery: insert the trusted system prompt, merge
+    consecutive system messages, and slot the per-request context messages
+    right before the latest user message — in the original insertion order."""
     agent_msg = {"role": "system", "content": agent_prompt}
     insert_idx = 0
     for i, msg in enumerate(messages):
@@ -2076,7 +2187,7 @@ def _build_system_prompt(
     if _datetime_message:
         merged.insert(last_user_idx, _datetime_message)
 
-    return merged, mcp_schemas
+    return merged
 
 
 _ADMIN_TOOLS = {
@@ -2558,227 +2669,111 @@ def _detect_runaway_call(call_freq, threshold=15):
     return sig.split(":", 1)[0] if sig else None
 
 
-async def stream_agent_loop(
-    endpoint_url: str,
-    model: str,
-    messages: List[Dict],
-    headers: Optional[Dict] = None,
-    temperature: float = 0.3,
-    max_tokens: int = 4096,
-    prompt_type: Optional[str] = None,
-    max_rounds: int = MAX_AGENT_ROUNDS,
-    max_tool_calls: int = 0,
-    context_length: int = 0,
-    active_document=None,
-    active_email: Optional[Dict[str, str]] = None,
-    session_id: Optional[str] = None,
-    disabled_tools: Optional[Set[str]] = None,
-    owner: Optional[str] = None,
-    relevant_tools: Optional[Set[str]] = None,
-    fallbacks: Optional[List[tuple]] = None,
-    plan_mode: bool = False,
-    approved_plan: Optional[str] = None,
-    tool_policy: Optional[ToolPolicy] = None,
-    workspace: Optional[str] = None,
-    forced_tools: Optional[Set[str]] = None,
-    uploaded_files: Optional[List[Dict]] = None,
-    workload: str = "foreground",
-    _is_teacher_run: bool = False,
-) -> AsyncGenerator[str, None]:
-    """Streaming agent loop generator.
+@dataclasses.dataclass
+class _ToolSelection:
+    """Result of _select_agent_tools (extracted from stream_agent_loop)."""
+    relevant_tools: Optional[Set[str]]
+    intent_domains: set
+    ody_doc_finetune_mode: bool
+    ody_notes_finetune_mode: bool
+    ody_doc_stream_create_mode: bool
 
-    Yields SSE events:
-      - data: {"delta": "text"}                             (text chunks)
-      - data: {"type": "tool_start", "tool": "...", ...}    (before execution)
-      - data: {"type": "tool_output", "tool": "...", ...}   (after execution)
-      - data: {"type": "agent_step", "round": N}            (next round)
-      - data: {"type": "metrics", "data": {...}}            (final metrics)
-      - data: [DONE]                                        (end)
+
+# Supervisor cap: how many times we nudge the model after it announced an
+# action without emitting the tool call. Capped to prevent a model that
+# *can't* call the tool from looping forever.
+_MAX_INTENT_NUDGES = 2
+
+# "I said I would, then didn't" detector. The pattern that breaks debug
+# loops on weak models (deepseek-v4-flash mid-2026): the model writes
+# "Let me tail the output to see the error" and then ends the turn with
+# no tool_calls. The intent is sincere but the function call gets dropped.
+# Match the common phrasings + an action verb that maps to an available
+# tool, so we don't nudge on harmless transitional text like "let me
+# know what you think".
+_INTENT_RE = re.compile(
+    r"(?:^|\n)\s*(?:let me|i'?ll|i will|i need to|we need to|need to|"
+    r"i should|we should|i must|we must|going to|let's)\s+"
+    r"(?:tail|check|investigate|look at|see|tail|read|fetch|inspect|"
+    r"verify|diagnose|examine|debug|capture|grab|pull|view|run|call|"
+    r"trigger|launch|start|kick off|stop|kill|restart|adopt|serve|"
+    r"register|adopt|list|search|find|query|hit|ping|test|use|perform|do)"
+    r"\b[^.\n]{0,140}",
+    re.IGNORECASE,
+)
+
+
+@dataclasses.dataclass
+class _AgentTurnState:
+    """Mutable cross-round status for one stream_agent_loop turn.
+
+    Field-for-field the former stream_agent_loop locals, shared with the
+    extracted round helpers (_execute_round_tool_blocks,
+    _finalize_round_without_tools, _apply_loop_breaker); flag semantics
+    are unchanged.
     """
+    full_response: str = ""
+    total_tool_calls: int = 0  # for budget enforcement
+    budget_hit: bool = False
+    # Set by loop-breaker → next round runs with NO tools.
+    force_answer: bool = False
+    # Set by ask_user → end the turn and wait for a choice.
+    awaiting_user: bool = False
+    # Completion-verifier state (mechanism 3a). effectful_used flips on when
+    # a tool that produces a checkable artifact runs; the verifier only fires
+    # on such turns and at most _VERIFIER_MAX_ROUNDS times.
+    effectful_used: bool = False
+    verifier_rounds: int = 0
+    # Supervisor: how many times we've nudged the model after it announced
+    # an action without emitting the tool call (see _MAX_INTENT_NUDGES).
+    intent_nudge_count: int = 0
+    # Loop-breaker state. Small models (e.g. deepseek-v4-flash) can get
+    # stuck firing the same tool call over and over with no text — burns
+    # all 20 rounds, looks like the chat "died". Track recent call
+    # signatures + consecutive no-text tool rounds to bail early.
+    stuck_rounds: int = 0
+    recent_call_sigs: collections.deque = dataclasses.field(
+        default_factory=lambda: collections.deque(maxlen=6))
+    # Frequency of each exact call signature (tool + args), for the runaway
+    # backstop. Counting identical repeats — not distinct same-tool calls —
+    # lets a legit batch (e.g. 18 calendar events at once) through.
+    call_freq: collections.Counter = dataclasses.field(
+        default_factory=collections.Counter)
+    doc_stream_create_completed: bool = False
+    ody_doc_tool_completed: bool = False
+    ody_notes_tool_completed: bool = False
+    # Set by _finalize_round_without_tools / _apply_loop_breaker to steer the
+    # round loop: "continue" (run another round) or "break" (turn is done).
+    directive: Optional[str] = None
 
-    mcp_mgr = get_mcp_manager()
-    prep_timings: Dict[str, float] = {}
-    disabled_tools = set(disabled_tools or [])
-    if tool_policy:
-        disabled_tools.update(tool_policy.all_disabled_names())
-        if tool_policy.disable_mcp:
-            mcp_mgr = None
-    guide_only = bool(tool_policy and tool_policy.mode == "guide_only")
-    public_blocked_tools = blocked_tools_for_owner(owner)
-    if public_blocked_tools:
-        disabled_tools.update(public_blocked_tools)
-        # MCP tools are namespaced dynamically, so hide all MCP schemas for
-        # public/non-admin users rather than trying to enumerate every tool.
-        mcp_mgr = None
 
-    if plan_mode:
-        # Plan mode: investigate read-only, propose a plan, don't execute. The
-        # route also unions the read-only-disabled set, but enforce here too so
-        # the loop is safe regardless of caller. MCP stays available but is
-        # filtered to read-only tools below (after the disabled map is loaded).
-        _plan_denylist = plan_mode_disabled_tools()
-        disabled_tools.update(_plan_denylist)
-        if getattr(_plan_denylist, "fail_closed", False):
-            # The schema import failed, so the static backstop above is
-            # best-effort and can't guarantee every mutator is covered (see
-            # plan_mode_disabled_tools docstring). Switch to real allowlist
-            # enforcement for this turn: tool_policy.blocks() is consulted at
-            # actual tool-execution time below, so this closes the gap a
-            # denylist alone can't close.
-            tool_policy = dataclasses.replace(
-                tool_policy or ToolPolicy(),
-                allowed_tools=frozenset(PLAN_MODE_READONLY_TOOLS),
-            )
+async def _select_agent_tools(
+    *,
+    relevant_tools: Optional[Set[str]],
+    guide_only: bool,
+    _low_signal_turn: bool,
+    workspace: Optional[str],
+    mcp_mgr,
+    _mcp_disabled_map: Dict,
+    _retrieval_query: str,
+    _intent: Dict,
+    disabled_tools: Set[str],
+    _active_document_relevant: bool,
+    _active_email_draft_relevant: bool,
+    uploaded_files: List[Dict],
+    forced_tools: Optional[Set[str]],
+    owner: Optional[str],
+    _ody_qwen_finetune_model: bool,
+    _prompt_active_document,
+    _last_user: str,
+) -> _ToolSelection:
+    """RAG/keyword tool selection + deterministic correction layers.
 
-    uploaded_files = uploaded_files or []
-    _upload_msg = _uploaded_files_context_message(uploaded_files)
-    if _upload_msg:
-        messages = _insert_before_latest_user(messages, _upload_msg)
-
-    _t0 = time.time()
-    _needs_admin = _detect_admin_intent(messages)
-    _last_user = _extract_last_user_message(messages)
-    _ody_qwen_finetune_model = (model or "").lower().startswith("ithaka-qwen3")
-    _ody_memory_identity_turn = _looks_like_memory_identity_turn(_last_user)
-    _intent = _classify_agent_request(messages, _last_user)
-    _low_signal_turn = bool(_intent.get("low_signal"))
-    _casual_low_signal_turn = _is_casual_low_signal(_last_user)
-    _existing_conversation = _user_turn_count(messages) > 1
-    _active_document_relevant = _turn_targets_active_document(_intent, _last_user, active_document)
-    _active_email_draft_relevant = _active_document_relevant and _is_email_document_obj(active_document)
-    if _active_email_draft_relevant:
-        disabled_tools.update({
-            "list_email_accounts", "list_emails", "read_email",
-            "mcp__email__list_emails", "mcp__email__read_email",
-        })
-    _prompt_active_document = active_document if _active_document_relevant else None
-    _direct_low_signal = (
-        _low_signal_turn
-        and not _existing_conversation
-        and not bool(_intent.get("continuation"))
-        and not plan_mode
-        and not approved_plan
-        and not guide_only
-        and (_casual_low_signal_turn or not _active_document_relevant)
-        and (_casual_low_signal_turn or not active_email)
-        and (_casual_low_signal_turn or not workspace)
-        and not forced_tools
-        and not relevant_tools
-    )
-    # Tool retrieval uses the latest message by default. It may inherit recent
-    # user turns only for explicit continuations ("yes", "do it", "1").
-    _retrieval_query = str(_intent.get("retrieval_query") or _last_user)
-    logger.info(
-        "[agent-intent] latest=%r continuation=%s low_signal=%s domains=%s active_doc_relevant=%s retrieval_query=%r",
-        _last_user[:120],
-        bool(_intent.get("continuation")),
-        _low_signal_turn,
-        sorted(_intent.get("domains") or []),
-        _active_document_relevant,
-        _retrieval_query[:200],
-    )
-    if _low_signal_turn and _existing_conversation:
-        logger.info(
-            "[agent] keeping contextual path for low-signal turn in existing conversation latest=%r",
-            _last_user[:80],
-        )
-    _mcp_disabled_map = _load_mcp_disabled_map() if mcp_mgr else {}
-    if _direct_low_signal:
-        logger.info("[agent] direct low-signal reply path for latest=%r", _last_user[:80])
-        direct_messages = (
-            _minimal_ithaka_general_messages(
-                messages,
-                include_memory=True,
-            )
-            if _ody_qwen_finetune_model
-            else [{"role": "user", "content": _last_user}]
-        )
-        direct_response = ""
-        direct_start = time.time()
-        direct_actual_model = model
-        real_input_tokens = 0
-        real_output_tokens = 0
-        try:
-            async for chunk in stream_llm_with_fallback(
-                [(endpoint_url, model, headers)] + list(fallbacks or []),
-                direct_messages,
-                temperature=temperature,
-                max_tokens=min(max_tokens or 128, 128),
-                prompt_type=None,
-                tools=None,
-                timeout=int(get_setting("agent_stream_timeout_seconds", 300) or 300),
-                session_id=session_id,
-                workload=workload,
-            ):
-                if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
-                    try:
-                        data = json.loads(chunk[6:])
-                    except json.JSONDecodeError:
-                        yield chunk
-                        continue
-                    if data.get("type") == "usage":
-                        usage = data.get("data", {}) or {}
-                        direct_actual_model = usage.get("model") or direct_actual_model
-                        real_input_tokens += usage.get("input_tokens", 0) or 0
-                        real_output_tokens += usage.get("output_tokens", 0) or 0
-                        continue
-                    if data.get("type") == "model_actual":
-                        direct_actual_model = data.get("model") or direct_actual_model
-                        data["requested_model"] = model
-                        yield f"data: {json.dumps(data)}\n\n"
-                        continue
-                    if data.get("type") == "fallback":
-                        direct_actual_model = data.get("answered_by") or direct_actual_model
-                        yield chunk
-                        continue
-                    if "delta" in data:
-                        if not data.get("thinking"):
-                            direct_response += data.get("delta", "")
-                        yield chunk
-                        continue
-                    yield chunk
-                elif chunk.startswith("event: "):
-                    yield chunk
-        except Exception as _direct_err:
-            logger.warning("[agent] direct low-signal path failed: %s", _direct_err)
-            fallback = "Hey."
-            direct_response += fallback
-            yield f"data: {json.dumps({'delta': fallback})}\n\n"
-
-        if not direct_response.strip():
-            fallback = "Hey."
-            direct_response = fallback
-            yield f"data: {json.dumps({'delta': fallback})}\n\n"
-
-        duration = time.time() - direct_start
-        metrics = {
-            "model": direct_actual_model,
-            "requested_model": model,
-            "input_tokens": real_input_tokens or estimate_tokens(direct_messages),
-            "output_tokens": real_output_tokens or max(len(direct_response) // 4, 1),
-            "total_time": round(duration, 2),
-            "response_time": round(duration, 2),
-            "agent_rounds": 0,
-            "tool_calls": 0,
-            "direct_low_signal": True,
-        }
-        yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    if plan_mode and mcp_mgr:
-        # Allow read-only MCP tools to investigate, block write/unknown ones:
-        # hide them from the schemas AND reject them at runtime by qualified name.
-        _mcp_block_map, _mcp_block_q = mcp_mgr.plan_mode_blocked_mcp()
-        for _sid, _names in _mcp_block_map.items():
-            _mcp_disabled_map.setdefault(_sid, set()).update(_names)
-        disabled_tools.update(_mcp_block_q)
-    prep_timings["request_setup"] = time.time() - _t0
-
-    # RAG-based tool selection: retrieve relevant tools for this query.
-    # If caller provided a pre-computed set (e.g. task_scheduler), use that.
+    Extracted verbatim from stream_agent_loop (parameter names kept so the
+    body is unchanged). Mutates `disabled_tools` in place for the web-turn
+    unblock, exactly as before.
+    """
     _relevant_tools = relevant_tools
-    _t1 = time.time()
     if _relevant_tools:
         logger.info(f"[tool-rag] Using caller-provided relevant_tools ({len(_relevant_tools)} tools)")
     if not guide_only and not _relevant_tools and _low_signal_turn:
@@ -3029,6 +3024,915 @@ async def stream_agent_loop(
 
     if _relevant_tools is not None:
         logger.info("[agent-intent] selected_tools=%s", sorted(_relevant_tools)[:50])
+    return _ToolSelection(
+        relevant_tools=_relevant_tools,
+        intent_domains=_intent_domains,
+        ody_doc_finetune_mode=_ody_doc_finetune_mode,
+        ody_notes_finetune_mode=_ody_notes_finetune_mode,
+        ody_doc_stream_create_mode=_ody_doc_stream_create_mode,
+    )
+
+
+async def _finalize_round_without_tools(
+    state: _AgentTurnState,
+    *,
+    cleaned_round: str,
+    round_num: int,
+    messages: List[Dict],
+    tool_events: list,
+    _verifier_instruction: str,
+    guide_only: bool,
+    endpoint_url: str,
+    model: str,
+    headers: Optional[Dict],
+) -> AsyncGenerator[str, None]:
+    """Wrap up a round that produced no tool calls.
+
+    Runs the completion verifier (mechanism 3a) and the intent-without-action
+    supervisor, yielding the same SSE events the previously-inline code
+    produced. Sets state.directive to "continue" (the model gets another
+    round) or "break" (turn is done); mutates the state flags in place.
+    """
+    # ── Completion verifier (mechanism 3a) ────────────────────
+    # The model is finishing. If this was an effectful agentic turn,
+    # have a fresh-context verifier independently check the work
+    # before we accept "done". On FAIL, surface the issues and let
+    # the model fix them (capped, and it must do new effectful work
+    # to re-trigger). Skipped on force-answer rounds (no tools to
+    # fix with), pure Q&A, and when the toggle is off.
+    _claimed_done = bool(_strip_think_blocks(cleaned_round).strip())
+    if (state.effectful_used and not state.force_answer
+            and _claimed_done
+            and state.verifier_rounds < _VERIFIER_MAX_ROUNDS
+            # Default OFF: on weak local models the verifier can't judge
+            # from the action-snapshot (no doc body), so it false-rejects
+            # ("content not shown") and forces a costly extra round every
+            # effectful turn. Opt-in via setting for strong models.
+            and get_setting("agent_verifier_subagent", False)):
+        # Brief "working" indicator while the verifier runs.
+        yield f'data: {json.dumps({"type": "agent_step", "round": round_num})}\n\n'
+        _vfail = await _run_verifier_subagent(
+            _verifier_instruction,
+            _build_actions_snapshot(tool_events),
+            endpoint_url=endpoint_url, model=model, headers=headers,
+        )
+        if _vfail:
+            state.verifier_rounds += 1
+            logger.info(f"[agent] verifier flagged {len(_vfail)} issue(s) on round {round_num}: {_vfail}")
+            _note = "\n\n_Double-checked the work and found something to fix._\n\n"
+            yield f'data: {json.dumps({"delta": _note})}\n\n'
+            state.full_response += _note
+            messages.append({
+                "role": "system",
+                "content": (
+                    "An independent verifier reviewed your work against the "
+                    "original request and found issues that must be fixed before "
+                    "this is actually done:\n- " + "\n- ".join(_vfail) +
+                    "\n\nFix these now using tools, then finish."
+                ),
+            })
+            # Require fresh effectful work before verifying again, so we
+            # never re-verify an unchanged state in a loop.
+            state.effectful_used = False
+            state.directive = "continue"
+            return
+    # ── Intent-without-action supervisor ─────────────────────
+    # Catch "Let me tail the output" / "I'll check the logs" /
+    # "Let me investigate" patterns where the model announces an
+    # action but emits no tool_call. The bug shows up most on
+    # smaller models trained to verbalize plans before acting.
+    # We inject one sharp nudge ("you said you would X — call the
+    # actual tool now") and loop again. Capped at
+    # _MAX_INTENT_NUDGES so a model that genuinely cannot use the
+    # tool doesn't pin us in a forever loop.
+    _intent_text = _strip_think_blocks(cleaned_round).strip()
+    _intent_match = _INTENT_RE.search(_intent_text) if _intent_text else None
+    # Only nudge when the round REALLY looks like an unfinished
+    # promise: short response (<400 chars), no fenced code/answer,
+    # and an action-intent phrase was matched. Long answers that
+    # happen to contain "let me know" are not stalls.
+    _looks_like_promise = (
+        not guide_only
+        and _intent_match is not None
+        and len(_intent_text) < 400
+        and "```" not in _intent_text
+        and state.intent_nudge_count < _MAX_INTENT_NUDGES
+    )
+    if _looks_like_promise:
+        state.intent_nudge_count += 1
+        _matched_phrase = _intent_match.group(0).strip()
+        logger.info(f"[agent] intent-without-action nudge #{state.intent_nudge_count} on round {round_num}: {_matched_phrase!r}")
+        _lower_phrase = _matched_phrase.lower()
+        _cookbook_log_hint = ""
+        if any(_word in _lower_phrase for _word in ("log", "logs", "output", "tail", "status")):
+            _cookbook_log_hint = (
+                " If this is about a Cookbook/model serve, the concrete calls are: "
+                "`list_served_models` first, then `tail_serve_output` with the "
+                "session_id from the serve/list result. Never answer with "
+                "\"check logs\" when those tools are available."
+            )
+        messages.append({
+            "role": "system",
+            "content": (
+                f"You just wrote: \"{_matched_phrase}\" — but ended the "
+                "turn without making the actual tool call. The user can "
+                "see you announced the action but didn't run it, which "
+                "is the most frustrating thing you can do. "
+                "DO IT NOW: emit the actual function call this turn. "
+                f"{_cookbook_log_hint}"
+                "If you decided not to do it after all, say so plainly in "
+                "one sentence instead of restating the plan."
+            ),
+        })
+        # Visible signal in the stream so the user knows we caught it.
+        yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+        state.directive = "continue"
+        return
+    state.directive = "break"
+
+
+async def _apply_loop_breaker(
+    state: _AgentTurnState,
+    *,
+    tool_blocks: list,
+    cleaned_round: str,
+    round_num: int,
+    messages: List[Dict],
+    disabled_tools: Set[str],
+) -> AsyncGenerator[str, None]:
+    """Stall/runaway detector for tool rounds.
+
+    The signature/frequency bookkeeping always runs; when tripped it appends
+    the converge directive to messages, yields the agent_step event, flips
+    state.force_answer and sets state.directive = "continue". Otherwise
+    state.directive is left untouched.
+    """
+    # ── Loop-breaker (Terminus-style stall detector) ──────────────
+    # Stall detector for repeated no-progress tool loops.
+    # A round is "useless" ONLY when it re-issues a recent tool call AND
+    # writes no answer text — i.e. the model is going in circles.
+    # Genuine exploration (new, distinct calls) is never useless, so
+    # multi-step work (file hunts, multi-host ssh, build→test→fix) rides
+    # all the way to a real answer. We bail only on a streak of useless
+    # rounds, or a single tool fired an absurd number of times (hard
+    # runaway backstop). On bail we don't give up — we force one
+    # tool-free round so the model declares done or declares blocked,
+    # mirroring Terminus's explicit-completion handshake.
+    _sig = "|".join(sorted(f"{b.tool_type}:{(b.content or '').strip()[:120]}" for b in tool_blocks))
+    _is_repeat = _sig in state.recent_call_sigs
+    state.recent_call_sigs.append(_sig)
+    for _b in tool_blocks:
+        state.call_freq[f"{_b.tool_type}:{(_b.content or '').strip()[:120]}"] += 1
+    # "Real" answer text = round text minus <think> blocks. Empty-think
+    # rounds (just "<think>\n\n</think>" + a tool call) must not read as
+    # progress, so strip think before checking.
+    _real_text = _strip_think_blocks(cleaned_round).strip()
+    # Circling = repeating a recent call with nothing written. Any
+    # progress (a NEW distinct call, or actual answer text) resets it.
+    if _is_repeat and not _real_text:
+        state.stuck_rounds += 1
+    else:
+        state.stuck_rounds = 0
+    # Runaway = the SAME exact call repeated an absurd number of times.
+    # Distinct calls to one tool (a real batch) are legitimate work, so we
+    # count identical call signatures, not raw per-tool-type totals.
+    _runaway = _detect_runaway_call(state.call_freq)
+    if state.stuck_rounds >= 4 or _runaway:
+        reason = (f"calling {_runaway} with identical arguments over and over" if _runaway
+                  else "repeating the same tool calls without new progress")
+        logger.warning(f"[agent] loop-breaker tripped on round {round_num} ({reason}); sig={_sig[:80]!r}")
+        # The model has been executing tools, so its results are already
+        # in context. Force ONE tool-free round to converge: write the
+        # answer from what it has, or state plainly what's blocking it.
+        # The force-answer handler above salvages (grace synthesis) or
+        # apologizes honestly if it still writes nothing.
+        _off = [t for t in ("web_search", "bash")
+                if disabled_tools and t in disabled_tools]
+        _off_note = (f" ({', '.join(_off)} is currently disabled — say so if "
+                     f"you needed it.)" if _off else "")
+        state.force_answer = True
+        messages.append({
+            "role": "system",
+            "content": (
+                "You're repeating tool calls without converging. STOP calling "
+                "tools and end the turn one of two ways: (a) write your best "
+                "final answer NOW from the information already gathered, or "
+                "(b) if you're genuinely blocked, say plainly what's blocking "
+                "you in a sentence or two." + _off_note
+            ),
+        })
+        state.full_response += "\n\n"
+        yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+        state.directive = "continue"
+
+
+async def _execute_round_tool_blocks(
+    state: _AgentTurnState,
+    *,
+    tool_blocks: list,
+    round_num: int,
+    _doc_opened: bool,
+    tool_results: list,
+    tool_result_texts: list,
+    tool_events: list,
+    _relevant_tools: Optional[Set[str]],
+    max_tool_calls: int,
+    tool_policy: Optional[ToolPolicy],
+    session_id: Optional[str],
+    disabled_tools: Set[str],
+    owner: Optional[str],
+    workspace: Optional[str],
+    _ody_doc_stream_create_mode: bool,
+    _ody_doc_finetune_mode: bool,
+) -> AsyncGenerator[str, None]:
+    """Per-round tool execution + SSE event emission.
+
+    Async SUBgenerator: the caller re-yields every event, so tool_progress
+    events stream live instead of being buffered. Extracted verbatim from
+    stream_agent_loop (parameter names kept); the try/except BaseException
+    cancel around the progress drain is preserved as-is. Appends to
+    tool_results / tool_result_texts / tool_events in place and flips the
+    state flags the caller checks after the round (budget_hit,
+    awaiting_user, effectful_used, ...).
+    """
+    # Pre-stream document content for fenced tool blocks (non-native path)
+    # Native path already streamed via tool_call_delta above
+    # For round 1 fenced blocks, frontend fence detection already handled streaming
+    if not _doc_opened and round_num == 1:
+        for block in tool_blocks:
+            if tool_policy and tool_policy.blocks(block.tool_type):
+                continue
+            if block.tool_type == "create_document":
+                _doc_opened = True
+                break
+
+    if not _doc_opened:
+        for block in tool_blocks:
+            if tool_policy and tool_policy.blocks(block.tool_type):
+                continue
+            if block.tool_type == "create_document":
+                lines = block.content.strip().split("\n")
+                title = lines[0].strip() if lines else "Untitled"
+                lang = ""
+                content_start = 1
+                if len(lines) > 1 and len(lines[1].strip()) < 20 and lines[1].strip().isalpha():
+                    lang = lines[1].strip()
+                    content_start = 2
+                content = "\n".join(lines[content_start:]) if len(lines) > content_start else ""
+                yield f'data: {json.dumps({"type": "doc_stream_open", "title": title, "language": lang})}\n\n'
+                if content:
+                    yield f'data: {json.dumps({"type": "doc_stream_delta", "content": content})}\n\n'
+                break
+            elif block.tool_type == "update_document":
+                # Pre-stream the full replacement content so user sees it immediately
+                content = block.content.strip()
+                yield f'data: {json.dumps({"type": "doc_stream_open", "title": "", "language": ""})}\n\n'
+                yield f'data: {json.dumps({"type": "doc_stream_delta", "content": content})}\n\n'
+                break
+
+    # Execute each tool block
+    for i, block in enumerate(tool_blocks):
+        # --- Tool budget check ---
+        if max_tool_calls > 0 and state.total_tool_calls >= max_tool_calls:
+            yield f'data: {json.dumps({"type": "budget_exceeded", "limit": max_tool_calls, "used": state.total_tool_calls})}\n\n'
+            state.budget_hit = True
+            break
+
+        state.total_tool_calls += 1
+        # Build a short display string for the frontend tool bubble.
+        # Document tools show a brief summary instead of dumping full content.
+        is_doc_tool = block.tool_type in ("create_document", "update_document", "edit_document", "suggest_document")
+        full_command = block.content.strip()
+        if is_doc_tool:
+            cmd_display = block.content.split("\n")[0].strip()[:80]
+        else:
+            cmd_display = full_command
+
+        if tool_policy and tool_policy.blocks(block.tool_type):
+            desc = f"{block.tool_type}: BLOCKED"
+            result = {
+                "error": tool_policy.reason_for(block.tool_type),
+                "exit_code": 1,
+                "blocked": True,
+            }
+            logger.info("Tool blocked before start by policy: %s", block.tool_type)
+        else:
+            yield (
+                f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num})}\n\n'
+            )
+
+            # Streaming progress for long-running tools (bash, python).
+            # The bash/python branches inside _direct_fallback emit
+            # periodic {elapsed_s, tail} payloads via this callback;
+            # we forward each one as a `tool_progress` SSE event so
+            # the UI can render live elapsed-time + tail-of-output.
+            _progress_q: asyncio.Queue = asyncio.Queue()
+            async def _push_progress(payload):
+                await _progress_q.put(payload)
+
+            async def _run_tool():
+                try:
+                    return await execute_tool_block(
+                        block,
+                        session_id=session_id,
+                        disabled_tools=disabled_tools,
+                        tool_policy=tool_policy,
+                        owner=owner,
+                        progress_cb=_push_progress,
+                        workspace=workspace,
+                    )
+                finally:
+                    # Sentinel so the drainer knows to stop.
+                    await _progress_q.put(None)
+
+            _tool_task = asyncio.create_task(_run_tool())
+            # Drain progress events as they arrive — block until the
+            # next event OR the tool finishes (sentinel = None). If the
+            # client closes the stream mid-drain (GeneratorExit) the tool
+            # task must be cancelled, or it runs on as an orphan.
+            try:
+                while True:
+                    evt = await _progress_q.get()
+                    if evt is None:
+                        break
+                    yield (
+                        f'data: {json.dumps({"type": "tool_progress", "tool": block.tool_type, "round": round_num, **evt})}\n\n'
+                    )
+            except BaseException:
+                _tool_task.cancel()
+                raise
+            desc, result = await _tool_task
+
+        # A skill the model just loaded can prescribe tools that weren't
+        # RAG-selected this turn (declared via requires_toolsets in its
+        # frontmatter). Union them into the selection so the NEXT round's
+        # schema list includes them — otherwise the model reads "use
+        # grep" from the skill it fetched but has no grep schema to call.
+        if (
+            block.tool_type == "manage_skills"
+            and _relevant_tools is not None
+            and not result.get("error")
+        ):
+            _ms_args = {}
+            _ms_raw = (block.content or "").strip()
+            if _ms_raw.startswith("{"):
+                try:
+                    _ms_args = json.loads(_ms_raw)
+                except json.JSONDecodeError:
+                    _ms_args = {}
+            _ms_name = str(_ms_args.get("name", "") or "").strip()
+            if _ms_name and _ms_args.get("action") in ("view", "view_ref"):
+                try:
+                    from services.memory.skills import SkillsManager as _SkM
+                    from src.constants import DATA_DIR as _DD
+                    from src.tool_policy import known_tool_names as _ktn
+                    _known = _ktn()
+                    for _sk in _SkM(_DD).load(owner=owner):
+                        if _sk.get("name") == _ms_name:
+                            _new = {
+                                t for t in (_sk.get("requires_toolsets") or [])
+                                if t in _known and t not in _relevant_tools
+                            }
+                            if _new:
+                                _relevant_tools.update(_new)
+                                logger.info(
+                                    "[tool-rag] skill '%s' unlocked tools for next round: %s",
+                                    _ms_name, sorted(_new),
+                                )
+                            break
+                except Exception as _e:
+                    logger.debug(f"skill requires_toolsets unlock skipped: {_e}")
+
+        # Extract structured web sources from web_search tool output.
+        # web_search returns {"output": ..., "exit_code": 0}; check "output"
+        # first so the <!-- SOURCES:…--> marker is found and stripped even
+        # when the result doesn't carry a "results" or "stdout" key.
+        _src_text = result.get("output") or result.get("results") or result.get("stdout") or ""
+        if block.tool_type == "web_search" and _src_text:
+            _src_marker = "<!-- SOURCES:"
+            _src_idx = _src_text.find(_src_marker)
+            if _src_idx >= 0:
+                _src_end = _src_text.find(" -->", _src_idx)
+                if _src_end >= 0:
+                    try:
+                        _extracted_sources = json.loads(_src_text[_src_idx + len(_src_marker):_src_end])
+                        yield f'data: {json.dumps({"type": "web_sources", "data": _extracted_sources})}\n\n'
+                        # Strip the marker from the result so it doesn't show in chat
+                        _clean = _src_text[:_src_idx].rstrip()
+                        if "output" in result:
+                            result["output"] = _clean
+                        elif "results" in result:
+                            result["results"] = _clean
+                        elif "stdout" in result:
+                            result["stdout"] = _clean
+                    except json.JSONDecodeError:
+                        logger.debug("web_search SOURCES marker present but not valid JSON; skipping sources chip")
+
+        # Emit doc-specific event for document tools — the frontend
+        # document panel handles this; no need to show content in chat.
+        if is_doc_tool and "action" in result:
+            if result["action"] == "suggest":
+                yield (
+                    f'data: {json.dumps({"type": "doc_suggestions", "doc_id": result["doc_id"], "suggestions": result["suggestions"]})}\n\n'
+                )
+            else:
+                yield (
+                    f'data: {json.dumps({"type": "doc_update", "doc_id": result["doc_id"], "content": result["content"], "version": result["version"], "title": result.get("title", ""), "language": result.get("language")})}\n\n'
+                )
+
+        # Emit ui_control event for frontend to apply UI changes
+        if "ui_event" in result:
+            yield (
+                f'data: {json.dumps({"type": "ui_control", "data": result})}\n\n'
+            )
+
+        # ask_user: remember the payload now, but emit the interactive event
+        # only *after* tool_output below.  Emitting it before tool_output let
+        # the subsequent tool-card rewrite/scroll push the choices out of
+        # view.  The payload is also copied into the persisted tool event so
+        # history reload can reconstruct an unanswered card.
+        _pending_ask_user_event = None
+        if "ask_user" in result:
+            # The question lives in the tool args. ChatMessage.to_dict()
+            # replays only role+content to the model next turn — tool_event
+            # metadata is dropped — so if the question is never in the saved
+            # assistant text, the model can't see it already asked and will
+            # loop and re-ask after the user answers. Stream it as assistant
+            # text (once) so it persists and is replayed. The card shows the
+            # options only, so this is the single visible copy of the question.
+            _auq = result["ask_user"]
+            _auq_q = (_auq.get("question") or "").strip()
+            if _auq_q and _auq_q not in state.full_response:
+                _auq_delta = ("\n\n" if state.full_response.strip() else "") + _auq_q
+                state.full_response += _auq_delta
+                yield 'data: ' + json.dumps({"delta": _auq_delta}) + '\n\n'
+            _pending_ask_user_event = _auq
+            state.awaiting_user = True
+
+        # update_plan: agent wrote back to the plan (ticked a step / revised).
+        # Push it to the frontend so the stored plan + docked window update
+        # live. Does NOT end the turn — the agent keeps working.
+        if "plan_update" in result:
+            yield (
+                f'data: {json.dumps({"type": "plan_update", "data": result["plan_update"]})}\n\n'
+            )
+
+        # Build output for frontend tool bubble.
+        # Document tools get a short summary — content goes to the editor panel.
+        output_text = ""
+        if is_doc_tool and "action" in result:
+            action = result["action"]
+            title = result.get("title", "")
+            ver = result.get("version", "?")
+            if action == "create":
+                output_text = f'Document created: "{title}" (v{ver})'
+            elif action == "edit":
+                output_text = f'Document edited: "{title}" (v{ver}, {result.get("applied", 0)} edit(s))'
+            elif action == "update":
+                output_text = f'Document updated: "{title}" (v{ver})'
+        elif "stdout" in result:
+            # On a bash/python timeout the result carries error + (often
+            # empty) stdout/stderr; fall back to the error so the "timed
+            # out" reason reaches the UI instead of a blank result.
+            raw = result["stdout"] or result["stderr"] or result.get("error", "")
+            output_text = _truncate(raw)
+        elif "output" in result:
+            # bash / python canonical result: {"output": ..., "exit_code": ...}
+            raw = result["output"] or ""
+            output_text = _truncate(raw)
+        elif "response" in result:
+            # AI interaction tools (chat_with_model, send_to_session)
+            label = result.get("model", result.get("session_name", "AI"))
+            output_text = _truncate(f"{label}: {result['response']}")
+        elif "content" in result:
+            output_text = _truncate(result["content"])
+        elif "results" in result:
+            output_text = _truncate(result["results"])
+        elif "session_id" in result and "name" in result:
+            output_text = f"Session created: {result['name']} (id: {result['session_id']})"
+        elif "success" in result:
+            output_text = (
+                f"Written: {result.get('path', '')}"
+                if result["success"]
+                else f"Error: {result.get('error', '')}"
+            )
+        elif "error" in result:
+            output_text = _truncate(result["error"])
+
+        # Emit tool_output (include ui_event data if present)
+        tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
+        if is_doc_tool and "action" in result:
+            tool_output_data.update({
+                "doc_id": result.get("doc_id"),
+                "document_action": result.get("action"),
+                "document_title": result.get("title", ""),
+                "document_language": result.get("language", ""),
+                "document_version": result.get("version"),
+                "document_content": result.get("content", ""),
+            })
+        if _pending_ask_user_event:
+            # Keep enough state in the streamed tool result for alternate
+            # clients to render the prompt without depending on event order.
+            tool_output_data["ask_user"] = _pending_ask_user_event
+        if "ui_event" in result:
+            tool_output_data["ui_event"] = result["ui_event"]
+            for k in (
+                "toggle_name", "state", "mode", "model", "endpoint_url",
+                "theme_name", "colors",
+                # ui_control open_email_reply payload — without these the
+                # frontend openReplyDraft bails on undefined uid and the
+                # reply window silently never opens.
+                "uid", "folder", "account_id",
+                # Optional pre-filled body for open_email_reply so the
+                # agent can compose-and-open in one tool call.
+                "body",
+                # ui_control open_panel payload
+                "panel",
+            ):
+                if k in result:
+                    tool_output_data[k] = result[k]
+        # Forward image data from generate_image tool
+        for k in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
+            if k in result:
+                tool_output_data[k] = result[k]
+        # Forward screenshots from browser tools (base64 images)
+        if result.get("images"):
+            img = result["images"][0]
+            tool_output_data["screenshot"] = f"data:{img['mimeType']};base64,{img['data']}"
+        # Forward a file-write diff for inline before/after rendering
+        if "diff" in result:
+            tool_output_data["diff"] = result["diff"]
+        yield f'data: {json.dumps(tool_output_data)}\n\n'
+
+        if block.tool_type == "manage_notes":
+            _notes_action = ""
+            try:
+                _notes_args = json.loads(block.content or "{}")
+                if isinstance(_notes_args, dict):
+                    _notes_action = str(_notes_args.get("action") or "").lower()
+            except Exception:
+                _notes_action = ""
+            _notes_text = ""
+            if not result.get("error"):
+                if _notes_action in {"list", "search", "find", "view", "lis"}:
+                    _notes_text = _note_list_summary_from_tool_output(
+                        result.get("output") or result.get("results") or result.get("content") or ""
+                    )
+                elif _notes_action in {"add", "update", "delete", "toggle_item"}:
+                    _notes_text = str(
+                        result.get("response")
+                        or result.get("output")
+                        or result.get("results")
+                        or ""
+                    ).strip()
+                    if _notes_text.startswith("AI: "):
+                        _notes_text = _notes_text[4:].strip()
+                    if _notes_text and not re.match(r"^(done|note|item|deleted)\b", _notes_text, re.IGNORECASE):
+                        _notes_text = f"Done — {_notes_text}"
+            if _notes_text:
+                _clean_current = strip_tool_blocks(state.full_response).strip()
+                if _notes_text not in _clean_current:
+                    _prefix = "\n\n" if _clean_current else ""
+                    state.full_response = (_clean_current + _prefix + _notes_text).strip()
+                    yield f'data: {json.dumps({"delta": _prefix + _notes_text})}\n\n'
+                state.ody_notes_tool_completed = True
+
+        # This must be the final UI event for ask_user: the frontend appends
+        # the card below the now-settled tool node and cancels any between-
+        # round spinner.  The turn ends after the current tool batch.
+        if _pending_ask_user_event:
+            yield (
+                f'data: {json.dumps({"type": "ask_user", "data": _pending_ask_user_event})}\n\n'
+            )
+
+        # Native document tools open in the editor + carry the REAL doc id.
+        # Emit a doc_update so the frontend opens/activates it and sends it
+        # back as active_doc_id next turn (otherwise the agent can't "see"
+        # the document it just created on the follow-up message).
+        if block.tool_type in ("create_document", "update_document", "edit_document") and result.get("doc_id"):
+            yield (
+                'data: ' + json.dumps({
+                    "type": "doc_update",
+                    "doc_id": result["doc_id"],
+                    "title": result.get("title", ""),
+                    "language": result.get("language", ""),
+                    "content": result.get("content", ""),
+                    "version": result.get("version", 1),
+                }) + '\n\n'
+            )
+
+        # Inline research: emit the open-link as part of the assistant's
+        # actual response text — a `#research-<id>` anchor that chatRenderer
+        # turns into a regular clickable link. Saved with the message, so it
+        # PERSISTS across refresh (unlike the old ephemeral injected chip).
+        _rsid = result.get("research_session_id")
+        if _rsid:
+            _anchor = f"\n\n[Open in Deep Research](#research-{_rsid})\n"
+            yield 'data: ' + json.dumps({"delta": _anchor}) + '\n\n'
+
+        # Same pattern for notes: when manage_notes creates a note
+        # and returns note_id, drop a `[View note](#note-<id>)` link
+        # into the stream so chatRenderer's click handler routes to
+        # the new openNote() in notes.js — opens the notes panel and
+        # scrolls/flashes the matching card. Without this, the agent
+        # would write "View note" as a phrase with no target.
+        _nid = result.get("note_id")
+        if _nid and block.tool_type == "manage_notes":
+            _title = (result.get("note_title") or "").strip()
+            _label = f"View note: {_title}" if _title else "View note"
+            _anchor = f"\n\n[{_label}](#note-{_nid})\n"
+            state.full_response = (state.full_response.rstrip() + _anchor).strip()
+            yield 'data: ' + json.dumps({"delta": _anchor}) + '\n\n'
+
+        # Save for history persistence
+        tool_event = {
+            "round": round_num,
+            "tool": block.tool_type,
+            "command": cmd_display,
+            "output": output_text,
+            "exit_code": result.get("exit_code"),
+        }
+        if result.get("image_url"):
+            for ik in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
+                if result.get(ik):
+                    tool_event[ik] = result[ik]
+        if result.get("doc_id"):
+            tool_event["doc_id"] = result["doc_id"]
+            tool_event["doc_title"] = result.get("title", "")
+        # Persist the file-write/edit diff so it re-renders on reload — without
+        # this the diff shows live but vanishes from saved history.
+        if result.get("diff"):
+            tool_event["diff"] = result["diff"]
+        if _pending_ask_user_event:
+            # Persist the structured question with the tool event.  On a
+            # reload, chatRenderer can restore the card; a later user
+            # message removes it as answered.
+            tool_event["ask_user"] = _pending_ask_user_event
+        tool_events.append(tool_event)
+        if block.tool_type in _VERIFIER_EFFECTFUL_TOOLS:
+            state.effectful_used = True
+
+        formatted = format_tool_result(desc, result)
+        tool_results.append(formatted)
+        tool_result_texts.append(formatted)
+        if (
+            _ody_doc_stream_create_mode
+            and block.tool_type == "create_document"
+            and result.get("action") == "create"
+        ):
+            state.doc_stream_create_completed = True
+        if (
+            _ody_doc_finetune_mode
+            and block.tool_type in ("create_document", "update_document", "edit_document", "suggest_document")
+            and not result.get("error")
+        ):
+            state.ody_doc_tool_completed = True
+
+
+async def stream_agent_loop(
+    endpoint_url: str,
+    model: str,
+    messages: List[Dict],
+    headers: Optional[Dict] = None,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+    prompt_type: Optional[str] = None,
+    max_rounds: int = MAX_AGENT_ROUNDS,
+    max_tool_calls: int = 0,
+    context_length: int = 0,
+    active_document=None,
+    active_email: Optional[Dict[str, str]] = None,
+    session_id: Optional[str] = None,
+    disabled_tools: Optional[Set[str]] = None,
+    owner: Optional[str] = None,
+    relevant_tools: Optional[Set[str]] = None,
+    fallbacks: Optional[List[tuple]] = None,
+    plan_mode: bool = False,
+    approved_plan: Optional[str] = None,
+    tool_policy: Optional[ToolPolicy] = None,
+    workspace: Optional[str] = None,
+    forced_tools: Optional[Set[str]] = None,
+    uploaded_files: Optional[List[Dict]] = None,
+    workload: str = "foreground",
+    _is_teacher_run: bool = False,
+) -> AsyncGenerator[str, None]:
+    """Streaming agent loop generator.
+
+    Yields SSE events:
+      - data: {"delta": "text"}                             (text chunks)
+      - data: {"type": "tool_start", "tool": "...", ...}    (before execution)
+      - data: {"type": "tool_output", "tool": "...", ...}   (after execution)
+      - data: {"type": "agent_step", "round": N}            (next round)
+      - data: {"type": "metrics", "data": {...}}            (final metrics)
+      - data: [DONE]                                        (end)
+    """
+
+    mcp_mgr = get_mcp_manager()
+    prep_timings: Dict[str, float] = {}
+    disabled_tools = set(disabled_tools or [])
+    if tool_policy:
+        disabled_tools.update(tool_policy.all_disabled_names())
+        if tool_policy.disable_mcp:
+            mcp_mgr = None
+    guide_only = bool(tool_policy and tool_policy.mode == "guide_only")
+    public_blocked_tools = blocked_tools_for_owner(owner)
+    if public_blocked_tools:
+        disabled_tools.update(public_blocked_tools)
+        # MCP tools are namespaced dynamically, so hide all MCP schemas for
+        # public/non-admin users rather than trying to enumerate every tool.
+        mcp_mgr = None
+
+    if plan_mode:
+        # Plan mode: investigate read-only, propose a plan, don't execute. The
+        # route also unions the read-only-disabled set, but enforce here too so
+        # the loop is safe regardless of caller. MCP stays available but is
+        # filtered to read-only tools below (after the disabled map is loaded).
+        _plan_denylist = plan_mode_disabled_tools()
+        disabled_tools.update(_plan_denylist)
+        if getattr(_plan_denylist, "fail_closed", False):
+            # The schema import failed, so the static backstop above is
+            # best-effort and can't guarantee every mutator is covered (see
+            # plan_mode_disabled_tools docstring). Switch to real allowlist
+            # enforcement for this turn: tool_policy.blocks() is consulted at
+            # actual tool-execution time below, so this closes the gap a
+            # denylist alone can't close.
+            tool_policy = dataclasses.replace(
+                tool_policy or ToolPolicy(),
+                allowed_tools=frozenset(PLAN_MODE_READONLY_TOOLS),
+            )
+
+    uploaded_files = uploaded_files or []
+    _upload_msg = _uploaded_files_context_message(uploaded_files)
+    if _upload_msg:
+        messages = _insert_before_latest_user(messages, _upload_msg)
+
+    _t0 = time.time()
+    _needs_admin = _detect_admin_intent(messages)
+    _last_user = _extract_last_user_message(messages)
+    _ody_qwen_finetune_model = (model or "").lower().startswith("ithaka-qwen3")
+    _ody_memory_identity_turn = _looks_like_memory_identity_turn(_last_user)
+    _intent = _classify_agent_request(messages, _last_user)
+    _low_signal_turn = bool(_intent.get("low_signal"))
+    _casual_low_signal_turn = _is_casual_low_signal(_last_user)
+    _existing_conversation = _user_turn_count(messages) > 1
+    _active_document_relevant = _turn_targets_active_document(_intent, _last_user, active_document)
+    _active_email_draft_relevant = _active_document_relevant and _is_email_document_obj(active_document)
+    if _active_email_draft_relevant:
+        disabled_tools.update({
+            "list_email_accounts", "list_emails", "read_email",
+            "mcp__email__list_emails", "mcp__email__read_email",
+        })
+    _prompt_active_document = active_document if _active_document_relevant else None
+    _direct_low_signal = (
+        _low_signal_turn
+        and not _existing_conversation
+        and not bool(_intent.get("continuation"))
+        and not plan_mode
+        and not approved_plan
+        and not guide_only
+        and (_casual_low_signal_turn or not _active_document_relevant)
+        and (_casual_low_signal_turn or not active_email)
+        and (_casual_low_signal_turn or not workspace)
+        and not forced_tools
+        and not relevant_tools
+    )
+    # Tool retrieval uses the latest message by default. It may inherit recent
+    # user turns only for explicit continuations ("yes", "do it", "1").
+    _retrieval_query = str(_intent.get("retrieval_query") or _last_user)
+    logger.info(
+        "[agent-intent] latest=%r continuation=%s low_signal=%s domains=%s active_doc_relevant=%s retrieval_query=%r",
+        _last_user[:120],
+        bool(_intent.get("continuation")),
+        _low_signal_turn,
+        sorted(_intent.get("domains") or []),
+        _active_document_relevant,
+        _retrieval_query[:200],
+    )
+    if _low_signal_turn and _existing_conversation:
+        logger.info(
+            "[agent] keeping contextual path for low-signal turn in existing conversation latest=%r",
+            _last_user[:80],
+        )
+    _mcp_disabled_map = _load_mcp_disabled_map() if mcp_mgr else {}
+    if _direct_low_signal:
+        logger.info("[agent] direct low-signal reply path for latest=%r", _last_user[:80])
+        direct_messages = (
+            _minimal_ithaka_general_messages(
+                messages,
+                include_memory=True,
+            )
+            if _ody_qwen_finetune_model
+            else [{"role": "user", "content": _last_user}]
+        )
+        direct_response = ""
+        direct_start = time.time()
+        direct_actual_model = model
+        real_input_tokens = 0
+        real_output_tokens = 0
+        try:
+            async for chunk in stream_llm_with_fallback(
+                [(endpoint_url, model, headers)] + list(fallbacks or []),
+                direct_messages,
+                temperature=temperature,
+                max_tokens=min(max_tokens or 128, 128),
+                prompt_type=None,
+                tools=None,
+                timeout=int(get_setting("agent_stream_timeout_seconds", 300) or 300),
+                session_id=session_id,
+                workload=workload,
+            ):
+                if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+                    try:
+                        data = json.loads(chunk[6:])
+                    except json.JSONDecodeError:
+                        yield chunk
+                        continue
+                    if data.get("type") == "usage":
+                        usage = data.get("data", {}) or {}
+                        direct_actual_model = usage.get("model") or direct_actual_model
+                        real_input_tokens += usage.get("input_tokens", 0) or 0
+                        real_output_tokens += usage.get("output_tokens", 0) or 0
+                        continue
+                    if data.get("type") == "model_actual":
+                        direct_actual_model = data.get("model") or direct_actual_model
+                        data["requested_model"] = model
+                        yield f"data: {json.dumps(data)}\n\n"
+                        continue
+                    if data.get("type") == "fallback":
+                        direct_actual_model = data.get("answered_by") or direct_actual_model
+                        yield chunk
+                        continue
+                    if "delta" in data:
+                        if not data.get("thinking"):
+                            direct_response += data.get("delta", "")
+                        yield chunk
+                        continue
+                    yield chunk
+                elif chunk.startswith("event: "):
+                    yield chunk
+        except Exception as _direct_err:
+            logger.warning("[agent] direct low-signal path failed: %s", _direct_err)
+            fallback = "Hey."
+            direct_response += fallback
+            yield f"data: {json.dumps({'delta': fallback})}\n\n"
+
+        if not direct_response.strip():
+            fallback = "Hey."
+            direct_response = fallback
+            yield f"data: {json.dumps({'delta': fallback})}\n\n"
+
+        duration = time.time() - direct_start
+        metrics = {
+            "model": direct_actual_model,
+            "requested_model": model,
+            "input_tokens": real_input_tokens or estimate_tokens(direct_messages),
+            "output_tokens": real_output_tokens or max(len(direct_response) // 4, 1),
+            "total_time": round(duration, 2),
+            "response_time": round(duration, 2),
+            "agent_rounds": 0,
+            "tool_calls": 0,
+            "direct_low_signal": True,
+        }
+        yield f"data: {json.dumps({'type': 'metrics', 'data': metrics})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    if plan_mode and mcp_mgr:
+        # Allow read-only MCP tools to investigate, block write/unknown ones:
+        # hide them from the schemas AND reject them at runtime by qualified name.
+        _mcp_block_map, _mcp_block_q = mcp_mgr.plan_mode_blocked_mcp()
+        for _sid, _names in _mcp_block_map.items():
+            _mcp_disabled_map.setdefault(_sid, set()).update(_names)
+        disabled_tools.update(_mcp_block_q)
+    prep_timings["request_setup"] = time.time() - _t0
+
+    # RAG-based tool selection: retrieve relevant tools for this query.
+    # If caller provided a pre-computed set (e.g. task_scheduler), use that.
+    # (Extracted to _select_agent_tools; correction-layer order unchanged.)
+    _t1 = time.time()
+    _selection = await _select_agent_tools(
+        relevant_tools=relevant_tools,
+        guide_only=guide_only,
+        _low_signal_turn=_low_signal_turn,
+        workspace=workspace,
+        mcp_mgr=mcp_mgr,
+        _mcp_disabled_map=_mcp_disabled_map,
+        _retrieval_query=_retrieval_query,
+        _intent=_intent,
+        disabled_tools=disabled_tools,
+        _active_document_relevant=_active_document_relevant,
+        _active_email_draft_relevant=_active_email_draft_relevant,
+        uploaded_files=uploaded_files,
+        forced_tools=forced_tools,
+        owner=owner,
+        _ody_qwen_finetune_model=_ody_qwen_finetune_model,
+        _prompt_active_document=_prompt_active_document,
+        _last_user=_last_user,
+    )
+    _relevant_tools = _selection.relevant_tools
+    _ody_doc_finetune_mode = _selection.ody_doc_finetune_mode
+    _ody_notes_finetune_mode = _selection.ody_notes_finetune_mode
+    _ody_doc_stream_create_mode = _selection.ody_doc_stream_create_mode
 
     prep_timings["tool_selection"] = time.time() - _t1
 
@@ -3244,11 +4148,10 @@ async def stream_agent_loop(
     first_token_received = False
     tool_events = []   # Persist tool executions for history reload
     round_texts = []   # Cleaned text per round for history reload
-    # Completion-verifier state (mechanism 3a). _effectful_used flips on when
-    # a tool that produces a checkable artifact runs; the verifier only fires
-    # on such turns and at most _VERIFIER_MAX_ROUNDS times.
-    _effectful_used = False
-    _verifier_rounds = 0
+    # Cross-round status flags for this turn — field-for-field the former
+    # locals; see _AgentTurnState for the per-flag comments. The extracted
+    # round helpers mutate them here.
+    _state = _AgentTurnState()
     _verifier_instruction = _extract_last_user_message(messages)
     real_input_tokens = 0   # Accumulated real usage from API
     real_output_tokens = 0
@@ -3258,51 +4161,11 @@ async def stream_agent_loop(
     backend_prefill_tps = 0  # backend-reported prefill speed
     requested_model = model
     actual_model = model
-    total_tool_calls = 0  # for budget enforcement
-    _ody_notes_tool_completed = False
-
-    # Loop-breaker state. Small models (e.g. deepseek-v4-flash) can get
-    # stuck firing the same tool call over and over with no text — burns
-    # all 20 rounds, looks like the chat "died". Track recent call
-    # signatures + consecutive no-text tool rounds to bail early.
-    _recent_call_sigs = collections.deque(maxlen=6)
-    _stuck_rounds = 0
-    # Frequency of each exact call signature (tool + args), for the runaway
-    # backstop. Counting identical repeats — not distinct same-tool calls —
-    # lets a legit batch (e.g. 18 calendar events at once) through.
-    _call_freq: collections.Counter = collections.Counter()
-    _force_answer = False  # set by loop-breaker → next round runs with NO tools
-    # Supervisor: how many times we've nudged the model after it announced
-    # an action without emitting the tool call. Capped to prevent a model
-    # that *can't* call the tool from looping forever.
-    _intent_nudge_count = 0
-    _MAX_INTENT_NUDGES = 2
-
-    # "I said I would, then didn't" detector. The pattern that breaks debug
-    # loops on weak models (deepseek-v4-flash mid-2026): the model writes
-    # "Let me tail the output to see the error" and then ends the turn with
-    # no tool_calls. The intent is sincere but the function call gets dropped.
-    # Match the common phrasings + an action verb that maps to an available
-    # tool, so we don't nudge on harmless transitional text like "let me
-    # know what you think".
-    _INTENT_RE = re.compile(
-        r"(?:^|\n)\s*(?:let me|i'?ll|i will|i need to|we need to|need to|"
-        r"i should|we should|i must|we must|going to|let's)\s+"
-        r"(?:tail|check|investigate|look at|see|tail|read|fetch|inspect|"
-        r"verify|diagnose|examine|debug|capture|grab|pull|view|run|call|"
-        r"trigger|launch|start|kick off|stop|kill|restart|adopt|serve|"
-        r"register|adopt|list|search|find|query|hit|ping|test|use|perform|do)"
-        r"\b[^.\n]{0,140}",
-        re.IGNORECASE,
-    )
-    _awaiting_user = False  # set by ask_user → end the turn and wait for a choice
 
     # Document streaming state (persists across rounds)
     _doc_acc = ""          # accumulated tool-call JSON arguments
     _doc_opened = False    # whether doc_stream_open was sent
     _doc_last_len = 0      # last content length sent
-    _doc_stream_create_completed = False
-    _ody_doc_tool_completed = False
 
     # Set when the loop runs out of rounds while the agent was still actively
     # using tools — i.e. it was cut off, not finished. Drives a "Continue" event
@@ -3326,7 +4189,7 @@ async def stream_agent_loop(
         # Merge native tool schemas with MCP tool schemas, filtering out
         # Only send function schemas for API models (OpenAI, Anthropic, etc.).
         # Local models use fenced code blocks or <tool_code> — schemas add overhead.
-        if _force_answer:
+        if _state.force_answer:
             # Loop-breaker decided the model has enough info but keeps
             # calling tools. Send NO tools this round so it's forced to
             # write the answer instead of flailing further.
@@ -3700,7 +4563,7 @@ async def stream_agent_loop(
                 if used_native:
                     native_tool_calls = _filtered_converted_calls
                 if not tool_blocks:
-                    _force_answer = True
+                    _state.force_answer = True
                     messages.append({
                         "role": "system",
                         "content": (
@@ -3715,7 +4578,7 @@ async def stream_agent_loop(
         # answer. If it ignored that and emitted a (possibly DSML) tool
         # call anyway, discard it — don't execute, don't re-loop. Keep
         # only the prose; if there's none, emit a graceful fallback.
-        if _force_answer:
+        if _state.force_answer:
             if tool_blocks:
                 logger.info(f"[agent] force-answer round {round_num}: discarding {len(tool_blocks)} ignored tool call(s)")
             tool_blocks = []
@@ -3799,621 +4662,111 @@ async def stream_agent_loop(
             yield f'data: {json.dumps({"delta": cleaned_round})}\n\n'
 
         if not tool_blocks:
-            # ── Completion verifier (mechanism 3a) ────────────────────
-            # The model is finishing. If this was an effectful agentic turn,
-            # have a fresh-context verifier independently check the work
-            # before we accept "done". On FAIL, surface the issues and let
-            # the model fix them (capped, and it must do new effectful work
-            # to re-trigger). Skipped on force-answer rounds (no tools to
-            # fix with), pure Q&A, and when the toggle is off.
-            _claimed_done = bool(_strip_think_blocks(cleaned_round).strip())
-            if (_effectful_used and not _force_answer
-                    and _claimed_done
-                    and _verifier_rounds < _VERIFIER_MAX_ROUNDS
-                    # Default OFF: on weak local models the verifier can't judge
-                    # from the action-snapshot (no doc body), so it false-rejects
-                    # ("content not shown") and forces a costly extra round every
-                    # effectful turn. Opt-in via setting for strong models.
-                    and get_setting("agent_verifier_subagent", False)):
-                # Brief "working" indicator while the verifier runs.
-                yield f'data: {json.dumps({"type": "agent_step", "round": round_num})}\n\n'
-                _vfail = await _run_verifier_subagent(
-                    _verifier_instruction,
-                    _build_actions_snapshot(tool_events),
-                    endpoint_url=endpoint_url, model=model, headers=headers,
-                )
-                if _vfail:
-                    _verifier_rounds += 1
-                    logger.info(f"[agent] verifier flagged {len(_vfail)} issue(s) on round {round_num}: {_vfail}")
-                    _note = "\n\n_Double-checked the work and found something to fix._\n\n"
-                    yield f'data: {json.dumps({"delta": _note})}\n\n'
-                    full_response += _note
-                    messages.append({
-                        "role": "system",
-                        "content": (
-                            "An independent verifier reviewed your work against the "
-                            "original request and found issues that must be fixed before "
-                            "this is actually done:\n- " + "\n- ".join(_vfail) +
-                            "\n\nFix these now using tools, then finish."
-                        ),
-                    })
-                    # Require fresh effectful work before verifying again, so we
-                    # never re-verify an unchanged state in a loop.
-                    _effectful_used = False
-                    continue
-            # ── Intent-without-action supervisor ─────────────────────
-            # Catch "Let me tail the output" / "I'll check the logs" /
-            # "Let me investigate" patterns where the model announces an
-            # action but emits no tool_call. The bug shows up most on
-            # smaller models trained to verbalize plans before acting.
-            # We inject one sharp nudge ("you said you would X — call the
-            # actual tool now") and loop again. Capped at
-            # _MAX_INTENT_NUDGES so a model that genuinely cannot use the
-            # tool doesn't pin us in a forever loop.
-            _intent_text = _strip_think_blocks(cleaned_round).strip()
-            _intent_match = _INTENT_RE.search(_intent_text) if _intent_text else None
-            # Only nudge when the round REALLY looks like an unfinished
-            # promise: short response (<400 chars), no fenced code/answer,
-            # and an action-intent phrase was matched. Long answers that
-            # happen to contain "let me know" are not stalls.
-            _looks_like_promise = (
-                not guide_only
-                and _intent_match is not None
-                and len(_intent_text) < 400
-                and "```" not in _intent_text
-                and _intent_nudge_count < _MAX_INTENT_NUDGES
-            )
-            if _looks_like_promise:
-                _intent_nudge_count += 1
-                _matched_phrase = _intent_match.group(0).strip()
-                logger.info(f"[agent] intent-without-action nudge #{_intent_nudge_count} on round {round_num}: {_matched_phrase!r}")
-                _lower_phrase = _matched_phrase.lower()
-                _cookbook_log_hint = ""
-                if any(_word in _lower_phrase for _word in ("log", "logs", "output", "tail", "status")):
-                    _cookbook_log_hint = (
-                        " If this is about a Cookbook/model serve, the concrete calls are: "
-                        "`list_served_models` first, then `tail_serve_output` with the "
-                        "session_id from the serve/list result. Never answer with "
-                        "\"check logs\" when those tools are available."
-                    )
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        f"You just wrote: \"{_matched_phrase}\" — but ended the "
-                        "turn without making the actual tool call. The user can "
-                        "see you announced the action but didn't run it, which "
-                        "is the most frustrating thing you can do. "
-                        "DO IT NOW: emit the actual function call this turn. "
-                        f"{_cookbook_log_hint}"
-                        "If you decided not to do it after all, say so plainly in "
-                        "one sentence instead of restating the plan."
-                    ),
-                })
-                # Visible signal in the stream so the user knows we caught it.
-                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+            # No tool calls this round — wrap up the turn. The completion
+            # verifier + intent-without-action supervisor live in
+            # _finalize_round_without_tools; it yields the same SSE events
+            # and steers via state.directive.
+            _state.full_response = full_response
+            _state.directive = None
+            async for _evt in _finalize_round_without_tools(
+                _state,
+                cleaned_round=cleaned_round,
+                round_num=round_num,
+                messages=messages,
+                tool_events=tool_events,
+                _verifier_instruction=_verifier_instruction,
+                guide_only=guide_only,
+                endpoint_url=endpoint_url,
+                model=model,
+                headers=headers,
+            ):
+                yield _evt
+            full_response = _state.full_response
+            if _state.directive == "continue":
                 continue
             break  # no tools — done
 
         # ── Loop-breaker (Terminus-style stall detector) ──────────────
-        # Stall detector for repeated no-progress tool loops.
-        # A round is "useless" ONLY when it re-issues a recent tool call AND
-        # writes no answer text — i.e. the model is going in circles.
-        # Genuine exploration (new, distinct calls) is never useless, so
-        # multi-step work (file hunts, multi-host ssh, build→test→fix) rides
-        # all the way to a real answer. We bail only on a streak of useless
-        # rounds, or a single tool fired an absurd number of times (hard
-        # runaway backstop). On bail we don't give up — we force one
-        # tool-free round so the model declares done or declares blocked,
-        # mirroring Terminus's explicit-completion handshake.
-        _sig = "|".join(sorted(f"{b.tool_type}:{(b.content or '').strip()[:120]}" for b in tool_blocks))
-        _is_repeat = _sig in _recent_call_sigs
-        _recent_call_sigs.append(_sig)
-        for _b in tool_blocks:
-            _call_freq[f"{_b.tool_type}:{(_b.content or '').strip()[:120]}"] += 1
-        # "Real" answer text = round text minus <think> blocks. Empty-think
-        # rounds (just "<think>\n\n</think>" + a tool call) must not read as
-        # progress, so strip think before checking.
-        _real_text = _strip_think_blocks(cleaned_round).strip()
-        # Circling = repeating a recent call with nothing written. Any
-        # progress (a NEW distinct call, or actual answer text) resets it.
-        if _is_repeat and not _real_text:
-            _stuck_rounds += 1
-        else:
-            _stuck_rounds = 0
-        # Runaway = the SAME exact call repeated an absurd number of times.
-        # Distinct calls to one tool (a real batch) are legitimate work, so we
-        # count identical call signatures, not raw per-tool-type totals.
-        _runaway = _detect_runaway_call(_call_freq)
-        if _stuck_rounds >= 4 or _runaway:
-            reason = (f"calling {_runaway} with identical arguments over and over" if _runaway
-                      else "repeating the same tool calls without new progress")
-            logger.warning(f"[agent] loop-breaker tripped on round {round_num} ({reason}); sig={_sig[:80]!r}")
-            # The model has been executing tools, so its results are already
-            # in context. Force ONE tool-free round to converge: write the
-            # answer from what it has, or state plainly what's blocking it.
-            # The force-answer handler above salvages (grace synthesis) or
-            # apologizes honestly if it still writes nothing.
-            _off = [t for t in ("web_search", "bash")
-                    if disabled_tools and t in disabled_tools]
-            _off_note = (f" ({', '.join(_off)} is currently disabled — say so if "
-                         f"you needed it.)" if _off else "")
-            _force_answer = True
-            messages.append({
-                "role": "system",
-                "content": (
-                    "You're repeating tool calls without converging. STOP calling "
-                    "tools and end the turn one of two ways: (a) write your best "
-                    "final answer NOW from the information already gathered, or "
-                    "(b) if you're genuinely blocked, say plainly what's blocking "
-                    "you in a sentence or two." + _off_note
-                ),
-            })
-            full_response += "\n\n"
-            yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1})}\n\n'
+        # Extracted to _apply_loop_breaker; sets state.directive="continue"
+        # when tripped (forcing one tool-free round next), else no-op.
+        _state.full_response = full_response
+        _state.directive = None
+        async for _evt in _apply_loop_breaker(
+            _state,
+            tool_blocks=tool_blocks,
+            cleaned_round=cleaned_round,
+            round_num=round_num,
+            messages=messages,
+            disabled_tools=disabled_tools,
+        ):
+            yield _evt
+        full_response = _state.full_response
+        if _state.directive == "continue":
             continue
 
-        # Pre-stream document content for fenced tool blocks (non-native path)
-        # Native path already streamed via tool_call_delta above
-        # For round 1 fenced blocks, frontend fence detection already handled streaming
-        if not _doc_opened and round_num == 1:
-            for block in tool_blocks:
-                if tool_policy and tool_policy.blocks(block.tool_type):
-                    continue
-                if block.tool_type == "create_document":
-                    _doc_opened = True
-                    break
-
-        if not _doc_opened:
-            for block in tool_blocks:
-                if tool_policy and tool_policy.blocks(block.tool_type):
-                    continue
-                if block.tool_type == "create_document":
-                    lines = block.content.strip().split("\n")
-                    title = lines[0].strip() if lines else "Untitled"
-                    lang = ""
-                    content_start = 1
-                    if len(lines) > 1 and len(lines[1].strip()) < 20 and lines[1].strip().isalpha():
-                        lang = lines[1].strip()
-                        content_start = 2
-                    content = "\n".join(lines[content_start:]) if len(lines) > content_start else ""
-                    yield f'data: {json.dumps({"type": "doc_stream_open", "title": title, "language": lang})}\n\n'
-                    if content:
-                        yield f'data: {json.dumps({"type": "doc_stream_delta", "content": content})}\n\n'
-                    break
-                elif block.tool_type == "update_document":
-                    # Pre-stream the full replacement content so user sees it immediately
-                    content = block.content.strip()
-                    yield f'data: {json.dumps({"type": "doc_stream_open", "title": "", "language": ""})}\n\n'
-                    yield f'data: {json.dumps({"type": "doc_stream_delta", "content": content})}\n\n'
-                    break
-
-        # Execute each tool block
+        # Pre-stream document content + execute each tool block — extracted
+        # to _execute_round_tool_blocks. It is an async SUBgenerator so
+        # tool_progress events stream LIVE (not buffered). The explicit
+        # aclose() in the finally preserves the pre-extraction cancellation
+        # semantics: a client disconnect (GeneratorExit at our yield) is
+        # thrown into the subgenerator's progress-drain try/except
+        # BaseException immediately, cancelling the in-flight tool task
+        # instead of leaving it running as an orphan.
         tool_results = []
         tool_result_texts = []  # plain text for native tool role messages
-        budget_hit = False
-        for i, block in enumerate(tool_blocks):
-            # --- Tool budget check ---
-            if max_tool_calls > 0 and total_tool_calls >= max_tool_calls:
-                yield f'data: {json.dumps({"type": "budget_exceeded", "limit": max_tool_calls, "used": total_tool_calls})}\n\n'
-                budget_hit = True
-                break
-
-            total_tool_calls += 1
-            # Build a short display string for the frontend tool bubble.
-            # Document tools show a brief summary instead of dumping full content.
-            is_doc_tool = block.tool_type in ("create_document", "update_document", "edit_document", "suggest_document")
-            full_command = block.content.strip()
-            if is_doc_tool:
-                cmd_display = block.content.split("\n")[0].strip()[:80]
-            else:
-                cmd_display = full_command
-
-            if tool_policy and tool_policy.blocks(block.tool_type):
-                desc = f"{block.tool_type}: BLOCKED"
-                result = {
-                    "error": tool_policy.reason_for(block.tool_type),
-                    "exit_code": 1,
-                    "blocked": True,
-                }
-                logger.info("Tool blocked before start by policy: %s", block.tool_type)
-            else:
-                yield (
-                    f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "full_command": full_command, "round": round_num})}\n\n'
-                )
-
-                # Streaming progress for long-running tools (bash, python).
-                # The bash/python branches inside _direct_fallback emit
-                # periodic {elapsed_s, tail} payloads via this callback;
-                # we forward each one as a `tool_progress` SSE event so
-                # the UI can render live elapsed-time + tail-of-output.
-                _progress_q: asyncio.Queue = asyncio.Queue()
-                async def _push_progress(payload):
-                    await _progress_q.put(payload)
-
-                async def _run_tool():
-                    try:
-                        return await execute_tool_block(
-                            block,
-                            session_id=session_id,
-                            disabled_tools=disabled_tools,
-                            tool_policy=tool_policy,
-                            owner=owner,
-                            progress_cb=_push_progress,
-                            workspace=workspace,
-                        )
-                    finally:
-                        # Sentinel so the drainer knows to stop.
-                        await _progress_q.put(None)
-
-                _tool_task = asyncio.create_task(_run_tool())
-                # Drain progress events as they arrive — block until the
-                # next event OR the tool finishes (sentinel = None). If the
-                # client closes the stream mid-drain (GeneratorExit) the tool
-                # task must be cancelled, or it runs on as an orphan.
-                try:
-                    while True:
-                        evt = await _progress_q.get()
-                        if evt is None:
-                            break
-                        yield (
-                            f'data: {json.dumps({"type": "tool_progress", "tool": block.tool_type, "round": round_num, **evt})}\n\n'
-                        )
-                except BaseException:
-                    _tool_task.cancel()
-                    raise
-                desc, result = await _tool_task
-
-            # A skill the model just loaded can prescribe tools that weren't
-            # RAG-selected this turn (declared via requires_toolsets in its
-            # frontmatter). Union them into the selection so the NEXT round's
-            # schema list includes them — otherwise the model reads "use
-            # grep" from the skill it fetched but has no grep schema to call.
-            if (
-                block.tool_type == "manage_skills"
-                and _relevant_tools is not None
-                and not result.get("error")
-            ):
-                _ms_args = {}
-                _ms_raw = (block.content or "").strip()
-                if _ms_raw.startswith("{"):
-                    try:
-                        _ms_args = json.loads(_ms_raw)
-                    except json.JSONDecodeError:
-                        _ms_args = {}
-                _ms_name = str(_ms_args.get("name", "") or "").strip()
-                if _ms_name and _ms_args.get("action") in ("view", "view_ref"):
-                    try:
-                        from services.memory.skills import SkillsManager as _SkM
-                        from src.constants import DATA_DIR as _DD
-                        from src.tool_policy import known_tool_names as _ktn
-                        _known = _ktn()
-                        for _sk in _SkM(_DD).load(owner=owner):
-                            if _sk.get("name") == _ms_name:
-                                _new = {
-                                    t for t in (_sk.get("requires_toolsets") or [])
-                                    if t in _known and t not in _relevant_tools
-                                }
-                                if _new:
-                                    _relevant_tools.update(_new)
-                                    logger.info(
-                                        "[tool-rag] skill '%s' unlocked tools for next round: %s",
-                                        _ms_name, sorted(_new),
-                                    )
-                                break
-                    except Exception as _e:
-                        logger.debug(f"skill requires_toolsets unlock skipped: {_e}")
-
-            # Extract structured web sources from web_search tool output.
-            # web_search returns {"output": ..., "exit_code": 0}; check "output"
-            # first so the <!-- SOURCES:…--> marker is found and stripped even
-            # when the result doesn't carry a "results" or "stdout" key.
-            _src_text = result.get("output") or result.get("results") or result.get("stdout") or ""
-            if block.tool_type == "web_search" and _src_text:
-                _src_marker = "<!-- SOURCES:"
-                _src_idx = _src_text.find(_src_marker)
-                if _src_idx >= 0:
-                    _src_end = _src_text.find(" -->", _src_idx)
-                    if _src_end >= 0:
-                        try:
-                            _extracted_sources = json.loads(_src_text[_src_idx + len(_src_marker):_src_end])
-                            yield f'data: {json.dumps({"type": "web_sources", "data": _extracted_sources})}\n\n'
-                            # Strip the marker from the result so it doesn't show in chat
-                            _clean = _src_text[:_src_idx].rstrip()
-                            if "output" in result:
-                                result["output"] = _clean
-                            elif "results" in result:
-                                result["results"] = _clean
-                            elif "stdout" in result:
-                                result["stdout"] = _clean
-                        except json.JSONDecodeError:
-                            logger.debug("web_search SOURCES marker present but not valid JSON; skipping sources chip")
-
-            # Emit doc-specific event for document tools — the frontend
-            # document panel handles this; no need to show content in chat.
-            if is_doc_tool and "action" in result:
-                if result["action"] == "suggest":
-                    yield (
-                        f'data: {json.dumps({"type": "doc_suggestions", "doc_id": result["doc_id"], "suggestions": result["suggestions"]})}\n\n'
-                    )
-                else:
-                    yield (
-                        f'data: {json.dumps({"type": "doc_update", "doc_id": result["doc_id"], "content": result["content"], "version": result["version"], "title": result.get("title", ""), "language": result.get("language")})}\n\n'
-                    )
-
-            # Emit ui_control event for frontend to apply UI changes
-            if "ui_event" in result:
-                yield (
-                    f'data: {json.dumps({"type": "ui_control", "data": result})}\n\n'
-                )
-
-            # ask_user: remember the payload now, but emit the interactive event
-            # only *after* tool_output below.  Emitting it before tool_output let
-            # the subsequent tool-card rewrite/scroll push the choices out of
-            # view.  The payload is also copied into the persisted tool event so
-            # history reload can reconstruct an unanswered card.
-            _pending_ask_user_event = None
-            if "ask_user" in result:
-                # The question lives in the tool args. ChatMessage.to_dict()
-                # replays only role+content to the model next turn — tool_event
-                # metadata is dropped — so if the question is never in the saved
-                # assistant text, the model can't see it already asked and will
-                # loop and re-ask after the user answers. Stream it as assistant
-                # text (once) so it persists and is replayed. The card shows the
-                # options only, so this is the single visible copy of the question.
-                _auq = result["ask_user"]
-                _auq_q = (_auq.get("question") or "").strip()
-                if _auq_q and _auq_q not in full_response:
-                    _auq_delta = ("\n\n" if full_response.strip() else "") + _auq_q
-                    full_response += _auq_delta
-                    yield 'data: ' + json.dumps({"delta": _auq_delta}) + '\n\n'
-                _pending_ask_user_event = _auq
-                _awaiting_user = True
-
-            # update_plan: agent wrote back to the plan (ticked a step / revised).
-            # Push it to the frontend so the stored plan + docked window update
-            # live. Does NOT end the turn — the agent keeps working.
-            if "plan_update" in result:
-                yield (
-                    f'data: {json.dumps({"type": "plan_update", "data": result["plan_update"]})}\n\n'
-                )
-
-            # Build output for frontend tool bubble.
-            # Document tools get a short summary — content goes to the editor panel.
-            output_text = ""
-            if is_doc_tool and "action" in result:
-                action = result["action"]
-                title = result.get("title", "")
-                ver = result.get("version", "?")
-                if action == "create":
-                    output_text = f'Document created: "{title}" (v{ver})'
-                elif action == "edit":
-                    output_text = f'Document edited: "{title}" (v{ver}, {result.get("applied", 0)} edit(s))'
-                elif action == "update":
-                    output_text = f'Document updated: "{title}" (v{ver})'
-            elif "stdout" in result:
-                # On a bash/python timeout the result carries error + (often
-                # empty) stdout/stderr; fall back to the error so the "timed
-                # out" reason reaches the UI instead of a blank result.
-                raw = result["stdout"] or result["stderr"] or result.get("error", "")
-                output_text = _truncate(raw)
-            elif "output" in result:
-                # bash / python canonical result: {"output": ..., "exit_code": ...}
-                raw = result["output"] or ""
-                output_text = _truncate(raw)
-            elif "response" in result:
-                # AI interaction tools (chat_with_model, send_to_session)
-                label = result.get("model", result.get("session_name", "AI"))
-                output_text = _truncate(f"{label}: {result['response']}")
-            elif "content" in result:
-                output_text = _truncate(result["content"])
-            elif "results" in result:
-                output_text = _truncate(result["results"])
-            elif "session_id" in result and "name" in result:
-                output_text = f"Session created: {result['name']} (id: {result['session_id']})"
-            elif "success" in result:
-                output_text = (
-                    f"Written: {result.get('path', '')}"
-                    if result["success"]
-                    else f"Error: {result.get('error', '')}"
-                )
-            elif "error" in result:
-                output_text = _truncate(result["error"])
-
-            # Emit tool_output (include ui_event data if present)
-            tool_output_data = {"type": "tool_output", "tool": block.tool_type, "command": cmd_display, "output": output_text, "exit_code": result.get("exit_code")}
-            if is_doc_tool and "action" in result:
-                tool_output_data.update({
-                    "doc_id": result.get("doc_id"),
-                    "document_action": result.get("action"),
-                    "document_title": result.get("title", ""),
-                    "document_language": result.get("language", ""),
-                    "document_version": result.get("version"),
-                    "document_content": result.get("content", ""),
-                })
-            if _pending_ask_user_event:
-                # Keep enough state in the streamed tool result for alternate
-                # clients to render the prompt without depending on event order.
-                tool_output_data["ask_user"] = _pending_ask_user_event
-            if "ui_event" in result:
-                tool_output_data["ui_event"] = result["ui_event"]
-                for k in (
-                    "toggle_name", "state", "mode", "model", "endpoint_url",
-                    "theme_name", "colors",
-                    # ui_control open_email_reply payload — without these the
-                    # frontend openReplyDraft bails on undefined uid and the
-                    # reply window silently never opens.
-                    "uid", "folder", "account_id",
-                    # Optional pre-filled body for open_email_reply so the
-                    # agent can compose-and-open in one tool call.
-                    "body",
-                    # ui_control open_panel payload
-                    "panel",
-                ):
-                    if k in result:
-                        tool_output_data[k] = result[k]
-            # Forward image data from generate_image tool
-            for k in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
-                if k in result:
-                    tool_output_data[k] = result[k]
-            # Forward screenshots from browser tools (base64 images)
-            if result.get("images"):
-                img = result["images"][0]
-                tool_output_data["screenshot"] = f"data:{img['mimeType']};base64,{img['data']}"
-            # Forward a file-write diff for inline before/after rendering
-            if "diff" in result:
-                tool_output_data["diff"] = result["diff"]
-            yield f'data: {json.dumps(tool_output_data)}\n\n'
-
-            if block.tool_type == "manage_notes":
-                _notes_action = ""
-                try:
-                    _notes_args = json.loads(block.content or "{}")
-                    if isinstance(_notes_args, dict):
-                        _notes_action = str(_notes_args.get("action") or "").lower()
-                except Exception:
-                    _notes_action = ""
-                _notes_text = ""
-                if not result.get("error"):
-                    if _notes_action in {"list", "search", "find", "view", "lis"}:
-                        _notes_text = _note_list_summary_from_tool_output(
-                            result.get("output") or result.get("results") or result.get("content") or ""
-                        )
-                    elif _notes_action in {"add", "update", "delete", "toggle_item"}:
-                        _notes_text = str(
-                            result.get("response")
-                            or result.get("output")
-                            or result.get("results")
-                            or ""
-                        ).strip()
-                        if _notes_text.startswith("AI: "):
-                            _notes_text = _notes_text[4:].strip()
-                        if _notes_text and not re.match(r"^(done|note|item|deleted)\b", _notes_text, re.IGNORECASE):
-                            _notes_text = f"Done — {_notes_text}"
-                if _notes_text:
-                    _clean_current = strip_tool_blocks(full_response).strip()
-                    if _notes_text not in _clean_current:
-                        _prefix = "\n\n" if _clean_current else ""
-                        full_response = (_clean_current + _prefix + _notes_text).strip()
-                        yield f'data: {json.dumps({"delta": _prefix + _notes_text})}\n\n'
-                    _ody_notes_tool_completed = True
-
-            # This must be the final UI event for ask_user: the frontend appends
-            # the card below the now-settled tool node and cancels any between-
-            # round spinner.  The turn ends after the current tool batch.
-            if _pending_ask_user_event:
-                yield (
-                    f'data: {json.dumps({"type": "ask_user", "data": _pending_ask_user_event})}\n\n'
-                )
-
-            # Native document tools open in the editor + carry the REAL doc id.
-            # Emit a doc_update so the frontend opens/activates it and sends it
-            # back as active_doc_id next turn (otherwise the agent can't "see"
-            # the document it just created on the follow-up message).
-            if block.tool_type in ("create_document", "update_document", "edit_document") and result.get("doc_id"):
-                yield (
-                    'data: ' + json.dumps({
-                        "type": "doc_update",
-                        "doc_id": result["doc_id"],
-                        "title": result.get("title", ""),
-                        "language": result.get("language", ""),
-                        "content": result.get("content", ""),
-                        "version": result.get("version", 1),
-                    }) + '\n\n'
-                )
-
-            # Inline research: emit the open-link as part of the assistant's
-            # actual response text — a `#research-<id>` anchor that chatRenderer
-            # turns into a regular clickable link. Saved with the message, so it
-            # PERSISTS across refresh (unlike the old ephemeral injected chip).
-            _rsid = result.get("research_session_id")
-            if _rsid:
-                _anchor = f"\n\n[Open in Deep Research](#research-{_rsid})\n"
-                yield 'data: ' + json.dumps({"delta": _anchor}) + '\n\n'
-
-            # Same pattern for notes: when manage_notes creates a note
-            # and returns note_id, drop a `[View note](#note-<id>)` link
-            # into the stream so chatRenderer's click handler routes to
-            # the new openNote() in notes.js — opens the notes panel and
-            # scrolls/flashes the matching card. Without this, the agent
-            # would write "View note" as a phrase with no target.
-            _nid = result.get("note_id")
-            if _nid and block.tool_type == "manage_notes":
-                _title = (result.get("note_title") or "").strip()
-                _label = f"View note: {_title}" if _title else "View note"
-                _anchor = f"\n\n[{_label}](#note-{_nid})\n"
-                full_response = (full_response.rstrip() + _anchor).strip()
-                yield 'data: ' + json.dumps({"delta": _anchor}) + '\n\n'
-
-            # Save for history persistence
-            tool_event = {
-                "round": round_num,
-                "tool": block.tool_type,
-                "command": cmd_display,
-                "output": output_text,
-                "exit_code": result.get("exit_code"),
-            }
-            if result.get("image_url"):
-                for ik in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
-                    if result.get(ik):
-                        tool_event[ik] = result[ik]
-            if result.get("doc_id"):
-                tool_event["doc_id"] = result["doc_id"]
-                tool_event["doc_title"] = result.get("title", "")
-            # Persist the file-write/edit diff so it re-renders on reload — without
-            # this the diff shows live but vanishes from saved history.
-            if result.get("diff"):
-                tool_event["diff"] = result["diff"]
-            if _pending_ask_user_event:
-                # Persist the structured question with the tool event.  On a
-                # reload, chatRenderer can restore the card; a later user
-                # message removes it as answered.
-                tool_event["ask_user"] = _pending_ask_user_event
-            tool_events.append(tool_event)
-            if block.tool_type in _VERIFIER_EFFECTFUL_TOOLS:
-                _effectful_used = True
-
-            formatted = format_tool_result(desc, result)
-            tool_results.append(formatted)
-            tool_result_texts.append(formatted)
-            if (
-                _ody_doc_stream_create_mode
-                and block.tool_type == "create_document"
-                and result.get("action") == "create"
-            ):
-                _doc_stream_create_completed = True
-            if (
-                _ody_doc_finetune_mode
-                and block.tool_type in ("create_document", "update_document", "edit_document", "suggest_document")
-                and not result.get("error")
-            ):
-                _ody_doc_tool_completed = True
+        _state.budget_hit = False
+        _state.full_response = full_response
+        _exec_gen = _execute_round_tool_blocks(
+            _state,
+            tool_blocks=tool_blocks,
+            round_num=round_num,
+            _doc_opened=_doc_opened,
+            tool_results=tool_results,
+            tool_result_texts=tool_result_texts,
+            tool_events=tool_events,
+            _relevant_tools=_relevant_tools,
+            max_tool_calls=max_tool_calls,
+            tool_policy=tool_policy,
+            session_id=session_id,
+            disabled_tools=disabled_tools,
+            owner=owner,
+            workspace=workspace,
+            _ody_doc_stream_create_mode=_ody_doc_stream_create_mode,
+            _ody_doc_finetune_mode=_ody_doc_finetune_mode,
+        )
+        try:
+            async for _evt in _exec_gen:
+                yield _evt
+        finally:
+            await _exec_gen.aclose()
+        full_response = _state.full_response
 
         # If budget was hit, stop the loop
-        if budget_hit:
+        if _state.budget_hit:
             break
 
         # ask_user posed a question — stop here and wait for the user's choice.
         # Don't feed tool results back or advance a round; the user's selection
         # arrives as the next message and the agent resumes from there. The
         # question text is already in the streamed response, so it persists.
-        if _awaiting_user:
+        if _state.awaiting_user:
             break
 
-        if _doc_stream_create_completed:
+        if _state.doc_stream_create_completed:
             if not full_response.strip():
                 full_response = "Done."
                 yield 'data: ' + json.dumps({"delta": "Done."}) + '\n\n'
             logger.info("[agent] ithaka doc stream-create completed after one create_document")
             break
 
-        if _ody_doc_tool_completed:
+        if _state.ody_doc_tool_completed:
             if not full_response.strip() or full_response.strip().startswith("```"):
                 full_response = "Done."
                 yield 'data: ' + json.dumps({"delta": "Done."}) + '\n\n'
             logger.info("[agent] ithaka doc tool completed after one textual tool block")
             break
 
-        if _ody_notes_finetune_mode and _ody_notes_tool_completed:
+        if _ody_notes_finetune_mode and _state.ody_notes_tool_completed:
             logger.info("[agent] ithaka notes completed from deterministic tool output")
             break
 
