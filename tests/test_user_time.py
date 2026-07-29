@@ -51,7 +51,7 @@ def test_chat_preface_excludes_current_time_for_non_agent_chat():
     set_user_tz_name("Australia/Brisbane")
     processor = ChatProcessor(memory_manager=_Memory(), personal_docs_manager=_Docs())
 
-    preface, _, _ = processor.build_context_preface(
+    preface, _, _, _ = processor.build_context_preface(
         message="What is tomorrow?",
         session=None,
         agent_mode=False,

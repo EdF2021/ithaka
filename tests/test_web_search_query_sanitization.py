@@ -141,7 +141,7 @@ def test_generated_query_is_used_and_sanitized(monkeypatch):
     _patch_flow(monkeypatch, "capital of `France`", captured)
 
     processor = ChatProcessor(memory_manager=_Memory(), personal_docs_manager=_Docs())
-    preface, _, _ = processor.build_context_preface(
+    preface, _, _, _ = processor.build_context_preface(
         message=_MESSY,
         session=_Session(),
         use_web=True,

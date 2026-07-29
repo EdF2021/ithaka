@@ -400,7 +400,7 @@ async def test_build_chat_context_incognito_does_not_duplicate_current_user_mess
     request = SimpleNamespace()
     chat_handler = SimpleNamespace()
     chat_processor = SimpleNamespace(
-        build_context_preface=lambda **kwargs: ([], [], []),
+        build_context_preface=lambda **kwargs: ([], [], [], []),
     )
 
     ctx = await chat_helpers.build_chat_context(

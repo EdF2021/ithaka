@@ -195,6 +195,213 @@ class ChatProcessor:
         scored.sort(key=lambda x: x[0], reverse=True)
         return [mem for _, mem in scored[:k]]
 
+    def _memory_preface(
+        self, message: str, owner: Optional[str]
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
+        """Memory: pinned (always included) + extended (RAG-retrieved when relevant).
+
+        Returns (preface_messages, used_memories) — used_memories records what
+        was actually injected this call. Callers must not stash this on
+        ``self``: ``ChatProcessor`` is a single process-wide instance shared
+        across concurrent chats, and instance state here would leak one
+        request's memories into another's response (cross-owner in the worst
+        case).
+        """
+        preface: List[Dict[str, str]] = []
+        used_memories: List[Dict[str, Any]] = []
+
+        mem_entries = self.memory_manager.load(owner=owner)
+
+        pinned = [m for m in mem_entries if m.get("pinned")]
+        extended = [m for m in mem_entries if not m.get("pinned")]
+
+        _used_ids: list = []
+        if pinned:
+            pinned_text = "\n- ".join([m["text"] for m in pinned])
+            preface.append(untrusted_context_message(
+                "saved memory: pinned user facts",
+                f"Core facts about the user:\n- {pinned_text}",
+            ))
+            for m in pinned:
+                used_memories.append({"text": m["text"], "category": m.get("category", "fact"), "type": "pinned"})
+                if m.get("id"):
+                    _used_ids.append(m["id"])
+
+        if extended:
+            relevant = self._hybrid_retrieve(message, extended, k=3)
+            if relevant:
+                ext_text = "\n".join([f"- {m['text']}" for m in relevant])
+                preface.append(untrusted_context_message(
+                    "saved memory: retrieved context",
+                    (
+                        "Memory context. Do not reference unless the user asks "
+                        f"about these topics.\n{ext_text}"
+                    ),
+                ))
+                for m in relevant:
+                    used_memories.append({"text": m["text"], "category": m.get("category", "fact"), "type": "recalled"})
+                    if m.get("id"):
+                        _used_ids.append(m["id"])
+
+        # Bump usage counters for the memories that were actually injected.
+        if _used_ids and hasattr(self.memory_manager, "increment_uses"):
+            try:
+                self.memory_manager.increment_uses(_used_ids)
+            except Exception as _e:
+                logger.warning("Failed to increment memory uses: %s", _e)
+
+        return preface, used_memories
+
+    def _rag_preface(
+        self, message: str, owner: Optional[str]
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
+        """RAG: search if rag_manager available, inject only above threshold."""
+        preface: List[Dict[str, str]] = []
+        rag_sources: List[Dict[str, Any]] = []
+        try:
+            rag_manager = getattr(self.personal_docs_manager, 'rag_manager', None)
+            if rag_manager:
+                results = rag_manager.search(message, k=5, owner=owner)
+                # Filter by similarity threshold
+                relevant = [r for r in results if r.get("similarity", 0) >= self.RAG_SIMILARITY_THRESHOLD]
+                if relevant:
+                    logger.info(f"RAG: {len(relevant)}/{len(results)} results above threshold {self.RAG_SIMILARITY_THRESHOLD}")
+                    rag_sources = [
+                        {
+                            "filename": r["metadata"].get("filename", r["metadata"].get("source", "unknown")),
+                            "snippet": r["document"][:200],
+                            "similarity": round(r.get("similarity", 0), 3)
+                        }
+                        for r in relevant
+                    ]
+                    rag_content = "Relevant documents:\n\n" + "\n\n---\n\n".join(
+                        f"[{s['filename']}]\n{r['document']}" for s, r in zip(rag_sources, relevant)
+                    )
+                    if len(rag_content) > 10000:
+                        rag_content = rag_content[:10000] + "\n[Truncated]"
+                    preface.append(untrusted_context_message("retrieved documents", rag_content))
+        except Exception as e:
+            logger.warning(f"RAG retrieval failed: {e}")
+        return preface, rag_sources
+
+    def _web_preface(
+        self, message: str, session: Any, time_filter: Optional[str]
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
+        """Web search: generate a concise query via the session's LLM (with a
+        first-line fallback), run it, and inject the results."""
+        preface: List[Dict[str, str]] = []
+        web_sources: List[Dict[str, Any]] = []
+        try:
+            from src.llm_core import llm_call
+
+            t_url, t_model, t_headers = session.endpoint_url, session.model, session.headers
+
+            # Default fallback is the first non-empty line of the original user message
+            fallback_query = next((line.strip() for line in message.split("\n") if line.strip()), "")
+            search_query = fallback_query
+
+            try:
+                generated_query = llm_call(
+                    t_url,
+                    t_model,
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Extract a concise search query from the user's message. "
+                                "Reply ONLY with the query."
+                            ),
+                        },
+                        {"role": "user", "content": message},
+                    ],
+                    headers=t_headers,
+                    temperature=0.1,
+                    max_tokens=50,
+                    timeout=15,
+                ).strip()
+
+                if generated_query:
+                    # LLM successfully generated a non-empty query -> use the generated query
+                    search_query = generated_query
+                else:
+                    # LLM returned an empty or whitespace-only query -> fall back to original query
+                    logger.warning("LLM generated an empty search query, using fallback.")
+            except Exception as e:
+                # LLM failed (exception/error) -> fall back to original user query
+                logger.warning(f"Failed to generate search query via LLM, using fallback: {e}")
+
+            search_query = " ".join(search_query.split())
+            if len(search_query) > 150:
+                search_query = search_query[:150].strip()
+
+            # Defensive cleanup of the final selected query (interim fix
+            # for #4547): strip any residual fenced/inline markdown so that
+            # neither the generated query nor the first-line fallback leaks
+            # fences or backticks into the search call. No-op on clean
+            # generated queries; collapses to "" when the query is all code.
+            search_query = _clean_search_query(search_query, max_len=150)
+
+            if search_query:
+                # Execute web search using the final selected query
+                web_context, web_sources = comprehensive_web_search(
+                    search_query, time_filter=time_filter, return_sources=True
+                )
+                preface.append(untrusted_context_message("web search results", web_context))
+        except Exception as e:
+            logger.error(f"Web search failed: {e}")
+            preface.append({"role": "system", "content": "Web search encountered an error and could not retrieve results."})
+        return preface, web_sources
+
+    def _url_fetch_preface(self, message: str) -> List[Dict[str, str]]:
+        """Process non-YouTube URLs in message (YouTube handled by preprocess_message).
+
+        Skip auto-fetch for long pastes (the user already pasted the content —
+        fetching every embedded link buries the actual question under
+        hundreds of KB of duplicate page HTML and confuses the model) or for
+        link-heavy pastes (>3 URLs typically means it's a boilerplate-laden
+        blog post, not a "summarize this URL" request).
+        """
+        preface: List[Dict[str, str]] = []
+        urls = extract_urls(message)
+        non_yt_urls = [u for u in urls if not is_youtube_url(u)]
+        skip_url_fetch = len(message) > 2000 or len(non_yt_urls) > 3
+        if not skip_url_fetch:
+            for url in non_yt_urls:
+                result = fetch_webpage_content(url)
+                if result.get('success'):
+                    content = result.get('content', '')[:10000]
+                    preface.append(untrusted_context_message(
+                        f"web page: {url}",
+                        f"Content from {url}:\n\n{content}",
+                    ))
+        return preface
+
+    def _skills_preface(self, owner: Optional[str]) -> List[Dict[str, str]]:
+        """Skills index — progressive disclosure. Callers gate this: only
+        invoked when the model has the `manage_skills` tool available
+        (agent_mode), and never in incognito mode (the user has explicitly
+        opted out of context retention this turn). In plain chat mode the
+        model can't call the tool anyway, so the index would be noise.
+        """
+        preface: List[Dict[str, str]] = []
+        try:
+            idx = self.skills_manager.index_for(owner=owner)
+        except Exception as e:
+            logger.debug(f"Skills index unavailable: {e}")
+            idx = []
+        if idx:
+            by_cat: Dict[str, list] = {}
+            for s in idx:
+                by_cat.setdefault(s.get("category") or "general", []).append(s)
+            lines = ["[Available skills — call manage_skills(action='view', name='...') to load one when relevant]"]
+            for cat in sorted(by_cat):
+                lines.append(f"  {cat}:")
+                for s in sorted(by_cat[cat], key=lambda x: x["name"]):
+                    desc = s.get("description") or ""
+                    lines.append(f"    - {s['name']}: {desc}" if desc else f"    - {s['name']}")
+            preface.append(untrusted_context_message("available skills index", "\n".join(lines)))
+        return preface
+
     def build_context_preface(
         self,
         message: str,
@@ -209,11 +416,15 @@ class ChatProcessor:
         agent_mode: bool = False,
         incognito: bool = False,
         use_skills: bool = True,
-    ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[Dict[str, str]]]:
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[Dict[str, str]], List[Dict[str, Any]]]:
         """Build the context preface for LLM calls.
 
         Returns:
-            Tuple of (preface messages, rag_sources list)
+            Tuple of (preface messages, rag_sources list, web_sources list,
+            used_memories list). ``used_memories`` is returned rather than
+            stashed on ``self`` because ``ChatProcessor`` is a single
+            process-wide instance shared across concurrent chats — instance
+            state here would leak between requests (and owners).
 
         Note on KV-cache friendliness: the ``system``-role messages assembled
         here are later concatenated into a single system message and sent as
@@ -243,159 +454,26 @@ class ChatProcessor:
         })
 
         # Memory: pinned (always included) + extended (RAG-retrieved when relevant)
-        self._last_used_memories = []  # track what was injected
+        used_memories: List[Dict[str, Any]] = []
         if use_memory:
-            mem_entries = self.memory_manager.load(owner=owner)
-
-            pinned = [m for m in mem_entries if m.get("pinned")]
-            extended = [m for m in mem_entries if not m.get("pinned")]
-
-            _used_ids: list = []
-            if pinned:
-                pinned_text = "\n- ".join([m["text"] for m in pinned])
-                preface.append(untrusted_context_message(
-                    "saved memory: pinned user facts",
-                    f"Core facts about the user:\n- {pinned_text}",
-                ))
-                for m in pinned:
-                    self._last_used_memories.append({"text": m["text"], "category": m.get("category", "fact"), "type": "pinned"})
-                    if m.get("id"):
-                        _used_ids.append(m["id"])
-
-            if extended:
-                relevant = self._hybrid_retrieve(message, extended, k=3)
-                if relevant:
-                    ext_text = "\n".join([f"- {m['text']}" for m in relevant])
-                    preface.append(untrusted_context_message(
-                        "saved memory: retrieved context",
-                        (
-                            "Memory context. Do not reference unless the user asks "
-                            f"about these topics.\n{ext_text}"
-                        ),
-                    ))
-                    for m in relevant:
-                        self._last_used_memories.append({"text": m["text"], "category": m.get("category", "fact"), "type": "recalled"})
-                        if m.get("id"):
-                            _used_ids.append(m["id"])
-
-            # Bump usage counters for the memories that were actually injected.
-            if _used_ids and hasattr(self.memory_manager, "increment_uses"):
-                try:
-                    self.memory_manager.increment_uses(_used_ids)
-                except Exception as _e:
-                    logger.warning("Failed to increment memory uses: %s", _e)
+            mem_preface, used_memories = self._memory_preface(message, owner)
+            preface.extend(mem_preface)
 
             # (skills index injection moved out — see below; only fires in
             # agent mode so chat mode and incognito stay clean.)
 
         # RAG: search if enabled and rag_manager available, inject only above threshold
         if use_rag:
-            try:
-                rag_manager = getattr(self.personal_docs_manager, 'rag_manager', None)
-                if rag_manager:
-                    results = rag_manager.search(message, k=5, owner=owner)
-                    # Filter by similarity threshold
-                    relevant = [r for r in results if r.get("similarity", 0) >= self.RAG_SIMILARITY_THRESHOLD]
-                    if relevant:
-                        logger.info(f"RAG: {len(relevant)}/{len(results)} results above threshold {self.RAG_SIMILARITY_THRESHOLD}")
-                        rag_sources = [
-                            {
-                                "filename": r["metadata"].get("filename", r["metadata"].get("source", "unknown")),
-                                "snippet": r["document"][:200],
-                                "similarity": round(r.get("similarity", 0), 3)
-                            }
-                            for r in relevant
-                        ]
-                        rag_content = "Relevant documents:\n\n" + "\n\n---\n\n".join(
-                            f"[{s['filename']}]\n{r['document']}" for s, r in zip(rag_sources, relevant)
-                        )
-                        if len(rag_content) > 10000:
-                            rag_content = rag_content[:10000] + "\n[Truncated]"
-                        preface.append(untrusted_context_message("retrieved documents", rag_content))
-            except Exception as e:
-                logger.warning(f"RAG retrieval failed: {e}")
+            rag_preface, rag_sources = self._rag_preface(message, owner)
+            preface.extend(rag_preface)
 
         # Add web search if enabled
         web_sources = []
         if use_web:
-            try:
-                from src.llm_core import llm_call
+            web_preface, web_sources = self._web_preface(message, session, time_filter)
+            preface.extend(web_preface)
 
-                t_url, t_model, t_headers = session.endpoint_url, session.model, session.headers
-
-                # Default fallback is the first non-empty line of the original user message
-                fallback_query = next((line.strip() for line in message.split("\n") if line.strip()), "")
-                search_query = fallback_query
-
-                try:
-                    generated_query = llm_call(
-                        t_url,
-                        t_model,
-                        [
-                            {
-                                "role": "system",
-                                "content": (
-                                    "Extract a concise search query from the user's message. "
-                                    "Reply ONLY with the query."
-                                ),
-                            },
-                            {"role": "user", "content": message},
-                        ],
-                        headers=t_headers,
-                        temperature=0.1,
-                        max_tokens=50,
-                        timeout=15,
-                    ).strip()
-
-                    if generated_query:
-                        # LLM successfully generated a non-empty query -> use the generated query
-                        search_query = generated_query
-                    else:
-                        # LLM returned an empty or whitespace-only query -> fall back to original query
-                        logger.warning("LLM generated an empty search query, using fallback.")
-                except Exception as e:
-                    # LLM failed (exception/error) -> fall back to original user query
-                    logger.warning(f"Failed to generate search query via LLM, using fallback: {e}")
-
-                search_query = " ".join(search_query.split())
-                if len(search_query) > 150:
-                    search_query = search_query[:150].strip()
-
-                # Defensive cleanup of the final selected query (interim fix
-                # for #4547): strip any residual fenced/inline markdown so that
-                # neither the generated query nor the first-line fallback leaks
-                # fences or backticks into the search call. No-op on clean
-                # generated queries; collapses to "" when the query is all code.
-                search_query = _clean_search_query(search_query, max_len=150)
-
-                if search_query:
-                    # Execute web search using the final selected query
-                    web_context, web_sources = comprehensive_web_search(
-                        search_query, time_filter=time_filter, return_sources=True
-                    )
-                    preface.append(untrusted_context_message("web search results", web_context))
-            except Exception as e:
-                logger.error(f"Web search failed: {e}")
-                preface.append({"role": "system", "content": "Web search encountered an error and could not retrieve results."})
-
-        # Process non-YouTube URLs in message (YouTube handled by preprocess_message)
-        # Skip auto-fetch for long pastes (the user already pasted the content —
-        # fetching every embedded link buries the actual question under
-        # hundreds of KB of duplicate page HTML and confuses the model) or for
-        # link-heavy pastes (>3 URLs typically means it's a boilerplate-laden
-        # blog post, not a "summarize this URL" request).
-        urls = extract_urls(message)
-        non_yt_urls = [u for u in urls if not is_youtube_url(u)]
-        skip_url_fetch = len(message) > 2000 or len(non_yt_urls) > 3
-        if not skip_url_fetch:
-            for url in non_yt_urls:
-                result = fetch_webpage_content(url)
-                if result.get('success'):
-                    content = result.get('content', '')[:10000]
-                    preface.append(untrusted_context_message(
-                        f"web page: {url}",
-                        f"Content from {url}:\n\n{content}",
-                    ))
+        preface.extend(self._url_fetch_preface(message))
 
         # Skills index — progressive disclosure. Only injected when the
         # model has the `manage_skills` tool available (agent_mode), and
@@ -403,21 +481,6 @@ class ChatProcessor:
         # context retention this turn). In plain chat mode the model can't
         # call the tool anyway, so the index would be noise.
         if agent_mode and not incognito and use_skills and self.skills_manager:
-            try:
-                idx = self.skills_manager.index_for(owner=owner)
-            except Exception as e:
-                logger.debug(f"Skills index unavailable: {e}")
-                idx = []
-            if idx:
-                by_cat: Dict[str, list] = {}
-                for s in idx:
-                    by_cat.setdefault(s.get("category") or "general", []).append(s)
-                lines = ["[Available skills — call manage_skills(action='view', name='...') to load one when relevant]"]
-                for cat in sorted(by_cat):
-                    lines.append(f"  {cat}:")
-                    for s in sorted(by_cat[cat], key=lambda x: x["name"]):
-                        desc = s.get("description") or ""
-                        lines.append(f"    - {s['name']}: {desc}" if desc else f"    - {s['name']}")
-                preface.append(untrusted_context_message("available skills index", "\n".join(lines)))
+            preface.extend(self._skills_preface(owner))
 
-        return preface, rag_sources, web_sources
+        return preface, rag_sources, web_sources, used_memories

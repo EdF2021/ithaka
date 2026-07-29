@@ -477,8 +477,12 @@ async def _build_context_owner_probe(monkeypatch, request_state):
         return {"memory_enabled": True, "skills_enabled": True}
 
     def fake_build_context_preface(**kwargs):
-        captured["preface_owner"] = kwargs["owner"]
-        return [], [], []
+        owner = kwargs["owner"]
+        captured["preface_owner"] = owner
+        # Tag used_memories with the owner so the assertions below prove
+        # build_chat_context reads it off the return tuple (not off any
+        # shared chat_processor instance attribute).
+        return [], [], [], [{"text": f"{owner}'s memory", "category": "fact", "type": "pinned"}]
 
     async def fake_maybe_compact(sess, endpoint_url, model, messages, headers, owner=None):
         captured["compact_owner"] = owner
@@ -542,6 +546,8 @@ async def test_build_chat_context_uses_api_token_owner_for_compaction_scope(monk
         "preface_owner": "alice",
         "compact_owner": "alice",
     }
+    # used_memories comes from build_context_preface's 4th return value.
+    assert ctx.used_memories == [{"text": "alice's memory", "category": "fact", "type": "pinned"}]
 
 
 @pytest.mark.asyncio
@@ -560,3 +566,7 @@ async def test_build_chat_context_keeps_cookie_user_owner_scope(monkeypatch):
         "preface_owner": "bob",
         "compact_owner": "bob",
     }
+    # Different owner, different call -> its own used_memories, not alice's
+    # (regression guard: this used to be read off a shared chat_processor
+    # instance attribute that concurrent/back-to-back calls could overwrite).
+    assert ctx.used_memories == [{"text": "bob's memory", "category": "fact", "type": "pinned"}]

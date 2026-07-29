@@ -733,10 +733,7 @@ async def build_chat_context(
     )
     if use_rag is not None or is_research_spinoff or casual_low_signal:
         _preface_kwargs["use_rag"] = use_rag_val
-    preface, rag_sources, web_sources = chat_processor.build_context_preface(**_preface_kwargs)
-
-    # Capture used memories immediately
-    used_memories = getattr(chat_processor, '_last_used_memories', [])
+    preface, rag_sources, web_sources, used_memories = chat_processor.build_context_preface(**_preface_kwargs)
 
     # Inject pre-fetched search context (compare mode)
     if search_context and allow_tool_preprocessing and not casual_low_signal:
