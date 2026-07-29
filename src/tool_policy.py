@@ -113,6 +113,15 @@ class ToolPolicy:
     mode: str = "normal"
     block_all_tool_calls: bool = False
     disable_mcp: bool = False
+    # Empty (default) = no allowlist restriction, i.e. today's denylist-only
+    # behavior is unchanged. When non-empty, `blocks()` flips to allowlist
+    # enforcement: any name not in this set is blocked, regardless of
+    # `disabled_tools`/`hidden_tools`. This exists for fail-closed callers
+    # (see src.tool_security.plan_mode_disabled_tools) that can't trust a
+    # materialized denylist to cover every mutating tool -- e.g. plan mode
+    # falling back to "only PLAN_MODE_READONLY_TOOLS may run" when the
+    # tool-schema import fails.
+    allowed_tools: frozenset[str] = frozenset()
 
     def all_disabled_names(self) -> Set[str]:
         return set(self.disabled_tools) | set(self.hidden_tools)
@@ -120,7 +129,13 @@ class ToolPolicy:
     def blocks(self, tool_name: Optional[str]) -> bool:
         if not tool_name:
             return False
-        return self.block_all_tool_calls or tool_name in self.disabled_tools or tool_name in self.hidden_tools
+        if self.block_all_tool_calls:
+            return True
+        if tool_name in self.disabled_tools or tool_name in self.hidden_tools:
+            return True
+        if self.allowed_tools and tool_name not in self.allowed_tools:
+            return True
+        return False
 
     def reason_for(self, tool_name: Optional[str]) -> str:
         if tool_name and tool_name in self.reasons:
@@ -175,17 +190,23 @@ def build_effective_tool_policy(
     *,
     disabled_tools: Optional[Iterable[str]] = None,
     last_user_message: object = "",
+    allowed_tools: Optional[Iterable[str]] = None,
 ) -> ToolPolicy:
     """Compose the effective policy for one agent turn.
 
     Existing callers still provide the already-composed disabled-tool denylist.
     This function adds higher-level turn policy on top so enforcement is not
     delegated to prompt compliance.
+
+    `allowed_tools` is optional and defaults to no restriction (matches prior
+    behavior exactly for every existing caller, which never passes it). Pass
+    it only for fail-closed allowlist enforcement -- see `ToolPolicy.allowed_tools`.
     """
 
     disabled = {str(t) for t in (disabled_tools or []) if t}
     hidden: Set[str] = set()
     reasons = {tool: "Tool is disabled for this request." for tool in disabled}
+    allowed = frozenset(str(t) for t in (allowed_tools or []) if t)
 
     guide_reason = detect_guide_only_turn(last_user_message)
     if guide_reason:
@@ -200,10 +221,12 @@ def build_effective_tool_policy(
             mode="guide_only",
             block_all_tool_calls=True,
             disable_mcp=True,
+            allowed_tools=allowed,
         )
 
     return ToolPolicy(
         disabled_tools=frozenset(disabled),
         hidden_tools=frozenset(hidden),
         reasons=MappingProxyType(dict(reasons)),
+        allowed_tools=allowed,
     )

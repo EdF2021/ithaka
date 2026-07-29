@@ -75,6 +75,50 @@ NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | {
 }
 
 
+# Every native (FUNCTION_TOOL_SCHEMAS) tool explicitly classified as safe for
+# regular/public users to call directly. NON_ADMIN_BLOCKED_TOOLS is a
+# denylist, so a newly added native tool is allowed-by-omission unless
+# someone remembers to add it there — this set exists purely so a test
+# (tests/test_tool_security_registry_sync.py) can assert every schema tool is
+# explicitly classified one way or the other, and CI fails loudly instead of
+# a new tool quietly reaching public users unreviewed.
+#
+# This is documentation/test-fixture only: it is NOT consulted by
+# is_public_blocked_tool()/blocked_tools_for_owner() (those stay denylist-only
+# so XML-only tools with no schema — currently allowed by the denylist design
+# — don't change behavior). The membership below reflects current, unchanged
+# behavior: FUNCTION_TOOL_SCHEMAS names minus NON_ADMIN_BLOCKED_TOOLS.
+PUBLIC_ALLOWED_TOOLS = frozenset({
+    "ask_teacher",
+    "ask_user",
+    "chat_with_model",
+    "create_document",
+    "create_session",
+    "edit_document",
+    "edit_image",
+    "list_cached_models",
+    "list_cookbook_servers",
+    "list_downloads",
+    "list_models",
+    "list_serve_presets",
+    "list_served_models",
+    "list_sessions",
+    "manage_notes",
+    "manage_session",
+    "pipeline",
+    "search_hf_models",
+    "send_to_session",
+    "suggest_document",
+    "tail_serve_output",
+    "trigger_research",
+    "ui_control",
+    "update_document",
+    "update_plan",
+    "web_fetch",
+    "web_search",
+})
+
+
 # Plan mode: the agent may investigate but must not mutate anything. Only these
 # read-only/inspection tools stay enabled; everything else (writes, sends,
 # manage_*, model serving, MCP, etc.) is blocked. Allowlist rather than blocklist
@@ -161,6 +205,31 @@ _PLAN_MODE_KNOWN_MUTATORS = {
 }
 
 
+class PlanModeFailClosedDenylist(frozenset):
+    """Sentinel returned by plan_mode_disabled_tools() when the schema import fails.
+
+    Its elements are exactly the static _PLAN_MODE_KNOWN_MUTATORS backstop, so
+    every plain set-based consumer (`.update()`, `frozenset(...)`, equality
+    checks) sees the same concrete names it always did — nothing breaks by
+    accident. The only addition is `fail_closed = True`: a flag marking that
+    this list is a best-effort, hand-maintained backstop, not a verified
+    inventory, so it cannot guarantee every mutating tool is covered — a tool
+    added after this list was last updated would silently slip past the
+    denylist alone and be allowed in plan mode.
+
+    Callers that need the real guarantee — block every tool that isn't in
+    PLAN_MODE_READONLY_TOOLS, no exceptions, even for tools this module has
+    never heard of — must check `fail_closed` and switch their ToolPolicy to
+    allowlist enforcement instead of trusting the denylist:
+
+        ToolPolicy(allowed_tools=frozenset(PLAN_MODE_READONLY_TOOLS))
+
+    See the callers in src/agent_loop.py and routes/chat_routes.py.
+    """
+
+    fail_closed = True
+
+
 def plan_mode_disabled_tools() -> Set[str]:
     """Tool names to add to the denylist in plan mode.
 
@@ -169,7 +238,18 @@ def plan_mode_disabled_tools() -> Set[str]:
     come from the function-tool schemas, backstopped by _PLAN_MODE_KNOWN_MUTATORS
     (see above) so XML-only tools and a failed schema import can't leave a mutator
     enabled. MCP tools are handled separately — the loop drops the MCP manager
-    entirely in plan mode."""
+    entirely in plan mode.
+
+    Fail-closed contract: on the happy path (schema import succeeds) this
+    returns a plain `Set[str]`, unchanged from before. If the schema import
+    fails, it instead returns a `PlanModeFailClosedDenylist` — still a
+    frozenset of `_PLAN_MODE_KNOWN_MUTATORS` for backward-compatible set
+    consumption, but flagged `fail_closed = True`. That hand-maintained list
+    can miss a mutating tool nobody has backstopped yet, so a caller that
+    wants a hard guarantee (not just best-effort) must check the flag and
+    switch to allowlist enforcement — see `PlanModeFailClosedDenylist`'s
+    docstring and the callers in src/agent_loop.py and routes/chat_routes.py.
+    """
     try:
         # agent_tools / tool_parsing / tool_schemas form a mutually-circular
         # cluster that only resolves cleanly when entered via agent_tools.
@@ -185,7 +265,13 @@ def plan_mode_disabled_tools() -> Set[str]:
         all_names.discard(None)
     except Exception as exc:
         logger.warning("Unable to load tool schemas for plan-mode gating: %s", exc)
-        all_names = set()
+        # Fail closed on two levels: return the static mutator backstop (so a
+        # plain-set consumer that does nothing special still blocks every
+        # known mutator), AND flag the failure via `fail_closed` so a caller
+        # that wants a hard guarantee — not just best-effort — can switch to
+        # allowlist enforcement instead of trusting this list to be
+        # exhaustive. See PlanModeFailClosedDenylist.
+        return PlanModeFailClosedDenylist(_PLAN_MODE_KNOWN_MUTATORS)
     # Subtract the allowlist from all known tool names (schema-derived plus the
     # static mutator backstop). Fail closed: if the schema import failed above,
     # the backstop alone still blocks known mutators.

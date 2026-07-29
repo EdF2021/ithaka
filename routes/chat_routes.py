@@ -992,13 +992,26 @@ def setup_chat_routes(
         # Plan mode: investigate read-only, propose a plan, don't mutate. Block
         # every tool not on the read-only allowlist. (stream_agent_loop enforces
         # this again + drops MCP, so this is belt-and-suspenders.)
+        _plan_mode_allowed_tools = None
         if plan_mode:
-            from src.tool_security import plan_mode_disabled_tools
-            disabled_tools.update(plan_mode_disabled_tools())
+            from src.tool_security import (
+                PLAN_MODE_READONLY_TOOLS,
+                plan_mode_disabled_tools,
+            )
+            _plan_denylist = plan_mode_disabled_tools()
+            disabled_tools.update(_plan_denylist)
+            if getattr(_plan_denylist, "fail_closed", False):
+                # Schema import failed: the static backstop is best-effort
+                # and can't guarantee every mutator is covered (see
+                # plan_mode_disabled_tools docstring). Fall back to a real
+                # allowlist for this turn instead of trusting the denylist
+                # alone.
+                _plan_mode_allowed_tools = PLAN_MODE_READONLY_TOOLS
 
         tool_policy = build_effective_tool_policy(
             disabled_tools=disabled_tools,
             last_user_message=message,
+            allowed_tools=_plan_mode_allowed_tools,
         )
         disabled_tools = tool_policy.all_disabled_names()
         research_blocked_by_policy = bool(

@@ -88,6 +88,43 @@ def test_fail_closed_fallback_blocks_mutations(monkeypatch):
     assert "write_file" in disabled
     assert "send_email" in disabled
     assert disabled == set(_PLAN_MODE_KNOWN_MUTATORS)
+    # The failure is also flagged so callers can tell "best-effort backstop"
+    # apart from the normal, schema-verified denylist.
+    assert getattr(disabled, "fail_closed", False) is True
+
+
+def test_fail_closed_flags_unenumerated_mutator_for_allowlist_switch(monkeypatch):
+    """The hand-maintained _PLAN_MODE_KNOWN_MUTATORS backstop can only block
+    tools someone remembered to add to it -- a brand-new/fabricated tool name
+    is in neither that list nor any schema, so the denylist alone can't catch
+    it. The real guarantee is the `fail_closed` flag: callers must detect it
+    and switch their ToolPolicy to allowlist enforcement
+    (`allowed_tools=PLAN_MODE_READONLY_TOOLS`), at which point
+    `ToolPolicy.blocks()` -- the same check tool_execution.py consults before
+    running any tool -- refuses everything outside the read-only allowlist,
+    including tools this module has never heard of. See src/agent_loop.py
+    and routes/chat_routes.py for the real wiring this test proves out."""
+    import src.tool_security as ts
+    from src.tool_policy import ToolPolicy
+
+    monkeypatch.setitem(__import__("sys").modules, "src.agent_tools", None)
+    denylist = ts.plan_mode_disabled_tools()
+    assert getattr(denylist, "fail_closed", False) is True
+
+    fictional_tool = "totally_fabricated_mutator_tool_xyz"
+    assert fictional_tool not in _PLAN_MODE_KNOWN_MUTATORS
+    # Proves the denylist by itself is not the safety net for this case.
+    assert fictional_tool not in denylist
+
+    # This is exactly what agent_loop.py / chat_routes.py do when fail_closed
+    # is set: switch to allowlist enforcement instead of trusting the denylist.
+    policy = ToolPolicy(allowed_tools=frozenset(PLAN_MODE_READONLY_TOOLS))
+    assert policy.blocks(fictional_tool) is True, (
+        "an unenumerated mutator must still be blocked once the caller "
+        "switches to allowlist enforcement"
+    )
+    for name in ("read_file", "grep", "web_search"):
+        assert policy.blocks(name) is False, f"{name} must stay usable"
 
 
 def test_active_plan_note_pins_checklist():
