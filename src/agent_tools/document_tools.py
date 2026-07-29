@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional
+import contextvars
 import logging
 import re
 from src.constants import MAX_READ_CHARS
@@ -8,26 +9,74 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Active document state
+#
+# Two scopes, deliberately:
+#
+# 1. Per-request: a mutable holder stored in a ContextVar. The agent loop
+#    calls set_active_document() while building the system prompt, which
+#    creates the holder in the request's context; every tool task spawned
+#    afterwards (asyncio.create_task copies the context) shares the SAME
+#    holder object, so a doc created by a tool in round 1 is the active doc
+#    for an edit in round 2 — but two concurrent requests each have their
+#    own holder and can no longer clobber each other's active document
+#    (previously a plain module global: cross-session corruption risk).
+#
+# 2. Process-wide _last_set_document_id: feeds ONLY the last-resort
+#    doc-injection rescue in routes/chat_routes.py, which runs in a fresh
+#    request context (holder absent) and re-associates docs orphaned from
+#    their session (session_id NULL). That read site guards with an
+#    owner + session DB filter, so a pointer from another user's turn can
+#    never leak a document — the query returns nothing.
 # ---------------------------------------------------------------------------
 
-_active_document_id: Optional[str] = None
-_active_model: Optional[str] = None
+
+class _ActiveDocState:
+    __slots__ = ("doc_id", "model")
+
+    def __init__(self) -> None:
+        self.doc_id: Optional[str] = None
+        self.model: Optional[str] = None
+
+
+_active_state: contextvars.ContextVar[Optional[_ActiveDocState]] = contextvars.ContextVar(
+    "ithaka_active_doc_state", default=None
+)
+_last_set_document_id: Optional[str] = None
+
+
+def _state(create: bool = False) -> Optional[_ActiveDocState]:
+    state = _active_state.get()
+    if state is None and create:
+        state = _ActiveDocState()
+        _active_state.set(state)
+    return state
 
 
 def set_active_document(doc_id: Optional[str]):
-    """Set the active document ID for document tool execution."""
-    global _active_document_id
-    _active_document_id = doc_id
+    """Set the active document ID for document tool execution (request-scoped)."""
+    global _last_set_document_id
+    _state(create=True).doc_id = doc_id
+    if doc_id is not None:
+        _last_set_document_id = doc_id
 
 
 def set_active_model(model: Optional[str]):
-    """Set the current model name for version summaries."""
-    global _active_model
-    _active_model = model
+    """Set the current model name for version summaries (request-scoped)."""
+    _state(create=True).model = model
 
 
 def get_active_document():
-    return _active_document_id
+    """Active doc for this request; falls back to the process-wide pointer
+    only when no request-scoped state exists (the chat_routes rescue path)."""
+    state = _state()
+    if state is not None:
+        return state.doc_id
+    return _last_set_document_id
+
+
+def _get_active_model() -> Optional[str]:
+    state = _state()
+    return state.model if state is not None else None
 
 
 def clear_active_document(doc_id: Optional[str] = None) -> bool:
@@ -40,12 +89,19 @@ def clear_active_document(doc_id: Optional[str] = None) -> bool:
     closed): without this, the stale pointer makes the last-resort doc-injection
     path re-surface a closed document in a later, unrelated chat — even one whose
     session no longer matches — because an unlinked doc has session_id NULL (#1160).
+    Clears both the request-scoped holder (when this context has one) and the
+    process-wide rescue pointer.
     """
-    global _active_document_id
-    if doc_id is None or _active_document_id == doc_id:
-        _active_document_id = None
-        return True
-    return False
+    global _last_set_document_id
+    cleared = False
+    state = _state()
+    if state is not None and (doc_id is None or state.doc_id == doc_id):
+        state.doc_id = None
+        cleared = True
+    if doc_id is None or _last_set_document_id == doc_id:
+        _last_set_document_id = None
+        cleared = True
+    return cleared
 
 
 def _owned_document_query(query, Document, owner: Optional[str]):
@@ -399,7 +455,7 @@ class CreateDocumentTool:
                 document_id=doc_id,
                 version_number=1,
                 content=content,
-                summary=f"Created by {_active_model or 'AI'}",
+                summary=f"Created by {_get_active_model() or 'AI'}",
                 source="ai",
             )
             db.add(doc)
@@ -433,7 +489,7 @@ class UpdateDocumentTool:
         import uuid
         from src.database import SessionLocal, Document, DocumentVersion
 
-        target_id = ctx.get("doc_id", None) or _active_document_id
+        target_id = ctx.get("doc_id", None) or get_active_document()
         owner = ctx.get("owner")
 
         db = SessionLocal()
@@ -461,7 +517,7 @@ class UpdateDocumentTool:
                     source_doc=doc,
                     content=new_content,
                     owner=owner,
-                    summary=f"Created from PDF edit by {_active_model or 'AI'}",
+                    summary=f"Created from PDF edit by {_get_active_model() or 'AI'}",
                 )
 
             new_ver = doc.version_count + 1
@@ -470,7 +526,7 @@ class UpdateDocumentTool:
                 document_id=target_id,
                 version_number=new_ver,
                 content=new_content,
-                summary=f"Updated by {_active_model or 'AI'}",
+                summary=f"Updated by {_get_active_model() or 'AI'}",
                 source="ai",
             )
             doc.current_content = new_content
@@ -498,7 +554,7 @@ class EditDocumentTool:
         import uuid
         from src.database import SessionLocal, Document, DocumentVersion
 
-        target_id = ctx.get("doc_id", None) or _active_document_id
+        target_id = ctx.get("doc_id", None) or get_active_document()
         owner = ctx.get("owner")
 
         edits = parse_edit_blocks(content)
@@ -538,7 +594,7 @@ class EditDocumentTool:
                         document_id=target_id,
                         version_number=new_ver,
                         content=updated_content,
-                        summary=f"Edited email body by {_active_model or 'AI'}",
+                        summary=f"Edited email body by {_get_active_model() or 'AI'}",
                         source="ai",
                     )
                     doc.current_content = updated_content
@@ -590,7 +646,7 @@ class EditDocumentTool:
                     source_doc=doc,
                     content=updated_content,
                     owner=owner,
-                    summary=f"Created from PDF edit by {_active_model or 'AI'} ({applied} edit(s))",
+                    summary=f"Created from PDF edit by {_get_active_model() or 'AI'} ({applied} edit(s))",
                 )
 
             new_ver = doc.version_count + 1
@@ -599,7 +655,7 @@ class EditDocumentTool:
                 document_id=target_id,
                 version_number=new_ver,
                 content=updated_content,
-                summary=f"Edited by {_active_model or 'AI'} ({applied} edit(s))",
+                summary=f"Edited by {_get_active_model() or 'AI'} ({applied} edit(s))",
                 source="ai",
             )
             doc.current_content = updated_content
@@ -628,7 +684,7 @@ class SuggestDocumentTool:
         """Create inline suggestions for the active document WITHOUT modifying it."""
         from src.database import SessionLocal, Document
 
-        target_id = ctx.get("doc_id", None) or _active_document_id
+        target_id = ctx.get("doc_id", None) or get_active_document()
         owner = ctx.get("owner")
 
         if not target_id:
@@ -772,7 +828,7 @@ class ManageDocumentTool:
                 }
 
             elif action == "delete":
-                doc_id = args.get("document_id") or args.get("id") or args.get("uid") or _active_document_id
+                doc_id = args.get("document_id") or args.get("id") or args.get("uid") or get_active_document()
                 doc = None
                 if doc_id:
                     doc = _get_owned_document(db, Document, doc_id, owner)
@@ -784,7 +840,7 @@ class ManageDocumentTool:
                 title = doc.title
                 doc.is_active = False
                 db.commit()
-                if _active_document_id == doc.id:
+                if get_active_document() == doc.id:
                     set_active_document(None)
                 return {"response": f"Deleted document '{title}'", "exit_code": 0}
 
