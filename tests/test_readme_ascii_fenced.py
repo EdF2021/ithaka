@@ -23,10 +23,13 @@ def _fenced_segments(text: str):
 
 
 def test_readme_opens_with_wordmark_title():
-    # The README must still open with a recognizable Ithaka title: now the
-    # centered wordmark image rather than an H1 / ASCII banner.
+    # The README must still open with a recognizable Ithaka title. The fork
+    # rename replaced the upstream wordmark image with a centered H1; accept
+    # either presentation, still catching the un-fenced ASCII banner mode.
     head = "\n".join(README.read_text(encoding="utf-8").splitlines()[:15])
-    assert 'alt="Ithaka"' in head, "README must open with the Ithaka wordmark image"
+    assert 'alt="Ithaka"' in head or ">Ithaka</h1>" in head, (
+        "README must open with the Ithaka wordmark (image or centered H1)"
+    )
 
 
 def test_reintroduced_ascii_banner_stays_fenced():

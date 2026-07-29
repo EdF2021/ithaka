@@ -167,7 +167,26 @@ services:
       - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8091}
     restart: unless-stopped
 
+  # Remote access over your private tailnet. Runs the official Tailscale
+  # client in userspace mode on the host network, so inbound connections to
+  # this node's Tailscale IP reach the app on localhost:7000. First run:
+  # `docker compose logs tailscale` prints a login URL to authorize the node.
+  tailscale:
+    image: docker.io/tailscale/tailscale:latest
+    hostname: ithaka
+    network_mode: host
+    # Run plain tailscaled instead of containerboot: containerboot's login
+    # retry loop regenerates the node key (and thus the auth URL) every few
+    # minutes, making interactive browser auth a race you can't win. With
+    # bare tailscaled the key is generated once by a single `tailscale up`
+    # and the printed auth URL stays valid until it is used.
+    entrypoint: ["tailscaled", "--tun=userspace-networking", "--statedir=/var/lib/tailscale"]
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+
 volumes:
   searxng-data:
   chromadb-data:
   ntfy-cache:
+  tailscale-state:

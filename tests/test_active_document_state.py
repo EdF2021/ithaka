@@ -14,9 +14,15 @@ import src.agent_tools.document_tools as dt
 
 @pytest.fixture(autouse=True)
 def _reset_rescue_pointer():
+    # Reset both scopes: an earlier test in the suite may have called
+    # set_active_document() in the top-level test context, leaving a holder
+    # that every create_task here would share (in production requests always
+    # run in their own task, so the base context never carries a holder).
     dt._last_set_document_id = None
+    dt._active_state.set(None)
     yield
     dt._last_set_document_id = None
+    dt._active_state.set(None)
 
 
 async def test_concurrent_requests_keep_their_own_active_document():
