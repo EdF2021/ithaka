@@ -29,6 +29,21 @@ from src.youtube_handler import (
 logger = logging.getLogger(__name__)
 
 
+def _load_vision_cache(att_id: str) -> Optional[str]:
+    """Read the stripped contents of the vision cache file for an attachment.
+
+    Returns None when no cache file exists yet for this attachment. Raises on
+    I/O errors — callers decide whether/how to log and what to fall back to,
+    since the two call sites in preprocess_message() react differently
+    (one logs a warning and falls back to raw pixels, the other silently
+    re-runs the VL model)."""
+    vcache_path = os.path.join(UPLOAD_DIR, ".vision", att_id + ".txt")
+    if not os.path.exists(vcache_path):
+        return None
+    with open(vcache_path, encoding="utf-8") as vf:
+        return vf.read().strip()
+
+
 def _sync_upload_vision_to_gallery(file_info: Dict[str, Any], owner: Optional[str], text: str) -> None:
     file_hash = (file_info or {}).get("hash")
     if not file_hash or not text:
@@ -228,44 +243,40 @@ class ChatHandler:
                         # hint so even vision-capable models respect the
                         # correction (otherwise the model would silently use
                         # whatever it reads from the pixels).
-                        _vcache = os.path.join(UPLOAD_DIR, ".vision", att_id + ".txt")
-                        if os.path.exists(_vcache):
-                            try:
-                                with open(_vcache, encoding="utf-8") as _vf:
-                                    _vtext = _vf.read().strip()
-                                if _vtext:
-                                    enhanced_message += f"\n[User-corrected caption / OCR for this image — treat as authoritative]:\n{_vtext}"
-                                    _sync_upload_vision_to_gallery(file_info, owner, _vtext)
-                                    _m = meta_by_id.get(att_id)
-                                    if _m is not None:
-                                        _m["vision"] = _vtext
-                            except Exception:
-                                logger.warning(
-                                    "vision cache read failed for %s; falling back to raw pixels",
-                                    att_id, exc_info=True,
-                                )
+                        try:
+                            _vtext = _load_vision_cache(att_id)
+                        except Exception:
+                            _vtext = None
+                            logger.warning(
+                                "vision cache read failed for %s; falling back to raw pixels",
+                                att_id, exc_info=True,
+                            )
+                        if _vtext:
+                            enhanced_message += f"\n[User-corrected caption / OCR for this image — treat as authoritative]:\n{_vtext}"
+                            _sync_upload_vision_to_gallery(file_info, owner, _vtext)
+                            _m = meta_by_id.get(att_id)
+                            if _m is not None:
+                                _m["vision"] = _vtext
                     else:
                         # Main model is text-only — use VL model for description.
                         # Prefer the cached/user-edited text in UPLOAD_DIR/.vision/{id}.txt
                         # so a manual correction (via the chat attachment dropdown's
                         # editable textarea) overrides what the vision model would say.
-                        _vcache = os.path.join(UPLOAD_DIR, ".vision", att_id + ".txt")
                         vl_desc = None
                         vl_model = get_setting("vision_model", "") or ""
-                        if os.path.exists(_vcache):
-                            try:
-                                with open(_vcache, encoding="utf-8") as _vf:
-                                    cached_desc = _vf.read().strip()
-                                if cached_desc and not cached_desc.startswith("["):
-                                    vl_desc = cached_desc
-                                    _sync_upload_vision_to_gallery(file_info, owner, vl_desc)
-                            except Exception:
-                                vl_desc = None
+                        try:
+                            cached_desc = _load_vision_cache(att_id)
+                        except Exception:
+                            cached_desc = None
+                        if cached_desc and not cached_desc.startswith("["):
+                            vl_desc = cached_desc
+                            _sync_upload_vision_to_gallery(file_info, owner, vl_desc)
                         if not vl_desc:
                             vl_result = analyze_image_with_vl_result(file_info["path"], owner=owner)
                             vl_desc = vl_result.get("text", "")
                             vl_model = vl_result.get("model", "")
                             if vl_desc and not vl_desc.startswith("["):
+                                _vcache = os.path.join(UPLOAD_DIR, ".vision", att_id + ".txt")
                                 try:
                                     os.makedirs(os.path.join(UPLOAD_DIR, ".vision"), exist_ok=True)
                                     with open(_vcache, "w", encoding="utf-8") as _vf:
