@@ -36,7 +36,7 @@ def test_cache_eviction_tolerates_already_removed_key():
     llm_core._response_cache = cache
     try:
         llm_core._set_cached_response("new-key", "y")  # must not raise
-        assert dict.get(cache, "new-key") == "y"
+        assert llm_core._get_cached_response("new-key") == "y"
     finally:
         llm_core._response_cache = original
 

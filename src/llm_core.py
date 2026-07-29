@@ -429,12 +429,32 @@ def _get_http_client() -> httpx.AsyncClient:
         )
     return _http_client
 
-def _get_cached_response(cache_key: str) -> Optional[str]:
-    """Get cached response if it exists."""
-    return _response_cache.get(cache_key)
+# Cache entries are (response, stored_at) so a stale entry can be treated as
+# a miss without a background sweeper. 300s balances "identical repeat
+# question within the same burst is free" against "process-lifetime stale
+# answer" (the cache previously had no TTL at all).
+_RESPONSE_CACHE_TTL = 300
+# Only cache deterministic-ish calls: above this temperature, repeat calls
+# are expected to legitimately vary, so caching would silently pin the
+# response to whatever was sampled first.
+_RESPONSE_CACHE_MAX_TEMPERATURE = 0.2
 
-def _set_cached_response(cache_key: str, response: str) -> None:
-    """Store response in cache."""
+def _get_cached_response(cache_key: str) -> Optional[str]:
+    """Get cached response if it exists and hasn't expired."""
+    entry = _response_cache.get(cache_key)
+    if entry is None:
+        return None
+    response, stored_at = entry
+    if time.time() - stored_at > _RESPONSE_CACHE_TTL:
+        # pop(), not del: see eviction note below (issue #659).
+        _response_cache.pop(cache_key, None)
+        return None
+    return response
+
+def _set_cached_response(cache_key: str, response: str, temperature: Optional[float] = None) -> None:
+    """Store response in cache, unless temperature indicates non-deterministic output."""
+    if temperature is not None and temperature > _RESPONSE_CACHE_MAX_TEMPERATURE:
+        return
     if len(_response_cache) > 128:
         keys_to_remove = list(_response_cache.keys())[:64]
         for key in keys_to_remove:
@@ -442,7 +462,7 @@ def _set_cached_response(cache_key: str, response: str) -> None:
             # threadpool) may have already evicted the same snapshotted key,
             # and del would raise KeyError mid-eviction (issue #659).
             _response_cache.pop(key, None)
-    _response_cache[cache_key] = response
+    _response_cache[cache_key] = (response, time.time())
 
 # ── Anthropic native API adapter ──
 
@@ -813,7 +833,9 @@ def httpx_post_kimi_aware(url: str, headers: Optional[Dict], **kwargs):
 
 
 async def httpx_post_kimi_aware_async(client, url: str, headers: Optional[Dict], **kwargs):
-    h = apply_kimi_code_headers(headers, url)
+    # See _stream_llm_inner: apply_kimi_code_headers is synchronous and can
+    # block on up to 6 httpx probes, so keep it off the event loop here too.
+    h = await asyncio.to_thread(apply_kimi_code_headers, headers, url)
     if not _is_kimi_code_url(url):
         return await client.post(url, headers=h, **kwargs)
     last = None
@@ -1785,6 +1807,12 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
         logger.debug(f"Returning cached response for key: {cache_key}")
         return cached_response
 
+    # Effective temperature for the cache-eligibility check below: None when
+    # the provider/model combo rejects a custom temperature (payload omits it
+    # entirely, so the provider's own — usually fixed/low — default applies),
+    # otherwise the requested value.
+    cache_temperature = temperature
+
     if provider == "anthropic":
         target_url = _normalize_anthropic_url(url)
         h = _build_anthropic_headers(headers)
@@ -1807,6 +1835,7 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
         }
         if _omit_temperature(provider, model):
             payload.pop("temperature", None)
+            cache_temperature = None
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
@@ -1838,7 +1867,7 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
                     response = text_part or msg.get("reasoning_content") or ""
             else:
                 response = content or msg.get("reasoning_content") or ""
-        _set_cached_response(cache_key, response)
+        _set_cached_response(cache_key, response, cache_temperature)
         return response
     except Exception:
         raise HTTPException(502, f"Unexpected schema from {target_url}: {str(data)[:400]}")
@@ -1945,6 +1974,12 @@ async def llm_call_async(
         logger.debug(f"Returning cached response for key: {cache_key}")
         return cached_response
 
+    # Effective temperature for the cache-eligibility check below: None when
+    # the provider/model combo rejects a custom temperature (payload omits it
+    # entirely, so the provider's own — usually fixed/low — default applies),
+    # otherwise the requested value.
+    cache_temperature = temperature
+
     if provider == "chatgpt-subscription":
         # ChatGPT/Codex requires streamed Responses requests even for callers
         # that want a plain string (auto-title, memory extraction, etc.).
@@ -1972,7 +2007,7 @@ async def llm_call_async(
                     continue
                 if raw == "[DONE]":
                     response = "".join(parts)
-                    _set_cached_response(cache_key, response)
+                    _set_cached_response(cache_key, response, cache_temperature)
                     return response
                 try:
                     data = json.loads(raw)
@@ -1986,7 +2021,7 @@ async def llm_call_async(
                 if isinstance(delta, str):
                     parts.append(delta)
         response = "".join(parts)
-        _set_cached_response(cache_key, response)
+        _set_cached_response(cache_key, response, cache_temperature)
         return response
 
     if provider == "anthropic":
@@ -2015,6 +2050,7 @@ async def llm_call_async(
         }
         if _omit_temperature(provider, model):
             payload.pop("temperature", None)
+            cache_temperature = None
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
@@ -2061,7 +2097,7 @@ async def llm_call_async(
                 else:
                     msg = data["choices"][0]["message"]
                     response = msg.get("content") or msg.get("reasoning_content") or ""
-                _set_cached_response(cache_key, response)
+                _set_cached_response(cache_key, response, cache_temperature)
                 return response
             except Exception:
                 raise HTTPException(502, f"Unexpected schema from {target_url}: {str(data)[:400]}")
@@ -2484,7 +2520,10 @@ async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperat
             events.append(_stream_delta_event(part))
         return events
 
-    h = apply_kimi_code_headers(h, target_url)
+    # apply_kimi_code_headers can perform up to 6 synchronous httpx probes
+    # (8s timeout each); run it off the event loop so a slow/unreachable
+    # Kimi Code endpoint doesn't stall every other in-flight request.
+    h = await asyncio.to_thread(apply_kimi_code_headers, h, target_url)
     try:
         client = _get_http_client()
         async with client.stream('POST', target_url, json=payload, headers=h, timeout=stream_timeout) as r:
