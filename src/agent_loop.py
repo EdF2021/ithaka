@@ -8,6 +8,7 @@ The LLM decides when to use tools by writing fenced code blocks.
 
 import asyncio
 import collections
+import dataclasses
 import json
 import re
 import time
@@ -23,7 +24,11 @@ from src.llm_core import (
 from src.model_context import estimate_tokens
 from src.settings import get_setting
 from src.prompt_security import untrusted_context_message
-from src.tool_security import blocked_tools_for_owner, plan_mode_disabled_tools
+from src.tool_security import (
+    PLAN_MODE_READONLY_TOOLS,
+    blocked_tools_for_owner,
+    plan_mode_disabled_tools,
+)
 from src.tool_policy import GUIDE_ONLY_DIRECTIVE, ToolPolicy
 from src.tool_utils import _truncate, get_mcp_manager
 from src.agent_tools import (
@@ -2408,6 +2413,26 @@ def _build_actions_snapshot(tool_events: list, limit: int = 8000) -> str:
     return snap[:limit] if len(snap) > limit else snap
 
 
+def _parse_verifier_output(raw: str) -> list:
+    """Parse a verifier model's raw completion into a list of failure reasons.
+
+    Strips <think> blocks, then looks at the last line containing
+    "VERIFICATION:". Anything other than an explicit "VERIFICATION: FAIL: ..."
+    line (including no VERIFICATION line at all, i.e. garbage output) is
+    treated as success (empty list) — mirrors the fail-open behavior of the
+    caller, which must never block a valid completion on ambiguous output.
+    """
+    raw = _strip_think_blocks(raw or "")
+    last_v = None
+    for line in raw.splitlines():
+        if "VERIFICATION:" in line:
+            last_v = line.strip()
+    if not last_v or "VERIFICATION: FAIL:" not in last_v:
+        return []
+    reasons = last_v.split("VERIFICATION: FAIL:", 1)[1].strip()
+    return [r.strip() for r in reasons.split(";") if r.strip()]
+
+
 async def _run_verifier_subagent(
     instruction: str, actions_snapshot: str,
     *, endpoint_url: str, model: str, headers: dict,
@@ -2447,15 +2472,7 @@ async def _run_verifier_subagent(
     except Exception as e:
         logger.warning(f"[agent] verifier subagent failed: {e}")
         return []
-    raw = _strip_think_blocks(raw or "")
-    last_v = None
-    for line in raw.splitlines():
-        if "VERIFICATION:" in line:
-            last_v = line.strip()
-    if not last_v or "VERIFICATION: FAIL:" not in last_v:
-        return []
-    reasons = last_v.split("VERIFICATION: FAIL:", 1)[1].strip()
-    return [r.strip() for r in reasons.split(";") if r.strip()]
+    return _parse_verifier_output(raw)
 
 
 def _empty_response_fallback(
@@ -2599,7 +2616,19 @@ async def stream_agent_loop(
         # route also unions the read-only-disabled set, but enforce here too so
         # the loop is safe regardless of caller. MCP stays available but is
         # filtered to read-only tools below (after the disabled map is loaded).
-        disabled_tools.update(plan_mode_disabled_tools())
+        _plan_denylist = plan_mode_disabled_tools()
+        disabled_tools.update(_plan_denylist)
+        if getattr(_plan_denylist, "fail_closed", False):
+            # The schema import failed, so the static backstop above is
+            # best-effort and can't guarantee every mutator is covered (see
+            # plan_mode_disabled_tools docstring). Switch to real allowlist
+            # enforcement for this turn: tool_policy.blocks() is consulted at
+            # actual tool-execution time below, so this closes the gap a
+            # denylist alone can't close.
+            tool_policy = dataclasses.replace(
+                tool_policy or ToolPolicy(),
+                allowed_tools=frozenset(PLAN_MODE_READONLY_TOOLS),
+            )
 
     uploaded_files = uploaded_files or []
     _upload_msg = _uploaded_files_context_message(uploaded_files)
