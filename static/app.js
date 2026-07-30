@@ -45,6 +45,7 @@ import spinnerModule from './js/spinner.js';
 import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
 import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js';
 import { initSectionCollapse, initSectionDrag } from './js/section-management.js';
+import { maybePlayDageraadIntro } from './js/dageraadIntro.js';
 
 const API_BASE = window.location.origin;
 window.themeModule = themeModule;
@@ -3603,6 +3604,11 @@ function startIthakaApp() {
   // Set CSS variables
   document.documentElement.style.setProperty('--line-height', '20px');
   initRailHoverLabels();
+
+  // Purely visual, on top of everything else — never let it block session
+  // loading below. <html data-theme="..."> is already set by the
+  // first-paint script in index.html, so this is safe to call this early.
+  try { maybePlayDageraadIntro(); } catch (e) { console.warn('Dageraad intro failed:', e); }
 
   // Smooth keyboard open/close on mobile — keep chat scrolled to bottom
   if (window.visualViewport && 'ontouchstart' in window) {

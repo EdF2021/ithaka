@@ -40672,3 +40672,166 @@ body.theme-frosted .modal {
 :root[data-theme="dageraad"] .section-header-flex .section-title {
   letter-spacing: 0.02em;
 }
+
+/* ── Dageraad intro choreography ─────────────────────────────────────────
+   Fase 3 of the Dageraad port: the cinematic load-time intro, built and
+   played only by static/js/dageraadIntro.js (only under the Dageraad theme,
+   only without prefers-reduced-motion, only once per page load). Every
+   selector below is scoped to classes that module creates — `.dageraad-
+   intro-overlay` is never present in markup unless that module built it.
+   Timeline: warm (~0.2s) → title (~0.6s) → collapse/FLIP (~1.3s) → done
+   (~2.2s), ~2.6s to fully settle. Amber/rose match the existing fase-1
+   preset tokens (theme.js sendBtnBg/brandColor, the dageraad-gloed ambient
+   pattern above) — kept literal here to match that precedent. */
+.dageraad-intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  overflow: hidden;
+  background: #050B14;
+  opacity: 1;
+}
+.dageraad-intro-sky {
+  position: absolute;
+  left: -15%;
+  right: -15%;
+  bottom: 0;
+  height: 140%;
+  opacity: 0;
+  transform: translateY(25%);
+  background: radial-gradient(58% 52% at 50% 100%,
+    rgba(240, 168, 104, 0.9) 0%, rgba(240, 168, 104, 0.5) 22%,
+    rgba(215, 122, 140, 0.35) 44%, rgba(215, 122, 140, 0.08) 62%,
+    rgba(5, 11, 20, 0) 78%);
+  transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.8s ease;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-warm .dageraad-intro-sky {
+  opacity: 0.95;
+  transform: translateY(0);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-sky {
+  opacity: 0.35;
+  transform: translateY(-18%);
+  transition: transform 0.9s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.9s ease;
+}
+.dageraad-intro-horizon {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 14vh;
+  height: 2px;
+  border-radius: 2px;
+  opacity: 0.5;
+  background: linear-gradient(90deg, rgba(240, 168, 104, 0), rgba(240, 168, 104, 0.85),
+    rgba(215, 122, 140, 0.6), rgba(240, 168, 104, 0));
+  box-shadow: 0 0 18px 3px rgba(240, 168, 104, 0.3), 0 0 60px 14px rgba(215, 122, 140, 0.15);
+  transition: opacity 0.7s ease;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-warm .dageraad-intro-horizon {
+  opacity: 0.9;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-horizon {
+  opacity: 0;
+}
+.dageraad-intro-center {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.dageraad-intro-title {
+  display: block;
+  font-size: clamp(40px, 8vw, 72px);
+  font-weight: 600;
+  letter-spacing: 0.045em;
+  line-height: 1.1;
+  color: #EDF2F8;
+  text-shadow: 0 2px 40px rgba(5, 11, 20, 0.6);
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.55s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-title .dageraad-intro-title {
+  opacity: 1;
+  transform: translateY(0);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-title {
+  transform: translate(var(--dageraad-intro-tx, 0px), var(--dageraad-intro-ty, -32vh))
+    scale(var(--dageraad-intro-scale, 0.26));
+  transition: transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-title.dageraad-intro-title-fade-only {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.45s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-done .dageraad-intro-title {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.dageraad-intro-tagline {
+  display: block;
+  margin-top: 12px;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: #8FA0B5;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.5s ease 0.15s, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.15s;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-title .dageraad-intro-tagline {
+  opacity: 1;
+  transform: translateY(0);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-tagline {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.3s ease, transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Overlay itself fades away starting at the collapse phase, revealing the
+   workspace underneath while the title is still mid-morph — not held back
+   until "done", which only finalizes/hides it. */
+.dageraad-intro-overlay.dageraad-intro-phase-collapse {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.9s ease;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-done {
+  visibility: hidden;
+}
+
+/* The workspace's own subtle reveal, triggered on <body> once the overlay
+   starts fading (collapse phase) so the app looks like it settles into
+   place underneath rather than just popping into view. Removed again once
+   the intro finishes (dageraadIntro.js cleanup). */
+@keyframes dageraad-intro-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+body.dageraad-intro-reveal .icon-rail,
+body.dageraad-intro-reveal .sidebar,
+body.dageraad-intro-reveal .chat-container {
+  animation: dageraad-intro-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+body.dageraad-intro-reveal .sidebar { animation-delay: 70ms; }
+body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
+
+/* Replay entry point in the theme popup — only meaningful under Dageraad.
+   Reuses the existing Peek pill's visual language (.theme-opacity-wrap):
+   same pill shape, border, hover — no new colors introduced. */
+.dageraad-intro-replay-btn {
+  display: none;
+}
+:root[data-theme="dageraad"] .dageraad-intro-replay-btn {
+  display: inline-flex;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dageraad-intro-overlay { display: none; }
+}

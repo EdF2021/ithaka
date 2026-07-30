@@ -13,6 +13,8 @@ _THEME_JS = (_REPO / "static" / "js" / "theme.js").read_text(encoding="utf-8")
 _CSS = (_REPO / "static" / "style.css").read_text(encoding="utf-8")
 _INDEX = (_REPO / "static" / "index.html").read_text(encoding="utf-8")
 _DASHBOARD_JS = (_REPO / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+_INTRO_JS = (_REPO / "static" / "js" / "dageraadIntro.js").read_text(encoding="utf-8")
+_APP_JS = (_REPO / "static" / "app.js").read_text(encoding="utf-8")
 
 
 def test_dageraad_preset_registered_with_base_tokens():
@@ -110,6 +112,64 @@ def test_dageraad_dashboard_greeting_helper_present():
     # Only the Dageraad theme swaps the header; every other theme keeps "Home".
     assert "dataset.theme === 'dageraad'" in _DASHBOARD_JS
     assert "'Home'" in _DASHBOARD_JS
+
+
+# ── Fase 3: cinematic load-time intro, scoped to the Dageraad theme ────────
+
+
+def test_intro_module_exports_both_entry_points():
+    assert "export function maybePlayDageraadIntro" in _INTRO_JS
+    assert "export function playDageraadIntro" in _INTRO_JS
+
+
+def test_intro_guards_theme_and_reduced_motion_and_once_per_load():
+    # maybePlayDageraadIntro() must no-op unless Dageraad is active, motion
+    # isn't reduced, and it hasn't already played this page load.
+    assert "dataset.theme !== 'dageraad'" in _INTRO_JS
+    assert "prefers-reduced-motion: reduce" in _INTRO_JS
+    assert "_playedThisLoad" in _INTRO_JS
+
+
+def test_intro_is_skippable_via_click_and_escape():
+    assert "e.key === 'Escape'" in _INTRO_JS
+    assert "addEventListener('click'" in _INTRO_JS
+
+
+def test_intro_flip_falls_back_when_brand_not_visible():
+    assert "sidebar-brand-title" in _INTRO_JS
+    assert "dageraad-intro-title-fade-only" in _INTRO_JS
+
+
+def test_intro_reveal_class_applied_and_name_matches_css():
+    assert "dageraad-intro-reveal" in _INTRO_JS
+    assert "body.dageraad-intro-reveal" in _CSS
+
+
+def test_app_js_imports_and_calls_intro():
+    assert "from './js/dageraadIntro.js'" in _APP_JS
+    assert "maybePlayDageraadIntro()" in _APP_JS
+
+
+def test_intro_css_block_present():
+    assert "Dageraad intro choreography" in _CSS
+    assert ".dageraad-intro-overlay" in _CSS
+    assert ".dageraad-intro-title" in _CSS
+    assert "dageraad-intro-phase-collapse" in _CSS
+    assert "dageraad-intro-phase-done" in _CSS
+
+
+def test_intro_css_has_reduced_motion_guard():
+    guard = re.search(
+        r"@media \(prefers-reduced-motion: reduce\) \{[^}]*\.dageraad-intro-overlay[^}]*\}",
+        _CSS,
+    )
+    assert guard, "reduced-motion vangnet for .dageraad-intro-overlay not found"
+    assert "display: none" in guard.group(0)
+
+
+def test_replay_button_present_in_index_and_scoped_to_dageraad():
+    assert 'id="dageraad-replay-intro-btn"' in _INDEX
+    assert ':root[data-theme="dageraad"] .dageraad-intro-replay-btn' in _CSS
 
 
 def test_legacy_light_colors_removed():
