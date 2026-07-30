@@ -2315,6 +2315,105 @@ function initAccount() {
   }
 }
 
+/* ── Plugins (admin) ──
+   Installable bundles: skills + MCP servers in one zip. Rendered into the
+   admin "tools" panel; the panel itself is admin-gated via the nav item. */
+function initPluginsSection() {
+  const panel = modalEl && modalEl.querySelector('[data-settings-panel="tools"]');
+  if (!panel || el('settings-plugins-card')) return;
+
+  const card = document.createElement('div');
+  card.className = 'admin-card';
+  card.id = 'settings-plugins-card';
+  card.style.marginBottom = '12px';
+  card.innerHTML = `
+    <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>Plugins</h2>
+    <div class="admin-toggle-sub" style="margin-bottom:8px">Installable bundles of skills and MCP servers. MCP servers from a plugin are added disabled; enable them under Integrations.</div>
+    <div id="settings-plugins-list" class="admin-user-list" style="margin-bottom:8px"></div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <input type="file" id="settings-plugins-file" accept=".zip,application/zip" style="display:none">
+      <button class="admin-btn-add" id="settings-plugins-install-btn">Install Plugin (.zip)</button>
+      <span id="settings-plugins-msg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></span>
+    </div>`;
+  panel.appendChild(card);
+
+  const listEl = el('settings-plugins-list');
+  const fileEl = el('settings-plugins-file');
+  const msgEl = el('settings-plugins-msg');
+
+  function setMsg(text, isError) {
+    msgEl.textContent = text || '';
+    msgEl.style.color = isError ? 'var(--red)' : 'color-mix(in srgb, var(--fg) 45%, transparent)';
+  }
+
+  async function renderPlugins() {
+    let plugins = [];
+    try {
+      const r = await fetch('/api/plugins', { credentials: 'same-origin' });
+      if (!r.ok) { listEl.innerHTML = '<div class="admin-empty">Unable to load plugins</div>'; return; }
+      plugins = await r.json();
+    } catch (_) {
+      listEl.innerHTML = '<div class="admin-empty">Unable to load plugins</div>';
+      return;
+    }
+    if (!Array.isArray(plugins) || !plugins.length) {
+      listEl.innerHTML = '<div class="admin-empty">No plugins installed</div>';
+      return;
+    }
+    listEl.innerHTML = plugins.map(p => {
+      const servers = (p.mcp_servers || []).map(s =>
+        `<span style="font-size:11px;opacity:0.7;margin-right:8px;">${esc(s.name)} (${s.is_enabled ? 'enabled' : 'disabled'})</span>`
+      ).join('');
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;font-weight:600;">${esc(p.name)} <span style="opacity:0.5;font-weight:400;">v${esc(p.version || '?')}</span></div>
+          ${p.description ? `<div style="font-size:11px;opacity:0.6;">${esc(p.description)}</div>` : ''}
+          <div style="font-size:11px;opacity:0.7;">${p.skills_count || 0} skill${p.skills_count === 1 ? '' : 's'}${servers ? ' · MCP: ' : ''}${servers}</div>
+        </div>
+        <button class="admin-btn-sm" data-plugin-remove="${esc(p.name)}" style="color:var(--red);border-color:color-mix(in srgb, var(--red) 45%, var(--border));">Remove</button>
+      </div>`;
+    }).join('');
+    listEl.querySelectorAll('[data-plugin-remove]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const name = btn.dataset.pluginRemove;
+        if (!confirm(`Remove plugin "${name}"? Its skills and MCP server entries will be deleted.`)) return;
+        setMsg('Removing...');
+        try {
+          const r = await fetch(`/api/plugins/${encodeURIComponent(name)}`, { method: 'DELETE', credentials: 'same-origin' });
+          if (r.ok) { setMsg(`Removed ${name}`); }
+          else { const d = await r.json().catch(() => ({})); setMsg(d.detail || 'Remove failed', true); }
+        } catch (_) { setMsg('Remove failed', true); }
+        renderPlugins();
+      });
+    });
+  }
+
+  el('settings-plugins-install-btn').addEventListener('click', () => fileEl.click());
+  fileEl.addEventListener('change', async () => {
+    const f = fileEl.files && fileEl.files[0];
+    fileEl.value = '';
+    if (!f) return;
+    setMsg(`Installing ${f.name}...`);
+    const fd = new FormData();
+    fd.append('file', f);
+    try {
+      const r = await fetch('/api/plugins/install', { method: 'POST', body: fd, credentials: 'same-origin' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setMsg(`Installed ${d.name} v${d.version} (${(d.skills || []).length} skills, ${(d.mcp_servers || []).length} MCP servers)`);
+      } else {
+        setMsg(d.detail || 'Install failed', true);
+      }
+    } catch (_) { setMsg('Install failed', true); }
+    renderPlugins();
+  });
+
+  // Refresh the list whenever the admin opens the Tools tab.
+  const toolsTabBtn = modalEl.querySelector('[data-settings-tab="tools"]');
+  if (toolsTabBtn) toolsTabBtn.addEventListener('click', renderPlugins);
+  renderPlugins();
+}
+
 function initAll() {
   modalEl = el('settings-modal');
   initTabs();
@@ -2342,6 +2441,7 @@ function initAll() {
   initEmailAccountsSettings();
   initReminderSettings();
   initUnifiedIntegrations();
+  initPluginsSection();
 }
 
 function notifyIntegrationsChanged() {
