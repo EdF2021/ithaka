@@ -67,6 +67,17 @@ function _eventTime(ev) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Time-of-day greeting for the Dageraad theme's dashboard header. Pure
+ *  function of the hour so it's trivially testable; every other theme
+ *  keeps the plain "Home" title (see openDashboard). No name — just the
+ *  word, per the Dageraad convention of understated, ambient copy. */
+function _dashboardGreeting(hour = new Date().getHours()) {
+  if (hour < 6) return 'Goedenacht';
+  if (hour < 12) return 'Goedemorgen';
+  if (hour < 18) return 'Goedemiddag';
+  return 'Goedenavond';
+}
+
 function _cardBody(id) { return document.getElementById(id); }
 
 function _renderUnavailable(bodyId) {
@@ -236,13 +247,16 @@ export function openDashboard() {
   if (_open) return;
   _open = true;
 
+  const isDageraad = document.documentElement.dataset.theme === 'dageraad';
+  const headerTitle = isDageraad ? _dashboardGreeting() : 'Home';
+
   const modal = document.createElement('div');
   modal.className = 'modal';
   modal.id = 'dashboard-modal';
   modal.innerHTML = `
     <div class="modal-content dashboard-modal-content" role="dialog" aria-label="Home">
       <div class="modal-header">
-        <h4 style="position:relative;top:-2px;">${_ICONS.home}Home</h4>
+        <h4 style="position:relative;top:-2px;">${_ICONS.home}${headerTitle}</h4>
         <span style="flex:1"></span>
         <label class="dashboard-autoopen-toggle" title="Open this dashboard when the app starts">
           <input type="checkbox" id="dashboard-autoopen-cb">

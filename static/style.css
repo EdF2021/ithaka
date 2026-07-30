@@ -8225,8 +8225,8 @@ button.hamburger {
 
 /* Agent UI Styling */
 .agent-controls {
-  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-  border: 1px solid #dee2e6;
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
@@ -8256,8 +8256,8 @@ button.hamburger {
 }
 
 .agent-progress {
-  background: #ffebee;
-  border: 1px solid #ef9a9a;
+  background: color-mix(in srgb, var(--red) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
   border-radius: 6px;
   padding: 12px;
   margin: 8px 0;
@@ -8285,7 +8285,7 @@ button.hamburger {
 }
 
 .workflow-info {
-  background: #f8f9fa;
+  background: var(--panel);
   border: 1px solid var(--red);
   border-radius: 6px;
   padding: 8px 12px;
@@ -40578,4 +40578,97 @@ body.theme-frosted .modal {
 @media (max-width: 700px) {
   .dashboard-modal-content { width: 96vw; }
   .dashboard-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Dageraad theme-scoped layout ────────────────────────────────────────
+   Fase 2 of the Dageraad port: layout-polish (spacing/radius/type-scale)
+   scoped to the Dageraad preset only, so the default UI stays pixel-
+   identical. Bubble/panel/input colors and the ambient pattern are already
+   set by the fase-1 preset tokens (theme.js) — this block only touches
+   sizing. `[data-theme="dageraad"]` is set on <html> at every theme apply,
+   including first paint (see test_theme_identity_hook_present). */
+
+/* Messages — more breathing room, slightly larger body copy. The
+   asymmetric 18px-family bubble radius is already the base-CSS default
+   (.msg-user / .msg-ai), so it is intentionally left alone here. Note:
+   this is byte-identical to :root.density-spacious .msg (r161) and, being
+   a higher-specificity attribute selector, also wins over
+   :root.density-compact .msg (r157) — Dageraad pins message spacing and
+   intentionally overrides the compact density on this one property. */
+:root[data-theme="dageraad"] .msg {
+  padding: 14px 18px;
+}
+:root[data-theme="dageraad"] .msg .body {
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+/* Composer — rounder shell, roomier padding, amber focus glow. The
+   composer's resting border already tracks --input-border/--border; only
+   the focus state gets the Dageraad accent. #F0A868 is the same amber the
+   fase-1 preset already hardcodes for the dageraad-gloed ambient pattern
+   (body.bg-pattern-dageraad-gloed, above) and for sendBtnBg/brandColor in
+   theme.js — kept literal here to match that existing precedent.
+   Radius/padding are desktop-only (min-width: 769px, mirroring the modal
+   geometry precedent below): the mobile `.chat-input-bar` rule at ~r4588
+   sets `padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px))` for
+   notched phones, same specificity as an unscoped rule here would have —
+   scoping to desktop keeps that safe-area padding intact on mobile. The
+   textarea font-size and focus glow have no mobile counterpart, so they
+   stay unscoped. */
+@media (min-width: 769px) {
+  :root[data-theme="dageraad"] .chat-input-bar {
+    border-radius: 18px;
+    padding: 12px 16px;
+  }
+}
+:root[data-theme="dageraad"] .chat-input-bar textarea#message {
+  font-size: 15px;
+}
+:root[data-theme="dageraad"] .chat-input-bar:focus-within {
+  border-color: #F0A868;
+  box-shadow: 0 0 0 3px rgba(240, 168, 104, 0.25);
+}
+
+/* Modals — softer corners, roomier padding, desktop only (mirrors the
+   min-width: 769px scoping already used for modal geometry, r5272). On
+   mobile, `.modal-content` becomes an edge-to-edge bottom sheet with a
+   flat top (border-radius: 14px 14px 0 0, ~r6976) and a safe-area
+   `padding-top` — an unscoped rule here would out-specificity that sheet
+   styling regardless of viewport (attribute selector beats a plain class)
+   and round off the sheet's top corners / reset its padding. The
+   :root.ui-scale-125 max-height compensations (see top of file) operate on
+   max-height only and are unaffected by this padding/radius change. */
+@media (min-width: 769px) {
+  :root[data-theme="dageraad"] .modal-content {
+    border-radius: 18px;
+    padding: 16px;
+  }
+}
+
+/* Dashboard — bigger radius/padding; cards light up on hover (background +
+   border tint) instead of just swapping border color, per the Dageraad
+   convention of things brightening rather than tilting/transforming. */
+:root[data-theme="dageraad"] .dashboard-card {
+  border-radius: 14px;
+  padding: 14px 16px;
+  transition: background 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+:root[data-theme="dageraad"] .dashboard-card-clickable:hover {
+  border-color: #F0A868;
+  background: color-mix(in srgb, #F0A868 8%, var(--panel));
+}
+:root[data-theme="dageraad"] .dashboard-modal-content {
+  font-size: 13px;
+}
+
+/* Sidebar — slightly larger session-title text; section headers get a
+   touch more letter-spacing. Widths are untouched. */
+:root[data-theme="dageraad"] .list-item span {
+  font-size: 11px;
+}
+:root[data-theme="dageraad"] .section-header-flex h4,
+:root[data-theme="dageraad"] .section-header-flex .section-title {
+  letter-spacing: 0.02em;
 }

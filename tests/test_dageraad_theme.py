@@ -5,12 +5,14 @@ no layout changes, no intro animation. String-level assertions over the
 static assets, matching the lightweight style of test_dashboard_frontend.py:
 no browser, just guard that the wiring stays put.
 """
+import re
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
 _THEME_JS = (_REPO / "static" / "js" / "theme.js").read_text(encoding="utf-8")
 _CSS = (_REPO / "static" / "style.css").read_text(encoding="utf-8")
 _INDEX = (_REPO / "static" / "index.html").read_text(encoding="utf-8")
+_DASHBOARD_JS = (_REPO / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
 
 
 def test_dageraad_preset_registered_with_base_tokens():
@@ -65,3 +67,55 @@ def test_theme_identity_hook_present():
     assert "documentElement.dataset.theme" in _THEME_JS
     assert "_setThemeIdentity" in _THEME_JS
     assert "documentElement.dataset.theme" in _INDEX
+
+
+# ── Phase 2: layout-polish, scoped to [data-theme="dageraad"] ──────────────
+
+
+def test_dageraad_scoped_layout_block_present():
+    # One dedicated, clearly-marked section — not scattered inline overrides.
+    assert "Dageraad theme-scoped layout" in _CSS
+    assert ':root[data-theme="dageraad"] .msg' in _CSS
+    assert ':root[data-theme="dageraad"] .chat-input-bar' in _CSS
+    assert ':root[data-theme="dageraad"] .modal-content' in _CSS
+    assert ':root[data-theme="dageraad"] .dashboard-card' in _CSS
+    assert ':root[data-theme="dageraad"] .list-item span' in _CSS
+
+
+def test_dageraad_composer_focus_glow_is_amber():
+    assert ':root[data-theme="dageraad"] .chat-input-bar:focus-within' in _CSS
+    assert "rgba(240, 168, 104, 0.25)" in _CSS or "240, 168, 104, 0.25" in _CSS
+
+
+def test_dageraad_dashboard_card_hover_uses_transition_not_transform():
+    # Dageraad convention: things light up, no tilts/transforms on hover.
+    hover_block = re.search(
+        r':root\[data-theme="dageraad"\] \.dashboard-card-clickable:hover \{[^}]*\}',
+        _CSS,
+    )
+    assert hover_block, "dageraad dashboard-card hover rule not found"
+    assert "transform" not in hover_block.group(0)
+    card_block = re.search(
+        r':root\[data-theme="dageraad"\] \.dashboard-card \{[^}]*\}', _CSS
+    )
+    assert card_block and "cubic-bezier(0.22, 1, 0.36, 1)" in card_block.group(0)
+
+
+def test_dageraad_dashboard_greeting_helper_present():
+    assert "_dashboardGreeting" in _DASHBOARD_JS
+    assert "Goedenacht" in _DASHBOARD_JS
+    assert "Goedemorgen" in _DASHBOARD_JS
+    assert "Goedemiddag" in _DASHBOARD_JS
+    assert "Goedenavond" in _DASHBOARD_JS
+    # Only the Dageraad theme swaps the header; every other theme keeps "Home".
+    assert "dataset.theme === 'dageraad'" in _DASHBOARD_JS
+    assert "'Home'" in _DASHBOARD_JS
+
+
+def test_legacy_light_colors_removed():
+    # .agent-controls / .agent-progress / .workflow-info hard-coded
+    # #f8f9fa / #ffebee collided with every dark theme. Neither hex appears
+    # in @media print either (that block already uses its own #fff/#000
+    # literals for the forced-light printout), so a flat "not in" holds.
+    assert "#ffebee" not in _CSS
+    assert "#f8f9fa" not in _CSS
