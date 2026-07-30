@@ -1054,6 +1054,21 @@ function initializeEventListeners() {
     });
   }
 
+  // Dashboard (Home) tool button
+  const toolDashboardBtn = el('tool-dashboard-btn');
+  if (toolDashboardBtn) {
+    toolDashboardBtn.addEventListener('click', async () => {
+      const Modals = await import('./js/modalManager.js');
+      const dashboardModule = await import('./js/dashboard.js');
+      // toggle returns true when a registered modal was minimized/restored;
+      // returns false when nothing is registered → open fresh.
+      if (!Modals.toggle('dashboard-modal')) {
+        if (dashboardModule.isDashboardOpen()) dashboardModule.closeDashboard();
+        else dashboardModule.openDashboard();
+      }
+    });
+  }
+
   // Tasks tool button
   const toolTasksBtn = el('tool-tasks-btn');
   if (toolTasksBtn) {
@@ -1184,6 +1199,7 @@ function initializeEventListeners() {
         setTimeout(_go, 200);
       }
     },
+    '/dashboard': () => document.getElementById('tool-dashboard-btn')?.click(),
     '/calendar': () => calendarModule && calendarModule.openCalendar(),
     '/cookbook': () => document.getElementById('tool-cookbook-btn')?.click(),
     '/email':    () => {
@@ -4208,6 +4224,16 @@ function startIthakaApp() {
         if (window._ithakaRouteOpener) {
           try { window._ithakaRouteOpener(); } catch (_) {}
           window._ithakaRouteOpener = null;
+        } else {
+          // No explicit URL route — open the Home dashboard unless the user
+          // turned the startup pref off (unset/null counts as ON).
+          fetch(`${API_BASE}/api/prefs/dashboard_autoopen`, { credentials: 'same-origin' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => {
+              if (d && d.value === false) return;
+              return import('./js/dashboard.js').then(m => m.openDashboard());
+            })
+            .catch(e => console.warn('dashboard auto-open skipped:', e));
         }
       });
   } else {
