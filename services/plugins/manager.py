@@ -290,6 +290,11 @@ class PluginManager:
                 sk = self.skills_manager.import_bundle_from_files(
                     files, owner=owner, category=f"plugin-{name}",
                     source_url=f"plugin:{name}")
+                # An admin explicitly installing a plugin IS the approval step:
+                # without publish the skill stays a draft and never reaches the
+                # prompt index or the slash-command catalog.
+                self.skills_manager.update_skill(
+                    sk["name"], {"status": "published"}, owner=owner)
                 installed.append(sk["name"])
             except SkillImportError as e:
                 logger.warning("Plugin %s: skill %s rejected: %s", name, entry, e)

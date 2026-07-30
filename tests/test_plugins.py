@@ -290,3 +290,24 @@ def test_routes_work_for_admin(env, monkeypatch):
     assert r.status_code == 200
     assert client.delete("/api/plugins/demo-plugin").status_code == 404
     assert [s for s in sm.load_all() if s["category"] == "plugin-demo-plugin"] == []
+
+
+def test_skill_without_status_is_published_on_install(env):
+    """A plugin skill whose SKILL.md has no `status:` frontmatter must not
+    linger as a draft: the admin's install action is the approval, so the
+    manager publishes it explicitly (draft skills never reach the prompt
+    index or the slash-command catalog)."""
+    pm, skills_manager, _db_factory = env
+    statusless = "\n".join(
+        line for line in SKILL_MD.splitlines() if not line.startswith("status:")
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("plugin.json", json.dumps(
+            {"name": "statusless", "version": "1.0.0"}))
+        zf.writestr("skills/demo-skill/SKILL.md", statusless)
+    pm.install(buf.getvalue(), owner="admin")
+    skills = [s for s in skills_manager.load_all()
+              if s.get("category") == "plugin-statusless"]
+    assert skills, "plugin skill not installed"
+    assert skills[0].get("status") == "published"
