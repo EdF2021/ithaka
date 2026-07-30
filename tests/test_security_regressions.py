@@ -1080,14 +1080,18 @@ def test_mcp_oauth_config_sanitizes_paths_and_env(tmp_path, monkeypatch):
 
 
 def test_gmail_mcp_preset_uses_contained_oauth_paths():
-    src = Path(__file__).resolve().parents[1] / "static" / "js" / "admin.js"
-    text = src.read_text()
-    preset = text.split('{ name: "Gmail"', 1)[1].split('{ name: "Email (IMAP/SMTP)"', 1)[0]
+    # Presets live in src/mcp_presets.py (migrated off the dead admin.js
+    # MCP_PRESETS array); the Gmail preset's OAuth file paths must stay
+    # confined under DATA_DIR/mcp_oauth/gmail/, never a home-directory path.
+    from src.mcp_presets import get_presets
 
-    assert "~/.gmail-mcp" not in preset
-    assert 'oauthFile: { dir: "gmail"' in preset
-    assert 'keys_file: "gmail/gcp-oauth.keys.json"' in preset
-    assert 'token_file: "gmail/credentials.json"' in preset
+    presets = {p["id"]: p for p in get_presets()}
+    gmail = presets["gmail"]
+    oauth = gmail["oauth"]
+
+    assert "~/.gmail-mcp" not in repr(gmail)
+    assert oauth["keys_file"] == "gmail/gcp-oauth.keys.json"
+    assert oauth["token_file"] == "gmail/credentials.json"
 
 
 

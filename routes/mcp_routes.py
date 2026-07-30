@@ -15,6 +15,7 @@ from core.database import McpServer, SessionLocal
 from core.middleware import require_admin
 from src.constants import DATA_DIR, MCP_OAUTH_DIR
 from src.mcp_manager import McpManager
+from src.mcp_presets import get_presets
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,12 @@ def setup_mcp_routes(mcp_manager: McpManager):
             return result
         finally:
             db.close()
+
+    @router.get("/presets")
+    def list_presets(request: Request):
+        """List available MCP connector presets for the Add Server form."""
+        require_admin(request)
+        return get_presets()
 
     @router.post("/servers")
     async def add_server(

@@ -3569,6 +3569,19 @@ async function initUnifiedIntegrations() {
   if (!listEl) return;
   let integrationNotice = '';
 
+  // MCP connector presets — fetched once per settings-panel lifetime and cached.
+  let _mcpPresetsCache = null;
+  async function _getMcpPresets() {
+    if (_mcpPresetsCache) return _mcpPresetsCache;
+    try {
+      const r = await fetch('/api/mcp/presets', { credentials: 'same-origin' });
+      _mcpPresetsCache = r.ok ? await r.json() : [];
+    } catch (_) {
+      _mcpPresetsCache = [];
+    }
+    return _mcpPresetsCache;
+  }
+
   // Hide the "+ Add Integration" button whenever the per-type create form
   // is open so it doesn't compete visually with the in-progress form.
   // Many call sites toggle formEl.style.display directly; observe instead
@@ -5134,6 +5147,8 @@ async function initUnifiedIntegrations() {
         <div class="admin-card" style="margin-top:8px">
           <h2 style="font-size:13px">Add MCP Server</h2>
           <div class="settings-col">
+            <div class="settings-row"><label class="settings-label">Preset</label><select id="uf-mcp-preset" class="settings-input"><option value="">— custom —</option></select></div>
+            <div id="uf-mcp-preset-help" style="display:none;font-size:11px;opacity:0.62;white-space:pre-wrap;margin:-4px 0 4px;"></div>
             <div class="settings-row"><label class="settings-label">Name</label><input id="uf-mcp-name" class="settings-input" placeholder="Server name"></div>
             <div class="settings-row"><label class="settings-label">Transport</label><select id="uf-mcp-transport" class="settings-input"><option value="stdio">stdio</option><option value="sse">SSE</option><option value="http">Streamable HTTP</option></select></div>
             <div id="uf-mcp-stdio-fields" style="display:flex;flex-direction:column;gap:6px;">
@@ -5151,6 +5166,36 @@ async function initUnifiedIntegrations() {
             </div>
           </div>
         </div>`;
+      // Populate the preset dropdown; selecting one fills the fields below
+      // (still editable — nothing is locked).
+      _getMcpPresets().then(presets => {
+        const presetSel = el('uf-mcp-preset');
+        if (!presetSel) return;
+        presets.forEach((p, i) => {
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          opt.textContent = p.name;
+          presetSel.appendChild(opt);
+        });
+        presetSel.addEventListener('change', () => {
+          const helpBox = el('uf-mcp-preset-help');
+          if (presetSel.value === '') { if (helpBox) helpBox.style.display = 'none'; return; }
+          const p = presets[parseInt(presetSel.value, 10)];
+          if (!p) return;
+          el('uf-mcp-name').value = p.name.toLowerCase().replace(/\s+/g, '-');
+          const transportSel = el('uf-mcp-transport');
+          transportSel.value = p.transport || 'stdio';
+          transportSel.dispatchEvent(new Event('change'));
+          el('uf-mcp-cmd').value = p.command || '';
+          el('uf-mcp-args').value = JSON.stringify(p.args || []);
+          el('uf-mcp-env').value = JSON.stringify(p.env || {});
+          el('uf-mcp-url').value = p.url || '';
+          if (helpBox) {
+            if (p.help) { helpBox.textContent = p.help; helpBox.style.display = ''; }
+            else { helpBox.textContent = ''; helpBox.style.display = 'none'; }
+          }
+        });
+      });
       el('uf-mcp-transport').addEventListener('change', () => {
         const v = el('uf-mcp-transport').value;
         const isUrl = (v === 'sse' || v === 'http');
