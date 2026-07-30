@@ -807,6 +807,14 @@ set_mcp_manager(mcp_manager)
 app.include_router(setup_mcp_routes(mcp_manager))
 logger.info("MCP routes initialized")
 
+# Plugins (installable bundles: skills + MCP server configs, admin-only)
+from services.plugins import PluginManager
+from routes.plugin_routes import setup_plugin_routes
+
+plugin_manager = PluginManager(skills_manager)
+app.include_router(setup_plugin_routes(plugin_manager))
+logger.info("Plugin routes initialized")
+
 # AI Interaction tools (debates, pipelines, self-managing AI, UI control)
 from src.ai_interaction import set_session_manager as set_ai_session_manager, set_memory_manager as set_ai_memory_manager, set_rag_manager as set_ai_rag_manager
 set_ai_session_manager(session_manager)
@@ -873,6 +881,10 @@ async def serve_index(request: Request):
 
 @app.get("/notes")
 async def serve_notes(request: Request):
+    return await serve_index(request)
+
+@app.get("/dashboard")
+async def serve_dashboard(request: Request):
     return await serve_index(request)
 
 @app.get("/calendar")
