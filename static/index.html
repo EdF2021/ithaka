@@ -21,6 +21,10 @@
       if (t && t.colors) {
         var s = document.documentElement.style;
         var c = t.colors;
+        // Mirror the theme name onto <html data-theme="..."> before the
+        // theme.js module loads, so theme-scoped CSS (e.g. Dageraad) is
+        // already correct on first paint instead of flashing unscoped.
+        if (t.name) document.documentElement.dataset.theme = t.name;
         s.setProperty('--bg', c.bg);
         s.setProperty('--fg', c.fg);
         s.setProperty('--panel', c.panel);
@@ -626,6 +630,7 @@
               <option value="petals">Petals</option>
               <option value="sparkles">Sparkles</option>
               <option value="embers">Embers</option>
+              <option value="dageraad-gloed">Dageraad-gloed</option>
             </select>
           </div>
           <div class="theme-fd-group" style="flex:0 0 auto;align-items:center;">

@@ -29,6 +29,12 @@ export const THEMES = {
                             inputBg: '#2f2f2f', brandColor: '#ffffff', brandMixTo: '#ffffff' } },
   claude:     { bg:'#262624', fg:'#f5f4f0', panel:'#30302e', border:'#4a4a47', red:'#c6613f' },
   cute:       { bg:'#fff0f5', fg:'#d4608a', panel:'#fff8fa', border:'#f0c0d0', red:'#ff6b9d' },
+  dageraad:   { bg:'#0A1220', fg:'#EDF2F8', panel:'#111927', border:'#232C3B', red:'#D77A8C',
+                advanced: { sendBtnBg: '#F0A868', sendBtnHover: '#F5B87E',
+                            userBubbleBg: '#1A2333', aiBubbleBg: '#0E1624',
+                            bubbleBorder: '#242E40', sidebarBg: '#050B14',
+                            brandColor: '#F0A868', inputBg: '#0E1624', inputBorder: '#242E40',
+                            codeBg: '#0B111C', codeFg: '#EDF2F8', toggleActive: '#F0A868' } },
 };
 
 const DEFAULT_THEME = 'dark';
@@ -59,6 +65,7 @@ const THEME_DEFAULT_PATTERN = {
   organs:     'rain',
   ume:        'petals',
   cute:       'sparkles',
+  dageraad:   'dageraad-gloed',
 };
 
 // Default effect colors for specific themes (overrides --fg)
@@ -405,7 +412,8 @@ export function applyUiScale(scale) {
 const _BG_CLASSES = ['bg-pattern-dots',
   'bg-pattern-synapse', 'bg-pattern-rain', 'bg-pattern-constellations',
   'bg-pattern-perlin-flow',
-  'bg-pattern-petals', 'bg-pattern-sparkles', 'bg-pattern-embers'];
+  'bg-pattern-petals', 'bg-pattern-sparkles', 'bg-pattern-embers',
+  'bg-pattern-dageraad-gloed'];
 const _CANVAS_PATTERNS = { synapse: _initSynapse, rain: _initRain, constellations: _initConstellations,
   'perlin-flow': _initPerlinFlow,
   petals: _initPetals, sparkles: _initSparkles, embers: _initEmbers };
@@ -440,7 +448,7 @@ function _getEffectSize() {
 }
 
 // Patterns where the intensity/size sliders have no visible effect.
-const _STATIC_PATTERNS = new Set(['none', 'dots']);
+const _STATIC_PATTERNS = new Set(['none', 'dots', 'dageraad-gloed']);
 
 export function applyBgPattern(pattern) {
   const p = pattern || 'none';
@@ -466,7 +474,15 @@ export function getSaved() {
   return obj;
 }
 
+// Mirrors the active theme name onto <html data-theme="..."> so later
+// phases can scope theme-specific CSS (e.g. Dageraad's ambient touches)
+// without a JS dependency. Kept in sync everywhere a theme is applied.
+function _setThemeIdentity(name) {
+  document.documentElement.dataset.theme = name || DEFAULT_THEME;
+}
+
 export function save(name, colors, opts) {
+  _setThemeIdentity(name);
   const obj = { name, colors };
   if (opts) {
     if (opts.font && opts.font !== DEFAULT_FONT) obj.font = opts.font;
@@ -756,6 +772,7 @@ export function initThemeUI() {
   // Init color pickers from current theme and apply syntax colors
   const currentColors = saved ? saved.colors : THEMES[DEFAULT_THEME];
   applyColors(currentColors);
+  _setThemeIdentity(saved ? saved.name : DEFAULT_THEME);
   syncPickers(currentColors);
 
   // Reference colors for per-picker reset (the theme you started from)
@@ -937,6 +954,7 @@ export function initThemeUI() {
       Storage.remove(LS_KEY);
       const colors = THEMES[DEFAULT_THEME];
       applyColors(colors);
+      _setThemeIdentity(DEFAULT_THEME);
       syncPickers(colors);
       applyFontDensity(DEFAULT_FONT, DEFAULT_DENSITY);
       applyBgPattern('none');
@@ -2089,6 +2107,7 @@ async function _initWithSync() {
       if (serverTheme.name === 'sakura') serverTheme.name = 'ume';
       Storage.setJSON(LS_KEY, serverTheme);
       applyColors(serverTheme.colors);
+      _setThemeIdentity(serverTheme.name);
     }
   }
   // Also sync custom themes from server

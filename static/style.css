@@ -222,6 +222,17 @@ body.bg-pattern-sparkles {
   /* canvas-only backgrounds */
 }
 
+/* Dageraad-gloed — CSS-only ambient: a warm horizon glow rising from the
+   bottom of the viewport into the night-blue theme background. Abstract
+   light only (no sun disc), fixed alpha so it stays subtle/AA-safe
+   regardless of the intensity slider (see _STATIC_PATTERNS in theme.js). */
+body.bg-pattern-dageraad-gloed {
+  background-image:
+    radial-gradient(ellipse 140% 60% at 50% 100%, rgba(240, 168, 104, 0.16) 0%, transparent 65%),
+    radial-gradient(ellipse 120% 50% at 50% 100%, rgba(215, 122, 140, 0.10) 0%, transparent 60%);
+  background-attachment: fixed;
+}
+
 
 /* ── Layout ── */
 
