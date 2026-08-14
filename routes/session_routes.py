@@ -327,6 +327,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
         skip_validation: str = Form(None),
         api_key: str = Form(""),
         endpoint_id: str = Form(""),
+        notebook_id: str = Form(None),
     ):
         skip_val = str(skip_validation).lower() == "true"
         user = effective_user(request)
@@ -422,6 +423,9 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             model=model_to_use,
             rag=str(rag).lower() == "true" if rag else False,
             owner=user,
+            # Binds the session to a notebook: chat then answers strictly from
+            # that notebook's sources (see routes/chat_helpers.py).
+            notebook_id=(notebook_id or "").strip() or None,
         )
         # Set auth headers for custom API-key endpoints
         resolved_key = request_api_key

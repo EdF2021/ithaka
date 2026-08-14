@@ -623,6 +623,17 @@ def _session_is_research_spinoff(sess) -> bool:
     return False
 
 
+def _session_notebook_id(sess):
+    """The notebook this session is bound to, or None.
+
+    A bound session answers strictly from that notebook's sources. Tolerates
+    sessions that predate the column (attribute missing) and normalises the
+    empty string to None so ``if _session_notebook_id(sess)`` is the single
+    truth test everywhere (tool lockdown reads this too).
+    """
+    return getattr(sess, "notebook_id", None) or None
+
+
 async def build_chat_context(
     sess,
     request,
@@ -706,13 +717,27 @@ async def build_chat_context(
     if is_research_spinoff:
         mem_enabled = False
 
+    # Notebook-bound sessions answer strictly from that notebook's sources:
+    # global memory and live web search would smuggle in outside knowledge, so
+    # both are off and retrieval is mandatory.
+    notebook_id = _session_notebook_id(sess)
+    if notebook_id:
+        mem_enabled = False
+
     # Use RAG?
     use_rag_val = (str(use_rag).lower() != "false") if use_rag is not None else True
     if incognito or not allow_tool_preprocessing or is_research_spinoff or casual_low_signal:
         use_rag_val = False
+    if notebook_id and not (incognito or not allow_tool_preprocessing):
+        # Retrieval IS the answer here, so a "hi"-style low-signal turn must not
+        # switch it off — without sources the turn can only refuse. Incognito
+        # and disabled tool preprocessing still win; build_context_preface then
+        # injects the no-sources refusal instead.
+        use_rag_val = True
 
     # If pre-fetched search context was provided (compare mode), skip live web search
-    skip_web = bool(search_context) or not allow_tool_preprocessing or casual_low_signal
+    skip_web = (bool(search_context) or not allow_tool_preprocessing
+                or casual_low_signal or bool(notebook_id))
 
     # Build context preface
     # The stream path uses enhanced_message (with CoT/preprocessing applied),
@@ -730,8 +755,9 @@ async def build_chat_context(
         agent_mode=agent_mode,
         incognito=incognito,
         use_skills=skills_enabled,
+        notebook_id=notebook_id,
     )
-    if use_rag is not None or is_research_spinoff or casual_low_signal:
+    if use_rag is not None or is_research_spinoff or casual_low_signal or notebook_id:
         _preface_kwargs["use_rag"] = use_rag_val
     preface, rag_sources, web_sources, used_memories = chat_processor.build_context_preface(**_preface_kwargs)
 
