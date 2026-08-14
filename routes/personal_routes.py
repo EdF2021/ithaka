@@ -13,8 +13,12 @@ from src.auth_helpers import require_privilege, require_user
 from core.middleware import require_admin
 from src.upload_handler import secure_filename
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES
+from src.markitdown_runtime import is_markitdown_format
+from src.personal_docs import config as personal_docs_config
 
 UPLOADS_DIR = PERSONAL_UPLOADS_DIR
+
+ALLOWED_UPLOAD_EXTENSIONS = frozenset(personal_docs_config.DEFAULT_EXTENSIONS)
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +281,7 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
     
     @router.post("/upload")
     async def upload_files_to_rag(request: Request, files: List[UploadFile] = File(...)):
-        """Upload files directly into RAG. Supports text and PDF."""
+        """Upload files directly into RAG. Supports text, PDF, and Office/EPUB (via markitdown)."""
         user = require_privilege(request, "can_use_documents")
         rag = _rag()
         if not rag:
@@ -292,6 +296,15 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
         for upload in files:
             try:
                 file_path, stored_name, safe_name = _unique_personal_upload_path(upload_dir, upload.filename)
+
+                ext = os.path.splitext(safe_name)[1].lower()
+                if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+                    raise HTTPException(
+                        400,
+                        f"Unsupported file type {ext or '(no extension)'!r}. "
+                        f"Allowed: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}",
+                    )
+
                 content_bytes = await upload.read(PERSONAL_UPLOAD_MAX_BYTES + 1)
                 if len(content_bytes) > PERSONAL_UPLOAD_MAX_BYTES:
                     logger.warning(f"Rejected oversized personal upload: {upload.filename!r}")
@@ -300,10 +313,12 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
                 with open(file_path, "wb") as f:
                     f.write(content_bytes)
 
-                ext = os.path.splitext(safe_name)[1].lower()
                 if ext == ".pdf":
                     from src.personal_docs import extract_pdf_text
                     text = extract_pdf_text(file_path)
+                elif is_markitdown_format(file_path):
+                    from src.personal_docs import extract_office_text
+                    text = extract_office_text(file_path)
                 else:
                     text = content_bytes.decode("utf-8", errors="replace")
 
@@ -312,7 +327,7 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
                     continue
 
                 # Chunk and index
-                chunks = rag._split_into_chunks(text, chunk_size=500)
+                chunks = rag._split_into_chunks(text)
                 for i, chunk in enumerate(chunks):
                     metadata = {
                         "source": file_path,
@@ -330,6 +345,8 @@ def setup_personal_routes(personal_docs_manager, rag_manager, rag_available):
                         total_failed += 1
 
                 uploaded_files.append(safe_name)
+            except HTTPException:
+                raise
             except Exception as e:
                 logger.error(f"Failed to upload/index {upload.filename}: {e}")
                 total_failed += 1
