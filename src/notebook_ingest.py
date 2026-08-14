@@ -7,14 +7,14 @@ can page through the full text) and RAG chunks tagged with
 can scope retrieval to just this notebook). This module is the single place
 that does both.
 
-DB-level guarantee only: a failure at any step leaves neither an orphan
-`Document` row nor a misleadingly "indexed" `NotebookSource` — the database
-is left consistent. This does NOT cover Chroma: if `add_document` embeds
-chunks 0..k successfully and then raises on chunk k+1, those already-embedded
-chunks stay in Chroma tagged with this `document_id`/`notebook_id` — there is
-no compensating delete, and no `Document` row exists for a search hit to
-resolve against. This is a known, accepted gap; cleanup lands with the
-notebook-delete API in a later task.
+DB-level guarantee: a failure at any step leaves neither an orphan `Document`
+row nor a misleadingly "indexed" `NotebookSource` — the database is left
+consistent. If `add_document` embeds chunks 0..k successfully and then raises
+on chunk k+1, those already-embedded chunks are cleaned up best-effort via
+`rag_manager.remove_notebook(notebook_id, document_id=doc_id)` before the
+failure is recorded; a failure of that cleanup call itself is swallowed (it
+must not mask the original embedding failure) and logged, leaving the
+existing accepted gap only for that rarer double-failure case.
 """
 import logging
 import os
@@ -82,6 +82,21 @@ def _extract_text(filename, content_bytes):
     return content_bytes.decode("utf-8", errors="replace")
 
 
+def _cleanup_orphan_chunks(rag_manager, notebook_id, doc_id):
+    """Best-effort delete of chunks embedded before a mid-loop failure.
+
+    Called when `add_document` raises after embedding chunks 0..k for this
+    doc_id: those chunks are already in Chroma with no Document row for a
+    search hit to resolve against. A cleanup failure here must not mask the
+    original embedding failure, so it is caught and logged, not re-raised.
+    """
+    try:
+        rag_manager.remove_notebook(notebook_id, document_id=doc_id)
+    except Exception as exc:
+        logger.warning("notebook ingest cleanup failed for notebook=%s doc=%s: %s",
+                       notebook_id, doc_id, exc)
+
+
 def ingest_notebook_file(notebook_id, owner, filename, content_bytes,
                          rag_manager, db_session):
     """Ingest one uploaded file into a notebook: Document + notebook-scoped chunks.
@@ -122,6 +137,7 @@ def ingest_notebook_file(notebook_id, owner, filename, content_bytes,
                 embedded += 1
     except Exception as exc:
         logger.warning("notebook ingest embedding failed for %s: %s", filename, exc)
+        _cleanup_orphan_chunks(rag_manager, notebook_id, doc_id)
         return _failed(f"embedding failed: {exc}")
     if embedded == 0:
         return _failed("embedding failed")

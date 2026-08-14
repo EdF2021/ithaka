@@ -600,6 +600,39 @@ class VectorRAG:
             logger.error(f"remove_directory {directory}: {e}")
             return {"success": False, "message": str(e)}
 
+    def remove_notebook(self, notebook_id: str, document_id: Optional[str] = None) -> Dict[str, Any]:
+        """Remove chunks tagged with ``notebook_id`` (optionally scoped to one ``document_id``).
+
+        Same Python-side metadata-filter shape as remove_directory: fetch each
+        active lane's ids/metadatas, select by exact ``notebook_id`` match
+        (and ``document_id`` match when given), then delete just those ids.
+        """
+        if not self.healthy:
+            return {"success": False, "message": "Collection not initialized"}
+        try:
+            removed_ids = set()
+            for _lane_name, collection in self._collections_for_delete():
+                results = collection.get(include=["metadatas"])
+                ids = [
+                    results["ids"][i]
+                    for i, m in enumerate(results["metadatas"])
+                    if isinstance(m, dict)
+                    and m.get("notebook_id") == notebook_id
+                    and (document_id is None or m.get("document_id") == document_id)
+                ]
+                if ids:
+                    collection.delete(ids=ids)
+                    removed_ids.update(ids)
+            if not removed_ids:
+                return {"success": True, "removed_count": 0, "message": "No docs found"}
+
+            n = len(removed_ids)
+            logger.info(f"Removed {n} chunks for notebook {notebook_id}")
+            return {"success": True, "removed_count": n, "message": f"Removed {n} chunks"}
+        except Exception as e:
+            logger.error(f"remove_notebook {notebook_id}: {e}")
+            return {"success": False, "message": str(e)}
+
     def reindex_directory(
         self, directory: str, file_extensions: Optional[set] = None
     ) -> Dict[str, Any]:

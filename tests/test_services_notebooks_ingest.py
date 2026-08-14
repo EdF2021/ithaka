@@ -95,6 +95,42 @@ def test_embed_failure_leaves_no_orphan_document(dbs):
     assert s.query(db.Document).count() == before
 
 
+def test_embed_partial_failure_cleans_up_orphan_chunks(dbs):
+    """add_document succeeds once then raises: the already-embedded chunk
+    must be cleaned up best-effort via rag_manager.remove_notebook, and the
+    ingest must still end in a clean "failed" NotebookSource with no
+    Document row (the carried-in ruling from Task 3's review)."""
+    s, nb_id = dbs
+    before = s.query(db.Document).count()
+
+    class _FlakyRag(_FakeRag):
+        def __init__(self):
+            super().__init__()
+            self.removed = []
+            self.calls_made = 0
+
+        def add_document(self, text, metadata):
+            self.calls_made += 1
+            if self.calls_made == 1:
+                self.calls.append((text, metadata))
+                return True
+            raise RuntimeError("embedding service unavailable")
+
+        def remove_notebook(self, notebook_id, document_id=None):
+            self.removed.append((notebook_id, document_id))
+
+    rag = _FlakyRag()
+    src = notebook_ingest.ingest_notebook_file(
+        nb_id, "ed", "notes.txt", b"some text here " * 200, rag, s)
+
+    assert src.status == "failed" and src.document_id is None
+    assert s.query(db.Document).count() == before
+    assert len(rag.removed) == 1
+    removed_notebook_id, removed_doc_id = rag.removed[0]
+    assert removed_notebook_id == nb_id
+    assert removed_doc_id is not None
+
+
 def test_empty_text_fails_cleanly(dbs):
     s, nb_id = dbs
     rag = _FakeRag()

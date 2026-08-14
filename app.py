@@ -706,6 +706,10 @@ app.include_router(setup_cleanup_routes(session_manager))
 from routes.personal_routes import setup_personal_routes
 app.include_router(setup_personal_routes(personal_docs_mgr, rag_manager, rag_available))
 
+# Notebooks (bounded, sources-only source sets for strict-chat)
+from routes.notebook_routes import setup_notebook_routes
+app.include_router(setup_notebook_routes(rag_manager))
+
 # Embedding model management
 from routes.embedding_routes import setup_embedding_routes
 app.include_router(setup_embedding_routes())

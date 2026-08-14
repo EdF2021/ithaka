@@ -76,3 +76,7 @@ class RAGManager:
     def add_documents_batch(self, docs: List[tuple]) -> Dict[str, Any]:
         """Add documents in batch - delegates to VectorRAG."""
         return self.vector_rag.add_documents_batch(docs)
+
+    def remove_notebook(self, notebook_id: str, document_id: Optional[str] = None) -> Dict[str, Any]:
+        """Remove notebook-scoped chunks - delegates to VectorRAG."""
+        return self.vector_rag.remove_notebook(notebook_id, document_id=document_id)
