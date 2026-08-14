@@ -255,37 +255,110 @@ def test_escalation_helper_tolerates_unloaded_session():
     assert cr._should_escalate_to_agent(None, "chat") is False
 
 
-def test_notebook_lockdown_denylists_every_known_tool():
+def test_notebook_veto_reverts_our_own_escalation():
+    """The veto -- not the helper -- is what stops the intent/web triggers."""
     import routes.chat_routes as cr
-    from src.tool_policy import known_tool_names
+    from src.action_intents import ToolIntent
 
-    disabled = {"bash"}
-    assert cr._notebook_tool_lockdown(_Sess("nb-1"), disabled) is True
-    # The set handed to build_effective_tool_policy must cover everything the
-    # policy layer can name -- not just a hand-picked shortlist.
-    assert known_tool_names() <= disabled
+    intent = ToolIntent(True, "web", "web lookup")
+    chat_mode, auto_escalated, tool_intent = cr._apply_notebook_veto(
+        _Sess("nb-1"), "agent", True, intent,
+    )
+    assert chat_mode == "chat"
+    assert auto_escalated is False
+    # Clearing the intent is load-bearing: a "web" category otherwise sets
+    # _explicit_web_intent, which un-disables web_search/web_fetch from the
+    # global denylist and force-steers the agent loop toward them.
+    assert tool_intent is None
+
+
+def test_notebook_veto_leaves_a_user_picked_agent_mode_alone():
+    import routes.chat_routes as cr
+    from src.action_intents import ToolIntent
+
+    intent = ToolIntent(True, "web", "web lookup")
+    # auto_escalated is False when the user picked agent mode by hand.
+    assert cr._apply_notebook_veto(_Sess("nb-1"), "agent", False, intent) == (
+        "agent", False, intent,
+    )
+
+
+def test_notebook_veto_is_a_noop_for_normal_sessions():
+    import routes.chat_routes as cr
+    from src.action_intents import ToolIntent
+
+    intent = ToolIntent(True, "notes", "add a todo")
+    assert cr._apply_notebook_veto(_Sess(), "agent", True, intent) == (
+        "agent", True, intent,
+    )
+
+
+def test_notebook_lockdown_blocks_every_known_tool():
+    import routes.chat_routes as cr
+    from src.tool_policy import build_effective_tool_policy, known_tool_names
+
+    policy = cr._apply_notebook_tool_lockdown(
+        _Sess("nb-1"),
+        build_effective_tool_policy(last_user_message="what is X?"),
+    )
+    # Hidden as well as disabled, so the prompt builder drops the schemas --
+    # all_disabled_names() is what stream_agent_loop reads.
+    assert known_tool_names() <= policy.all_disabled_names()
+    assert known_tool_names() <= set(policy.hidden_tools)
     for tool in ("bash", "python", "web_search", "web_fetch",
-                 "read_file", "write_file", "manage_notes"):
-        assert tool in disabled
+                 "read_file", "write_file", "manage_notes", "generate_image"):
+        assert policy.blocks(tool) is True
+
+
+def test_notebook_lockdown_blocks_mcp_tools():
+    """known_tool_names() cannot enumerate namespaced MCP tools, so a denylist
+    alone leaves them callable. block_all_tool_calls is what closes that."""
+    import routes.chat_routes as cr
+    from src.tool_policy import build_effective_tool_policy
+
+    policy = cr._apply_notebook_tool_lockdown(
+        _Sess("nb-1"),
+        build_effective_tool_policy(last_user_message="what is X?"),
+    )
+    assert policy.blocks("mcp__anything__tool") is True
+    assert policy.block_all_tool_calls is True
+    # ... and the agent loop drops the MCP manager entirely on this flag, so
+    # the schemas are never offered in the first place.
+    assert policy.disable_mcp is True
+
+
+def test_notebook_lockdown_keeps_earlier_denylist_and_reasons():
+    import routes.chat_routes as cr
+    from src.tool_policy import build_effective_tool_policy
+
+    base = build_effective_tool_policy(
+        disabled_tools={"send_email"}, last_user_message="what is X?",
+    )
+    policy = cr._apply_notebook_tool_lockdown(_Sess("nb-1"), base)
+    assert "send_email" in policy.all_disabled_names()
+    assert policy.reason_for("web_search") == cr._NOTEBOOK_TOOL_REASON
 
 
 def test_notebook_lockdown_is_a_noop_for_normal_sessions():
     import routes.chat_routes as cr
+    from src.tool_policy import build_effective_tool_policy
 
-    disabled = {"bash"}
-    assert cr._notebook_tool_lockdown(_Sess(), disabled) is False
-    assert disabled == {"bash"}
+    base = build_effective_tool_policy(last_user_message="what is X?")
+    policy = cr._apply_notebook_tool_lockdown(_Sess(), base)
+    assert policy is base
+    assert policy.blocks("web_search") is False
+    assert policy.blocks("mcp__anything__tool") is False
+    assert policy.block_all_tool_calls is False
 
 
-def test_notebook_lockdown_blocks_through_the_real_policy():
-    """End-to-end over the composition the endpoint actually performs."""
+def test_notebook_lockdown_does_not_claim_guide_only_mode():
+    """guide_only injects a directive telling the model the USER forbade tools;
+    a notebook turn is not that, so the mode must stay untouched."""
     import routes.chat_routes as cr
     from src.tool_policy import build_effective_tool_policy
 
-    disabled = set()
-    cr._notebook_tool_lockdown(_Sess("nb-1"), disabled)
-    policy = build_effective_tool_policy(
-        disabled_tools=disabled, last_user_message="what is X?",
+    policy = cr._apply_notebook_tool_lockdown(
+        _Sess("nb-1"),
+        build_effective_tool_policy(last_user_message="what is X?"),
     )
-    for tool in ("bash", "web_search", "manage_notes", "generate_image"):
-        assert policy.blocks(tool) is True
+    assert policy.mode == "normal"

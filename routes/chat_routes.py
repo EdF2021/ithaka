@@ -1,12 +1,14 @@
 """Chat routes — /api/chat, /api/chat_stream, /api/inject_context, /api/search."""
 
 import asyncio
+import dataclasses
 import json
 import os
 import re
 import time
 import logging
 from datetime import datetime
+from types import MappingProxyType
 from typing import Dict, Any, AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, Request, HTTPException, Form, Query
@@ -166,19 +168,66 @@ def _should_escalate_to_agent(
     )
 
 
-def _notebook_tool_lockdown(sess, disabled_tools: set) -> bool:
+def _apply_notebook_veto(sess, chat_mode: str, auto_escalated: bool, tool_intent):
+    """Undo a chat→agent auto-escalation once the session turns out to be
+    notebook-bound. Returns `(chat_mode, auto_escalated, tool_intent)`.
+
+    The first two escalation sites run before the session is loaded, so
+    `_should_escalate_to_agent` cannot veto there — this is what actually
+    implements the escalation stop for the action-intent and web-toggle
+    triggers.
+
+    Only OUR promotions are undone: `auto_escalated` is False when the user
+    picked agent mode by hand, and rewriting that would be a silent mode change
+    in a case this guard is not about. Such sessions are handled by
+    `_apply_notebook_tool_lockdown` instead.
+
+    The intent is dropped too, and that is load-bearing: a "web" category
+    otherwise sets `_explicit_web_intent`, which deliberately un-disables
+    web_search/web_fetch from the global admin denylist and force-steers the
+    agent loop toward them.
+    """
+    if not (auto_escalated and _session_notebook_id(sess)):
+        return chat_mode, auto_escalated, tool_intent
+    return "chat", False, None
+
+
+_NOTEBOOK_TOOL_REASON = (
+    "This chat answers only from its notebook's sources, so tools are off."
+)
+
+
+def _apply_notebook_tool_lockdown(sess, policy):
     """Fail-closed tool grendel for notebook-bound sessions.
 
-    Defense in depth behind `_should_escalate_to_agent`: a user can still pick
-    agent mode by hand on a notebook session, and that request does reach the
-    tool-policy block. Deny every tool the policy layer can name so the
-    composed `ToolPolicy` blocks them all, mirroring the `[CMP]` denylist
-    pattern a few lines below. Returns True when the lockdown fired.
+    Defense in depth behind `_apply_notebook_veto`: a user can still pick agent
+    mode by hand on a notebook session, and that request does reach the agent
+    loop. A denylist alone is not enough there — MCP tools are namespaced
+    dynamically, so `known_tool_names()` cannot enumerate them and
+    `blocks("mcp__x__y")` would return False. Setting `block_all_tool_calls`
+    closes that hole at both enforcement points (src/tool_execution.py and
+    src/agent_loop.py), and `disable_mcp` makes the agent loop drop the MCP
+    manager so the schemas are never even offered.
+
+    The named denylist is kept on top so the prompt builder hides the native
+    tool schemas (it reads `all_disabled_names()`), mirroring what the
+    guide-only path in src/tool_policy.py does — hidden as well as disabled.
+
+    Returns the policy unchanged for non-notebook sessions.
     """
     if not _session_notebook_id(sess):
-        return False
-    disabled_tools.update(known_tool_names())
-    return True
+        return policy
+    names = frozenset(known_tool_names())
+    reasons = dict(policy.reasons)
+    reasons.update({tool: _NOTEBOOK_TOOL_REASON for tool in names})
+    return dataclasses.replace(
+        policy,
+        disabled_tools=policy.disabled_tools | names,
+        hidden_tools=policy.hidden_tools | names,
+        reasons=MappingProxyType(reasons),
+        block_all_tool_calls=True,
+        disable_mcp=True,
+    )
 
 
 def _resolve_request_workspace(request, raw_value) -> tuple:
@@ -502,6 +551,12 @@ def setup_chat_routes(
 
         tool_policy = build_effective_tool_policy(last_user_message=message)
         allow_tool_preprocessing = not tool_policy.block_all_tool_calls
+        # Same notebook lockdown as chat_stream (mirror so the non-streaming
+        # path can't be used to bypass it) — without this, use_research=true on
+        # a notebook session runs a live research call and injects it below.
+        # Applied AFTER allow_tool_preprocessing so notebook retrieval, which is
+        # the whole point of these sessions, still runs.
+        tool_policy = _apply_notebook_tool_lockdown(sess, tool_policy)
 
         # Inline memory command
         memory_response = None
@@ -753,17 +808,12 @@ def setup_chat_routes(
                     "No model selected for this chat. Open the model picker and choose one before sending.",
                 )
             # `sess` is loaded now, so the notebook veto can finally be applied
-            # to the two escalations above. Only OUR promotions are undone: a
-            # user who picked agent mode by hand keeps it (auto_escalated is
-            # False there) and is instead locked down by
-            # _notebook_tool_lockdown in the tool-policy block. The intent is
-            # dropped too: a "web" category would otherwise set
-            # _explicit_web_intent below, which deliberately un-disables
-            # web_search/web_fetch from the global denylist.
-            if auto_escalated and _session_notebook_id(sess):
-                chat_mode = "chat"
-                auto_escalated = False
-                _tool_intent = None
+            # to the two escalations above (see _apply_notebook_veto).
+            _was_escalated = auto_escalated
+            chat_mode, auto_escalated, _tool_intent = _apply_notebook_veto(
+                sess, chat_mode, auto_escalated, _tool_intent,
+            )
+            if _was_escalated and not auto_escalated:
                 logger.info(
                     "notebook session %s: chat→agent auto-escalation reverted",
                     _session_notebook_id(sess),
@@ -1046,13 +1096,6 @@ def setup_chat_routes(
         if sess.name and sess.name.startswith("[CMP]"):
             disabled_tools.update({"create_document", "edit_document", "update_document"})
 
-        # Notebook-bound sessions answer strictly from that notebook's sources.
-        # _should_escalate_to_agent already keeps them off the agent path, but a
-        # user can pick agent mode by hand — deny every tool the policy layer
-        # knows so nothing can reach outside the notebook.
-        if _notebook_tool_lockdown(sess, disabled_tools):
-            logger.info("notebook session %s: all tools denied", _session_notebook_id(sess))
-
         # Compare mode: disable tools based on compare type
         if compare_mode:
             _compare_strip = {
@@ -1091,6 +1134,12 @@ def setup_chat_routes(
             last_user_message=message,
             allowed_tools=_plan_mode_allowed_tools,
         )
+        # Notebook-bound sessions answer strictly from that notebook's sources.
+        # _apply_notebook_veto already keeps them off the agent path, but a user
+        # can pick agent mode by hand — block every tool call, MCP included.
+        tool_policy = _apply_notebook_tool_lockdown(sess, tool_policy)
+        if tool_policy.block_all_tool_calls and _session_notebook_id(sess):
+            logger.info("notebook session %s: all tools blocked", _session_notebook_id(sess))
         disabled_tools = tool_policy.all_disabled_names()
         research_blocked_by_policy = bool(
             tool_policy.blocks("trigger_research")
@@ -1501,11 +1550,15 @@ def setup_chat_routes(
                         _max_rounds = _DEFAULT_ROUNDS
                     _max_rounds = max(1, min(_max_rounds, 200))
 
+                    # Never steer a notebook session toward web tools: the
+                    # policy blocks them, so forcing them only produces a round
+                    # of refused tool calls.
                     _forced_tools = None
-                    if _explicit_web_intent:
-                        _forced_tools = {"web_search", "web_fetch"}
-                    elif _search_enabled:
-                        _forced_tools = {"web_search", "web_fetch"}
+                    if not _session_notebook_id(sess):
+                        if _explicit_web_intent:
+                            _forced_tools = {"web_search", "web_fetch"}
+                        elif _search_enabled:
+                            _forced_tools = {"web_search", "web_fetch"}
 
                     async for chunk in stream_agent_loop(
                         sess.endpoint_url,
