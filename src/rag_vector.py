@@ -340,7 +340,13 @@ class VectorRAG:
     # Search — hybrid: vector similarity + keyword overlap
     # ------------------------------------------------------------------
 
-    def search(self, query: str, k: int = 5, owner: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        k: int = 5,
+        owner: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         if not self.healthy:
             return []
         if not query or not isinstance(query, str):
@@ -349,7 +355,17 @@ class VectorRAG:
             return []
 
         try:
-            where_filter = {"owner": owner} if owner else None
+            conditions = []
+            if owner:
+                conditions.append({"owner": owner})
+            if notebook_id:
+                conditions.append({"notebook_id": notebook_id})
+            if len(conditions) > 1:
+                where_filter = {"$and": conditions}
+            elif conditions:
+                where_filter = conditions[0]
+            else:
+                where_filter = None
             query_words = set(query.lower().split())
             candidates = []
 
