@@ -80,8 +80,11 @@ def test_notebook_context_blocks_are_numbered_for_citation():
     preface, rag_sources, _, _ = _preface(proc, notebook_id="nb-1")
 
     blob = " ".join(m["content"] for m in preface)
-    assert "[1] a.pdf" in blob
-    assert "[2] b.pdf" in blob
+    assert "[1] a.pdf\nfirst chunk" in blob
+    assert "[2] b.pdf\nsecond chunk" in blob
+    # The legacy unnumbered header must NOT survive in notebook mode, or the
+    # model has no number to cite.
+    assert "[a.pdf]" not in blob
     assert [s["index"] for s in rag_sources] == [1, 2]
     # Retrieved snippets stay out of the system role (KV-cache rule).
     assert "first chunk" not in _system_text(preface)
@@ -135,6 +138,10 @@ def test_notebook_refusal_fires_when_rag_disabled_for_the_turn():
 
 
 def test_non_notebook_path_unchanged():
+    """Ordinary RAG chat must be byte-for-byte what it was before notebooks:
+    same k, no notebook filter, no injected prompts, and — the easy one to
+    miss — the legacy unnumbered "[filename]" block header, since changing
+    that text would invalidate the KV-cache prefix of every existing chat."""
     hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a"}}]
     proc, ragmgr = _mk_processor(hits)
     preface, rag_sources, _, _ = _preface(proc, message="q")
@@ -144,6 +151,10 @@ def test_non_notebook_path_unchanged():
     joined = _system_text(preface)
     assert "ONLY those sources" not in joined
     assert "No notebook source" not in joined
+
+    blob = " ".join(m["content"] for m in preface)
+    assert "Relevant documents:\n\n[a]\nchunk" in blob
+    assert "[1]" not in blob
     # Enrichment is harmless outside notebooks but must not drop existing keys.
     assert set(rag_sources[0]) >= {"filename", "snippet", "similarity"}
 

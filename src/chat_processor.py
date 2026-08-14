@@ -305,12 +305,19 @@ class ChatProcessor:
                         }
                         for i, r in enumerate(relevant)
                     ]
-                    # Number the blocks so the model's "[n]" citations map back
-                    # onto rag_sources[n-1] for the UI.
-                    rag_content = "Relevant documents:\n\n" + "\n\n---\n\n".join(
-                        f"[{s['index']}] {s['filename']}\n{r['document']}"
-                        for s, r in zip(rag_sources, relevant)
-                    )
+                    # Notebook mode numbers the blocks so the model's "[n]"
+                    # citations map back onto rag_sources[n-1] for the UI. The
+                    # ordinary personal-docs path keeps its legacy
+                    # "[filename]" header byte-for-byte: it has no citation
+                    # instruction to satisfy, and changing that text would
+                    # break the KV-cache prefix of every existing RAG chat.
+                    if notebook_id:
+                        blocks = (f"[{s['index']}] {s['filename']}\n{r['document']}"
+                                  for s, r in zip(rag_sources, relevant))
+                    else:
+                        blocks = (f"[{s['filename']}]\n{r['document']}"
+                                  for s, r in zip(rag_sources, relevant))
+                    rag_content = "Relevant documents:\n\n" + "\n\n---\n\n".join(blocks)
                     if len(rag_content) > 10000:
                         rag_content = rag_content[:10000] + "\n[Truncated]"
                     preface.append(untrusted_context_message("retrieved documents", rag_content))
