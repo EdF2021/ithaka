@@ -193,3 +193,99 @@ def test_session_dataclass_carries_notebook_id():
     sess = Session(id="s1", name="n", endpoint_url="", model="m", notebook_id="nb-1")
     assert sess.notebook_id == "nb-1"
     assert Session(id="s2", name="n", endpoint_url="", model="m").notebook_id is None
+
+
+# --- tool lockdown ----------------------------------------------------------
+#
+# Two independent guards keep tools away from a notebook-bound session:
+#   (a) the chat -> agent auto-escalation is vetoed, so chat_mode stays "chat"
+#       and the request takes the tool-free chat branch;
+#   (b) if such a session reaches the tool-policy block anyway -- the user can
+#       still pick agent mode explicitly, which (a) deliberately does not
+#       override -- every known tool name is denylisted before the policy is
+#       composed.
+
+
+class _Sess:
+    """Minimal stand-in for a chat session row."""
+
+    def __init__(self, notebook_id=None):
+        if notebook_id is not None:
+            self.notebook_id = notebook_id
+
+
+def test_notebook_session_never_escalates_to_agent():
+    import routes.chat_routes as cr
+
+    assert cr._should_escalate_to_agent(
+        _Sess("nb-1"), "chat",
+        intent_detected=True, wants_web=True, contextual_followup=True,
+    ) is False
+
+
+def test_normal_session_still_escalates_on_intent():
+    import routes.chat_routes as cr
+
+    assert cr._should_escalate_to_agent(_Sess(), "chat", intent_detected=True) is True
+
+
+def test_normal_session_still_escalates_on_web_and_followup():
+    import routes.chat_routes as cr
+
+    assert cr._should_escalate_to_agent(_Sess(), "chat", wants_web=True) is True
+    assert cr._should_escalate_to_agent(
+        _Sess(), "chat", contextual_followup=True,
+    ) is True
+
+
+def test_escalation_helper_preserves_chat_mode_gate():
+    """Only a literal "chat" mode escalates -- unchanged from the inline code."""
+    import routes.chat_routes as cr
+
+    assert cr._should_escalate_to_agent(_Sess(), "agent", intent_detected=True) is False
+    assert cr._should_escalate_to_agent(_Sess(), "", intent_detected=True) is False
+    assert cr._should_escalate_to_agent(_Sess(), "chat") is False
+
+
+def test_escalation_helper_tolerates_unloaded_session():
+    """The first two escalation sites run before the session is loaded."""
+    import routes.chat_routes as cr
+
+    assert cr._should_escalate_to_agent(None, "chat", intent_detected=True) is True
+    assert cr._should_escalate_to_agent(None, "chat") is False
+
+
+def test_notebook_lockdown_denylists_every_known_tool():
+    import routes.chat_routes as cr
+    from src.tool_policy import known_tool_names
+
+    disabled = {"bash"}
+    assert cr._notebook_tool_lockdown(_Sess("nb-1"), disabled) is True
+    # The set handed to build_effective_tool_policy must cover everything the
+    # policy layer can name -- not just a hand-picked shortlist.
+    assert known_tool_names() <= disabled
+    for tool in ("bash", "python", "web_search", "web_fetch",
+                 "read_file", "write_file", "manage_notes"):
+        assert tool in disabled
+
+
+def test_notebook_lockdown_is_a_noop_for_normal_sessions():
+    import routes.chat_routes as cr
+
+    disabled = {"bash"}
+    assert cr._notebook_tool_lockdown(_Sess(), disabled) is False
+    assert disabled == {"bash"}
+
+
+def test_notebook_lockdown_blocks_through_the_real_policy():
+    """End-to-end over the composition the endpoint actually performs."""
+    import routes.chat_routes as cr
+    from src.tool_policy import build_effective_tool_policy
+
+    disabled = set()
+    cr._notebook_tool_lockdown(_Sess("nb-1"), disabled)
+    policy = build_effective_tool_policy(
+        disabled_tools=disabled, last_user_message="what is X?",
+    )
+    for tool in ("bash", "web_search", "manage_notes", "generate_image"):
+        assert policy.blocks(tool) is True

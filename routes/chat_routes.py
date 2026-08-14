@@ -40,9 +40,10 @@ from routes.chat_helpers import (
     run_post_response_tasks,
     clean_thinking_for_save,
     _enforce_chat_privileges,
+    _session_notebook_id,
 )
 from src.action_intents import ToolIntent, classify_tool_intent as _classify_tool_intent
-from src.tool_policy import build_effective_tool_policy
+from src.tool_policy import build_effective_tool_policy, known_tool_names
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,50 @@ def _is_contextual_web_followup(message: str, sess) -> bool:
     if not message or not _WEB_FOLLOWUP_RE.search(message):
         return False
     return bool(_RECENT_WEB_CONTEXT_RE.search(_recent_session_text(sess)))
+
+
+def _should_escalate_to_agent(
+    sess,
+    chat_mode: str,
+    *,
+    intent_detected: bool = False,
+    wants_web: bool = False,
+    contextual_followup: bool = False,
+) -> bool:
+    """Should this turn be promoted from plain chat to agent mode?
+
+    This only names the conditions that used to sit inline in the chat stream
+    endpoint -- a promotion needs `chat_mode` to be literally "chat" (an unset
+    or already-agent mode never escalates) plus at least one trigger: a
+    tool-needing action intent, an enabled web search, or a contextual web
+    follow-up.
+
+    The one new rule is the notebook veto: a session bound to a notebook must
+    answer strictly from that notebook's sources, so it never gets promoted
+    into the tool-carrying agent path. `sess` may be None at the call sites
+    that run before the session is loaded; the veto is re-applied there once
+    the session is available.
+    """
+    if _session_notebook_id(sess):
+        return False
+    return chat_mode == "chat" and bool(
+        intent_detected or wants_web or contextual_followup
+    )
+
+
+def _notebook_tool_lockdown(sess, disabled_tools: set) -> bool:
+    """Fail-closed tool grendel for notebook-bound sessions.
+
+    Defense in depth behind `_should_escalate_to_agent`: a user can still pick
+    agent mode by hand on a notebook session, and that request does reach the
+    tool-policy block. Deny every tool the policy layer can name so the
+    composed `ToolPolicy` blocks them all, mirroring the `[CMP]` denylist
+    pattern a few lines below. Returns True when the lockdown fired.
+    """
+    if not _session_notebook_id(sess):
+        return False
+    disabled_tools.update(known_tool_names())
+    return True
 
 
 def _resolve_request_workspace(request, raw_value) -> tuple:
@@ -596,7 +641,14 @@ def setup_chat_routes(
         # shell disabled).
         auto_escalated = False
         _tool_intent = _classify_tool_intent(message) if isinstance(message, str) else None
-        if chat_mode == "chat" and _tool_intent and _tool_intent.needs_tools:
+        # The session is not loaded yet (that happens in the coerce block
+        # below), so pass sess=None here and re-apply the notebook veto once
+        # `sess` exists — see the de-escalation right before the follow-up
+        # check further down.
+        if _should_escalate_to_agent(
+            None, chat_mode,
+            intent_detected=bool(_tool_intent and _tool_intent.needs_tools),
+        ):
             chat_mode = "agent"
             auto_escalated = True
             logger.info(
@@ -604,7 +656,7 @@ def setup_chat_routes(
                 _tool_intent.category,
                 _tool_intent.reason,
             )
-        elif chat_mode == "chat" and _search_enabled:
+        elif _should_escalate_to_agent(None, chat_mode, wants_web=_search_enabled):
             chat_mode = "agent"
             auto_escalated = True
             logger.info("chat→agent auto-escalation: search enabled")
@@ -700,11 +752,30 @@ def setup_chat_routes(
                     400,
                     "No model selected for this chat. Open the model picker and choose one before sending.",
                 )
-            if (
+            # `sess` is loaded now, so the notebook veto can finally be applied
+            # to the two escalations above. Only OUR promotions are undone: a
+            # user who picked agent mode by hand keeps it (auto_escalated is
+            # False there) and is instead locked down by
+            # _notebook_tool_lockdown in the tool-policy block. The intent is
+            # dropped too: a "web" category would otherwise set
+            # _explicit_web_intent below, which deliberately un-disables
+            # web_search/web_fetch from the global denylist.
+            if auto_escalated and _session_notebook_id(sess):
+                chat_mode = "chat"
+                auto_escalated = False
+                _tool_intent = None
+                logger.info(
+                    "notebook session %s: chat→agent auto-escalation reverted",
+                    _session_notebook_id(sess),
+                )
+            _contextual_followup = (
                 chat_mode == "chat"
                 and isinstance(message, str)
                 and (not _tool_intent or not _tool_intent.needs_tools)
                 and _is_contextual_web_followup(message, sess)
+            )
+            if _should_escalate_to_agent(
+                sess, chat_mode, contextual_followup=_contextual_followup,
             ):
                 _tool_intent = ToolIntent(True, "web", "contextual web lookup follow-up")
                 chat_mode = "agent"
@@ -974,6 +1045,13 @@ def setup_chat_routes(
         # Disable document tools in compare sessions — they break the pane UI
         if sess.name and sess.name.startswith("[CMP]"):
             disabled_tools.update({"create_document", "edit_document", "update_document"})
+
+        # Notebook-bound sessions answer strictly from that notebook's sources.
+        # _should_escalate_to_agent already keeps them off the agent path, but a
+        # user can pick agent mode by hand — deny every tool the policy layer
+        # knows so nothing can reach outside the notebook.
+        if _notebook_tool_lockdown(sess, disabled_tools):
+            logger.info("notebook session %s: all tools denied", _session_notebook_id(sess))
 
         # Compare mode: disable tools based on compare type
         if compare_mode:
