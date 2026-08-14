@@ -149,6 +149,7 @@ class Session(TimestampMixin, Base):
     total_output_tokens = Column(Integer, default=0)
     mode = Column(String, nullable=True)  # 'agent', 'chat', or 'research'
     crew_member_id = Column(String, nullable=True)  # links to crew_members.id
+    notebook_id = Column(String, nullable=True)  # links to notebooks.id (strict sources-only chat)
 
     # Relationship to chat messages
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
@@ -177,6 +178,7 @@ class Session(TimestampMixin, Base):
             'total_input_tokens': self.total_input_tokens or 0,
             'total_output_tokens': self.total_output_tokens or 0,
             'crew_member_id': self.crew_member_id,
+            'notebook_id': self.notebook_id,
         }
 
 class ChatMessage(Base):
@@ -791,6 +793,29 @@ def _migrate_add_owner_column():
             conn.execute("CREATE INDEX IF NOT EXISTS ix_sessions_owner ON sessions(owner)")
             conn.commit()
             logging.getLogger(__name__).info("Migrated: added 'owner' column to sessions")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Migration check failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def _migrate_add_session_notebook_id_column():
+    """Add notebook_id column to sessions table if it doesn't exist."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "notebook_id" not in columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN notebook_id VARCHAR")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'notebook_id' column to sessions")
     except Exception as e:
         logging.getLogger(__name__).warning(f"Migration check failed: {e}")
     finally:
@@ -1659,6 +1684,49 @@ class Note(TimestampMixin, Base):
     agent_session_id  = Column(String, nullable=True)
 
 
+class Notebook(TimestampMixin, Base):
+    """A bounded, named set of sources for strict sources-only chat."""
+    __tablename__ = "notebooks"
+    id = Column(String, primary_key=True)
+    owner = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    archived = Column(Boolean, default=False, nullable=False)
+    sources = relationship("NotebookSource", cascade="all, delete-orphan",
+                           backref="notebook")
+
+    def to_dict(self):
+        return {
+            "id": self.id, "owner": self.owner, "name": self.name,
+            "description": self.description, "archived": bool(self.archived),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class NotebookSource(TimestampMixin, Base):
+    """A single ingested source (file) belonging to a Notebook."""
+    __tablename__ = "notebook_sources"
+    id = Column(String, primary_key=True)
+    notebook_id = Column(String, ForeignKey("notebooks.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    document_id = Column(String, ForeignKey("documents.id", ondelete="SET NULL"),
+                         nullable=True)
+    filename = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="indexed")
+    chunk_count = Column(Integer, nullable=False, default=0)
+    error = Column(Text, nullable=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "notebook_id": self.notebook_id,
+            "document_id": self.document_id, "filename": self.filename,
+            "status": self.status, "chunk_count": self.chunk_count,
+            "error": self.error,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class CalendarCal(TimestampMixin, Base):
     """A calendar (e.g. 'Personal', 'TimeTree')."""
     __tablename__ = "calendars"
@@ -1830,6 +1898,7 @@ def init_db():
     _migrate_add_supports_tools_column()
     _migrate_add_task_run_model_column()
     _migrate_add_owner_column()
+    _migrate_add_session_notebook_id_column()
     _migrate_add_document_archived_column()
     _migrate_add_last_message_at_column()
     _migrate_add_folder_column()
