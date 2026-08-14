@@ -5,8 +5,16 @@ notebook must produce both a readable `Document` row (so the Library/agent
 can page through the full text) and RAG chunks tagged with
 `document_id`/`notebook_id` (so `RAGManager.search(..., notebook_id=...)`
 can scope retrieval to just this notebook). This module is the single place
-that does both, atomically enough that a failure at any step leaves neither
-an orphan Document nor a misleadingly "indexed" NotebookSource.
+that does both.
+
+DB-level guarantee only: a failure at any step leaves neither an orphan
+`Document` row nor a misleadingly "indexed" `NotebookSource` — the database
+is left consistent. This does NOT cover Chroma: if `add_document` embeds
+chunks 0..k successfully and then raises on chunk k+1, those already-embedded
+chunks stay in Chroma tagged with this `document_id`/`notebook_id` — there is
+no compensating delete, and no `Document` row exists for a search hit to
+resolve against. This is a known, accepted gap; cleanup lands with the
+notebook-delete API in a later task.
 """
 import logging
 import os
