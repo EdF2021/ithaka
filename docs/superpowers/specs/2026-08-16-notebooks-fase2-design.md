@@ -68,6 +68,21 @@ Pipeline `generate_artifact(notebook_id, owner, kind, db_session) -> NotebookArt
   owner-gescoped (404), geen indexed bronnen → 400 met duidelijke melding; Chroma is niet
   nodig (vol-tekst uit de DB). Synchroon (LLM-call kan tientallen seconden duren; frontend
   disabled de knop). LLM-/endpointfout → 502 met melding.
+
+  **Amendement (fix-wave, na eind-review):** synchroon blijft de ruling, maar niet zomaar.
+  `task_llm_call_async` (`src/task_endpoint.py:58`) wacht standaard op
+  `wait_for_interactive_quiet` — bedoeld om echte achtergrondtaken (scheduler, e-mailpollers) te
+  laten wachten tot de UI stil is. Deze POST is zelf al een getrackte foreground-request
+  (`_InteractiveActivityMiddleware`, `app.py:201-215`): de wait zou dus wachten op het stil
+  worden van precies de request die op die wait wacht — een deadlock die nooit opheft
+  (`BACKGROUND_TASK_MAX_WAIT_SECONDS` default `0` = oneindig wachten). Fix: `generate_artifact`
+  roept `task_llm_call_async(..., wait_for_quiet=False)` aan — de gate is voor achtergrondtaken,
+  niet voor een in-request caller die zichzelf blokkeert. Onafhankelijk daarvan viel deze route
+  ook buiten de whitelist van `_RequestTimeoutMiddleware` (`app.py:172-184`, hard 45s-timeout),
+  dus elke generatie 504'de sowieso. Tweede fix: een smalle, route-specifieke uitzondering
+  (regex `^/api/notebooks/[^/]+/artifacts$`, alleen POST — bewust geen brede
+  `/api/notebooks`-prefix, want die zou ook upload/ingest vrijstellen) in plaats van deze route
+  aan de generieke prefixlijst toe te voegen.
 - `DELETE /api/notebooks/{id}/artifacts/{artifact_id}` — verwijdert artifact-row **én**
   Document-row (artifact is gegenereerde inhoud, geen gebruikersdata).
 
@@ -97,7 +112,13 @@ CSS: append in het bestaande notebook-blok aan het eind van `static/style.css` (
 - Notebook zonder (geslaagde) bronnen → 400 "Geen geïndexeerde bronnen".
 - LLM-endpoint niet geconfigureerd/offline → 502; UI toont de melding, knop komt terug.
 - Zeer grote bronnen → context-cap (stap 2), artifact vermeldt ingekorte bronnen.
-- Document uit de Library verwijderd → artifact-row cascadet mee (FK CASCADE).
+- Document uit de Library verwijderd → artifact-row cascadet mee (FK CASCADE). Let op: een
+  delete vanuit de Library (`DELETE /api/document/{id}`, `routes/document_routes.py:726-751`) is
+  een **soft delete** (`is_active = False`; de row blijft bestaan). De FK CASCADE vuurt pas bij
+  een echte row-delete, dus een via de Library "verwijderd" artifact blijft in de notebook's
+  Artifacts-lijst staan totdat een hard-delete de Document-row daadwerkelijk verwijdert — dat
+  gebeurt via Tidy/AI-tidy (junk-detectie, `routes/document_routes.py:911` e.v.) of via de
+  notebook's eigen artifact-DELETE/notebook-DELETE routes (die wél hard deleten).
 - Notebook-delete → artifacts cascaden mee; hun Documents blijven bestaan? **Nee** — ruling:
   notebook-delete verwijdert ook artifact-Documents (gegenereerde inhoud hoort bij de
   notebook; bron-Documents blijven juist wél, zoals in Fase 1). Implementatie: in de bestaande
@@ -113,5 +134,7 @@ CSS: append in het bestaande notebook-blok aan het eind van `static/style.css` (
   ongeldig kind → 400, lege notebook → 400, delete verwijdert row + Document,
   notebook-delete ruimt artifact-Documents op. Patroon: `tests/test_routes_notebooks.py`.
 - **JS**: `node --check`; browser-smoke (verplicht vóór merge): elk kind genereren op een echte
-  notebook, artifact opent in viewer, mindmap rendert in Preview, quiz-details klapt open,
-  delete werkt; desktop + mobiel viewport, screenshots.
+  notebook, artifact opent in viewer, mindmap rendert in Preview, quiz toont een
+  antwoordensectie onderaan (geen `<details>`-blok per vraag — dat zou door `markdown.js` alsnog
+  force-opened worden; zie de kind-instructie in `src/notebook_artifacts.py`), delete werkt;
+  desktop + mobiel viewport, screenshots.
