@@ -26,14 +26,49 @@ from src.task_endpoint import task_llm_call_async
 
 logger = logging.getLogger(__name__)
 
-# Upper bound on the source payload handed to the model. Sources are trimmed
-# proportionally to fit; the number is a whole-payload budget, headers and
-# truncation markers included.
+# Upper bound on the source payload handed to the model. Sources that fit
+# their fair share of the budget are kept whole; the number is a
+# whole-payload budget, headers and truncation markers included.
 MAX_CONTEXT_CHARS = 60_000
 
 _SOURCE_HEADER = "=== BRON: {filename} ==="
 _TRUNCATION_MARKER = "\n(bron ingekort)"
 _BLOCK_SEPARATOR = "\n\n"
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove ``<think>...</think>`` reasoning blocks from a model answer.
+
+    Kopie van agent_loop._strip_think_blocks (src/agent_loop.py) - not
+    imported directly because agent_loop pulls in the full tool-execution
+    import graph (src.agent_tools, src.tool_policy, src.tool_security, ...),
+    which is unnecessary weight for this module's single narrow use.
+
+    Linear-time equivalent of
+    ``re.sub(r'<think>.*?</think>', '', text, flags=DOTALL|IGNORECASE)``: a
+    forward-only scan pairs each ``<think>`` opener with the next closer in a
+    single pass. Only literal ``<think>``/``</think>`` (any case) are
+    matched, a dangling opener with no closer is left intact, and an orphan
+    ``</think>`` is never stripped.
+    """
+    if not text:
+        return text
+    lowered = text.lower()
+    parts = []
+    pos = 0
+    while True:
+        start = lowered.find("<think>", pos)
+        if start == -1:
+            parts.append(text[pos:])
+            break
+        end = lowered.find("</think>", start + 7)
+        if end == -1:
+            # No closer for this opener: lazy regex matches nothing here.
+            parts.append(text[pos:])
+            break
+        parts.append(text[pos:start])
+        pos = end + 8  # len("</think>")
+    return "".join(parts)
 
 
 # --------------------------------------------------------------------------
@@ -154,7 +189,7 @@ ARTIFACT_KINDS = {
 # Source collection
 # --------------------------------------------------------------------------
 
-def _source_entries(notebook, db_session):
+def _source_entries(notebook: Notebook, db_session) -> list[tuple[str, str]]:
     """Return [(filename, text)] for the notebook's usable sources.
 
     Only sources that were indexed successfully *and* still have a backing
@@ -183,14 +218,18 @@ def _source_entries(notebook, db_session):
     return entries
 
 
-def gather_source_text(notebook, db_session) -> str:
+def gather_source_text(notebook: Notebook, db_session) -> str:
     """Build the source payload for the model, capped at MAX_CONTEXT_CHARS.
 
     Blocks are "=== BRON: <filename> ===" headers followed by the document's
-    full text. When the total exceeds the cap every source is cut back
-    proportionally to its size (so no single large source crowds the others
-    out) and marked with "(bron ingekort)". Returns "" when the notebook has
-    no usable sources.
+    full text. When the total exceeds the cap, only the sources that would
+    not fit their fair share of the remaining budget are truncated (and
+    marked with "(bron ingekort)"); a source that fits is kept complete and
+    unmarked, even while a larger sibling gets cut. This is a water-filling
+    pass over sources sorted ascending by length: each source in turn either
+    keeps its full text (consuming only what it needs, so leftover budget
+    grows for the sources still to come) or is cut to that step's fair
+    share. Returns "" when the notebook has no usable sources.
     """
     entries = _source_entries(notebook, db_session)
     if not entries:
@@ -207,21 +246,55 @@ def gather_source_text(notebook, db_session) -> str:
             header + text for header, (_, text) in zip(headers, entries)
         )
 
-    # Every source gets truncated in this branch: each proportional share is
-    # strictly smaller than the source itself once the total exceeds the cap.
-    budget = max(MAX_CONTEXT_CHARS - overhead - len(_TRUNCATION_MARKER) * len(entries), 0)
+    # Budget left for text (+ truncation markers) once headers/separators are
+    # paid for. Can be <= 0 when the overhead alone already meets or exceeds
+    # the cap (many/long filenames); clamp so nothing downstream goes
+    # negative.
+    text_budget = max(MAX_CONTEXT_CHARS - overhead, 0)
+    marker_cost = len(_TRUNCATION_MARKER)
+
+    limits = [None] * len(entries)  # None = keep full text
+    marked = [False] * len(entries)
+    order = sorted(range(len(entries)), key=lambda i: len(entries[i][1]))
+    remaining_budget = text_budget
+    remaining_count = len(entries)
+    for idx in order:
+        text_len = len(entries[idx][1])
+        fair_share = remaining_budget // remaining_count if remaining_count else 0
+        if text_len <= fair_share:
+            # Fits its fair share whole: no truncation, no marker. Only the
+            # text it actually needs is spent, so the rest is redistributed
+            # to the sources still waiting their turn.
+            remaining_budget -= text_len
+        else:
+            marked[idx] = True
+            limits[idx] = max(fair_share - marker_cost, 0)
+            remaining_budget -= fair_share
+        remaining_count -= 1
+
     blocks = []
-    for header, (_, text) in zip(headers, entries):
-        share = int(budget * len(text) / total_text) if total_text else 0
-        blocks.append(header + text[:share] + _TRUNCATION_MARKER)
-    return _BLOCK_SEPARATOR.join(blocks)
+    for header, (idx, (_, text)) in zip(headers, enumerate(entries)):
+        if marked[idx]:
+            blocks.append(header + text[: limits[idx]] + _TRUNCATION_MARKER)
+        else:
+            blocks.append(header + text)
+    result = _BLOCK_SEPARATOR.join(blocks)
+
+    # Defensive final clamp: guards the degenerate case (overhead alone at or
+    # above the cap, or floor-division rounding) so the function never hands
+    # back more than the configured budget.
+    if len(result) > MAX_CONTEXT_CHARS:
+        result = result[:MAX_CONTEXT_CHARS]
+    return result
 
 
 # --------------------------------------------------------------------------
 # Generation
 # --------------------------------------------------------------------------
 
-async def generate_artifact(notebook_id: str, owner: str, kind: str, db_session):
+async def generate_artifact(
+    notebook_id: str, owner: str, kind: str, db_session
+) -> NotebookArtifact:
     """Generate one artifact for `notebook_id` and return its NotebookArtifact.
 
     Rows are written only after the model answered: a failed or empty LLM call
@@ -253,7 +326,8 @@ async def generate_artifact(notebook_id: str, owner: str, kind: str, db_session)
         untrusted_context_message(f"notebook-bronnen: {notebook.name}", source_text),
     ]
     content = await task_llm_call_async(messages, owner=owner)
-    if not content or not content.strip():
+    content = _strip_think_blocks(content or "").strip()
+    if not content:
         raise RuntimeError("Het model gaf een leeg antwoord terug")
 
     document_id = str(uuid.uuid4())
@@ -262,7 +336,7 @@ async def generate_artifact(notebook_id: str, owner: str, kind: str, db_session)
         title=f"{notebook.name} — {spec['label']}",
         owner=owner,
         language="markdown",
-        current_content=content.strip(),
+        current_content=content,
         session_id=None,
     ))
     artifact = NotebookArtifact(

@@ -216,6 +216,9 @@ def test_gather_returns_empty_without_sources():
 
 
 def test_gather_cap_proportional():
+    """Two equally oversized sources: both exceed their fair share, so both
+    get truncated with the marker, headers stay intact, and the total stays
+    within budget."""
     s = _TS()
     try:
         nb = make_notebook(s, name="Groot")
@@ -225,14 +228,13 @@ def test_gather_cap_proportional():
         text = artifacts.gather_source_text(nb, s)
 
         assert len(text) <= artifacts.MAX_CONTEXT_CHARS
-        assert text.count("(bron ingekort)") == 2
-        assert "=== BRON: a.txt ===" in text
-        assert "=== BRON: b.txt ===" in text
-        # Proportional: two equally sized sources keep equally sized blocks.
-        # Measure the blocks themselves - counting "a"/"b" characters would
-        # also count the headers and the "(bron ingekort)" marker.
         blocks = text.split("\n\n")
         assert len(blocks) == 2
+        for block in blocks:
+            assert block.endswith("(bron ingekort)")
+        assert blocks[0].startswith("=== BRON: a.txt ===\n")
+        assert blocks[1].startswith("=== BRON: b.txt ===\n")
+        # Proportional: two equally sized sources keep equally sized blocks.
         assert abs(len(blocks[0]) - len(blocks[1])) <= 1
         # ... and each keeps a real share instead of being cut to nothing.
         assert len(blocks[0]) > 20_000
@@ -250,6 +252,53 @@ def test_gather_keeps_small_sources_intact():
 
         assert "(bron ingekort)" not in text
         assert text.endswith("korte tekst")
+    finally:
+        s.close()
+
+
+def test_gather_cap_only_truncates_oversized_source():
+    """F2: a small source that fits its fair share stays complete and
+    unmarked; only the source that overflows the remaining budget is cut."""
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Gemengd")
+        make_source(s, nb, filename="klein.txt", content="k" * 5_000)
+        make_source(s, nb, filename="groot.txt", content="g" * 100_000)
+
+        text = artifacts.gather_source_text(nb, s)
+
+        assert len(text) <= artifacts.MAX_CONTEXT_CHARS
+        blocks = text.split("\n\n")
+        assert len(blocks) == 2
+        klein_block, groot_block = blocks
+
+        assert klein_block.startswith("=== BRON: klein.txt ===\n")
+        assert klein_block.endswith("k" * 5_000)
+        assert "(bron ingekort)" not in klein_block
+
+        assert groot_block.startswith("=== BRON: groot.txt ===\n")
+        assert groot_block.endswith("(bron ingekort)")
+        # Truncated, not the full 100k source.
+        assert "g" * 100_000 not in groot_block
+    finally:
+        s.close()
+
+
+def test_gather_cap_overhead_at_or_above_budget_does_not_crash(monkeypatch):
+    """F3: when the fixed overhead alone meets/exceeds MAX_CONTEXT_CHARS, the
+    function must degrade sanely instead of producing negative slice lengths
+    or raising."""
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Overhead")
+        make_source(s, nb, filename="a-rather-long-filename.txt",
+                    content="inhoud die er niet toe doet")
+
+        monkeypatch.setattr(artifacts, "MAX_CONTEXT_CHARS", 5)
+
+        text = artifacts.gather_source_text(nb, s)
+
+        assert isinstance(text, str)
     finally:
         s.close()
 
@@ -341,6 +390,47 @@ async def test_empty_llm_answer_leaves_no_rows(monkeypatch):
 
         with pytest.raises(RuntimeError):
             await artifacts.generate_artifact(nb.id, "own", "quiz", s)
+
+        assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 0
+        assert s.query(db.Document).count() == docs_before
+    finally:
+        s.close()
+
+
+async def test_think_block_stripped_from_saved_content(monkeypatch):
+    """F1: reasoning-model <think> blocks must never land in the saved
+    artifact - they are stripped before the empty-answer check and before
+    saving."""
+    s = _TS()
+    try:
+        _patch_llm(monkeypatch, _FakeLLM(
+            result="<think>redenering</think>\n# Studiegids"))
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        art = await artifacts.generate_artifact(nb.id, "own", "study_guide", s)
+
+        doc = s.get(db.Document, art.document_id)
+        assert doc.current_content == "# Studiegids"
+        assert "redenering" not in doc.current_content
+        assert "<think>" not in doc.current_content
+    finally:
+        s.close()
+
+
+async def test_think_only_answer_counts_as_empty(monkeypatch):
+    """F1: an answer that is only a think block has nothing left after
+    stripping, so it must raise RuntimeError and leave no rows behind."""
+    s = _TS()
+    try:
+        _patch_llm(monkeypatch, _FakeLLM(
+            result="<think>alleen redenering, geen inhoud</think>"))
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+        docs_before = s.query(db.Document).count()
+
+        with pytest.raises(RuntimeError):
+            await artifacts.generate_artifact(nb.id, "own", "faq", s)
 
         assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 0
         assert s.query(db.Document).count() == docs_before
