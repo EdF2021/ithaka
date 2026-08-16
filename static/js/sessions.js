@@ -313,6 +313,26 @@ function _setChatMetaTitle(meta) {
   _syncNotebookToolVisibility(meta);
 }
 
+/**
+ * Repaint the chat header for whatever session is current. For any code outside
+ * this module that needs to put the header back (the header rename in app.js
+ * cancelling, committing, or blurring unchanged): writing
+ * `#current-meta`.textContent directly would flatten the title span and the
+ * notebook badge into one bare text node, so route it through here instead.
+ *
+ * `fallbackName` covers the case where the current session isn't in the list
+ * yet (a pending chat that has never been materialized) — without it the header
+ * would drop back to "Ithaka Chat".
+ */
+export function refreshChatMetaTitle(fallbackName) {
+  const meta = currentSessionId ? sessions.find(s => s.id === currentSessionId) : null;
+  if (!meta && fallbackName) {
+    _setChatMetaTitle({ name: fallbackName });
+    return;
+  }
+  _setChatMetaTitle(meta || null);
+}
+
 /** Clear current session from UI (after delete/archive). */
 function _deselectCurrentSession(sid) {
   if (currentSessionId !== sid) return;
@@ -3501,6 +3521,7 @@ const sessionModule = {
   getPendingChat,
   getCurrentSessionId,
   getSessions,
+  refreshChatMetaTitle,
   getCurrentModel,
   getCurrentEndpointUrl,
   setCurrentSessionId,

@@ -598,7 +598,11 @@ function initializeEventListeners() {
       input.value = currentName;
       input.className = 'session-rename-input';
       input.style.cssText = 'font-size:inherit;background:transparent;border:none;border-bottom:1px solid var(--accent, var(--red));color:var(--fg);outline:none;width:100%;padding:0;';
-      const origText = metaEl.textContent;
+      // Read the title from its own span, not from metaEl: #current-meta also
+      // holds the notebook badge, so .textContent would snapshot
+      // "MyNotebooknotebook" and write that back as the name on cancel.
+      const _titleEl = metaEl.querySelector('.chat-title-text');
+      const origText = _titleEl ? _titleEl.textContent : metaEl.textContent;
       metaEl.textContent = '';
       metaEl.appendChild(input);
       input.focus();
@@ -611,23 +615,26 @@ function initializeEventListeners() {
           if (!sid && sessionModule.materializePendingSession) {
             try { await sessionModule.materializePendingSession(); sid = sessionModule.getCurrentSessionId(); } catch (_) {}
           }
-          if (!sid) { metaEl.textContent = newName; return; }
+          if (!sid) { sessionModule.refreshChatMetaTitle(newName); return; }
           const fd = new FormData();
           fd.append('name', newName);
           await fetch(`${API_BASE}/api/session/${sid}`, { method: 'PATCH', body: fd });
           const _m = sessionModule.getSessions().find(s => s.id === sid);
           if (_m) _m.name = newName;
-          metaEl.textContent = newName;
+          // Rebuild the header through sessions.js so the title span and the
+          // notebook badge come back — a raw textContent write would flatten
+          // both until the next session switch.
+          sessionModule.refreshChatMetaTitle(newName);
           uiModule.showToast('Renamed');
           sessionModule.loadSessions();
         } else {
-          metaEl.textContent = origText;
+          sessionModule.refreshChatMetaTitle(origText);
         }
       };
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-        if (ev.key === 'Escape') { input.removeEventListener('blur', commit); metaEl.textContent = origText; }
+        if (ev.key === 'Escape') { input.removeEventListener('blur', commit); sessionModule.refreshChatMetaTitle(origText); }
       });
     });
   }
@@ -1998,7 +2005,10 @@ function initializeEventListeners() {
     const plusBtn = el('overflow-plus-btn');
     if (!plusBtn) return;
     const menu = el('overflow-menu');
-    const anyActive = menu ? Array.from(menu.querySelectorAll('.overflow-menu-item.active')).some(item => item.style.display !== 'none') : false;
+    // getComputedStyle, not item.style: items can also be hidden by a CSS rule
+    // (a notebook session hides the RAG item via body.notebook-session), and an
+    // active-but-hidden item must not light the dot.
+    const anyActive = menu ? Array.from(menu.querySelectorAll('.overflow-menu-item.active')).some(item => getComputedStyle(item).display !== 'none') : false;
     plusBtn.classList.toggle('has-active', anyActive);
   }
   // External modules (compare) dispatch this when their overflow state changes
