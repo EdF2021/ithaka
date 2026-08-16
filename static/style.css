@@ -40835,3 +40835,146 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 @media (prefers-reduced-motion: reduce) {
   .dageraad-intro-overlay { display: none; }
 }
+
+/* ── Notebooks (bounded source sets) ─────────────────────────────────────
+   Two views in one window: a card grid of notebooks (reusing .dashboard-grid
+   / .dashboard-card) and a detail view whose source rows are plain
+   .list-item rows. Only the handful of rules below exist because no current
+   class covers them: the window sizing, the create form, the upload zone,
+   the status pill and the inline "Sure?" confirm state. Tokens only — no
+   new colors or font sizes. */
+.notebooks-modal-content {
+  width: min(760px, 94vw);
+  max-width: 760px;
+  background: var(--bg);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: 86dvh;
+}
+.notebooks-body { overflow-y: auto; }
+
+/* List view — create row */
+.notebook-newform {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.notebook-newform .notebook-input { width: auto; flex: 1 1 180px; min-width: 0; margin-top: 0; height: 28px; }
+.notebook-newform .dashboard-action-btn { flex-shrink: 0; }
+
+/* Shared inline error line — empty (and therefore invisible) until a fetch
+   fails, so it never reserves space in the happy path. */
+.notebook-error {
+  color: var(--red);
+  margin-bottom: 8px;
+}
+.notebook-error:empty { display: none; }
+
+/* Cards */
+.notebook-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notebook-card-desc {
+  max-width: 100%;
+  margin-bottom: 6px;
+}
+.notebook-card-desc:empty { display: none; }
+.notebook-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notebook-del-btn,
+.notebook-src-del {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  color: var(--color-muted);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.notebook-del-btn:hover,
+.notebook-src-del:hover { color: var(--red); border-color: var(--border); }
+/* Armed state of the two-step delete (label reads "Sure?"); a second click
+   within 5s commits. Deliberately not window.confirm — that blocks browser
+   automation. */
+.notebook-confirm-armed,
+.notebook-confirm-armed:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+/* Detail view */
+.notebook-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.notebook-open-chat-btn { border-color: var(--fg); }
+.notebook-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+.notebook-detail-desc { max-width: 100%; margin-bottom: 8px; }
+.notebook-upload-zone {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px 12px;
+  margin-bottom: 10px;
+  text-align: center;
+  color: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.notebook-upload-zone:hover,
+.notebook-upload-zone.dragover { border-color: var(--fg); color: var(--fg); }
+
+/* Source rows — .list-item supplies the row chrome; these only lay it out. */
+.notebook-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notebook-source-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notebook-source-chunks { flex-shrink: 0; }
+.notebook-status {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Failed sources carry their error in title= (hover tooltip). */
+.notebook-status-failed { color: var(--red); border-color: var(--red); }
+
+@media (max-width: 700px) {
+  .notebooks-modal-content { width: 96vw; }
+  .notebook-newform .notebook-input { flex-basis: 100%; }
+}
+
+/* Dageraad — the notebook cards are .dashboard-card/.dashboard-card-clickable,
+   so the theme's radius/padding/brighten-on-hover rules already cover them.
+   Only the two containers that have no dashboard equivalent need a mirror:
+   the window's type scale and the dropzone's softer corners/padding. */
+:root[data-theme="dageraad"] .notebooks-modal-content { font-size: 13px; }
+:root[data-theme="dageraad"] .notebook-upload-zone { border-radius: 14px; padding: 16px 14px; }

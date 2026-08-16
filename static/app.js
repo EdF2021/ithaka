@@ -170,6 +170,7 @@ function initRailHoverLabels() {
     'rail-gallery': 'Gallery',
     'rail-archive': 'Library',
     'rail-memory': 'Brain',
+    'rail-notebooks': 'Notebooks',
     'rail-notes': 'Notes',
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
@@ -1070,6 +1071,22 @@ function initializeEventListeners() {
     });
   }
 
+  // Notebooks tool button (sidebar + rail) — bounded source sets for
+  // strict, grounded chat. Same toggle contract as the dashboard above.
+  const notebooksBtns = [el('tool-notebooks-btn'), el('rail-notebooks')].filter(Boolean);
+  notebooksBtns.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const Modals = await import('./js/modalManager.js');
+      const notebooksModule = await import('./js/notebooks.js');
+      // toggle returns true when a registered modal was minimized/restored;
+      // returns false when nothing is registered → open fresh.
+      if (!Modals.toggle('notebooks-modal')) {
+        if (notebooksModule.isNotebooksOpen()) notebooksModule.closeNotebooks();
+        else notebooksModule.openNotebooks();
+      }
+    });
+  });
+
   // Tasks tool button
   const toolTasksBtn = el('tool-tasks-btn');
   if (toolTasksBtn) {
@@ -1201,6 +1218,12 @@ function initializeEventListeners() {
       }
     },
     '/dashboard': () => document.getElementById('tool-dashboard-btn')?.click(),
+    '/notebooks': () => {
+      // Collapse the wide sidebar → icon rail so navigation stays visible
+      // beside the notebook window (same reasoning as /email and /notes).
+      _collapseSidebarToRail();
+      document.getElementById('tool-notebooks-btn')?.click();
+    },
     '/calendar': () => calendarModule && calendarModule.openCalendar(),
     '/cookbook': () => document.getElementById('tool-cookbook-btn')?.click(),
     '/email':    () => {
