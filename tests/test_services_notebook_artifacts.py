@@ -228,8 +228,14 @@ def test_gather_cap_proportional():
         assert text.count("(bron ingekort)") == 2
         assert "=== BRON: a.txt ===" in text
         assert "=== BRON: b.txt ===" in text
-        # Proportional: two equally sized sources keep roughly equal shares.
-        assert abs(text.count("a") - text.count("b")) < 1_000
+        # Proportional: two equally sized sources keep equally sized blocks.
+        # Measure the blocks themselves - counting "a"/"b" characters would
+        # also count the headers and the "(bron ingekort)" marker.
+        blocks = text.split("\n\n")
+        assert len(blocks) == 2
+        assert abs(len(blocks[0]) - len(blocks[1])) <= 1
+        # ... and each keeps a real share instead of being cut to nothing.
+        assert len(blocks[0]) > 20_000
     finally:
         s.close()
 
