@@ -334,6 +334,7 @@ async function _deleteSource(sourceId) {
 
 function _artifactRow(a) {
   const label = KIND_LABELS[a.kind] || a.kind;
+  const title = a.title || label;
   // A sibling span, not text inside .notebook-artifact-title: that span is
   // nowrap+ellipsis, so text appended inside it would be the first thing
   // clipped on a narrow viewport — and this hint is required, per spec.
@@ -342,7 +343,7 @@ function _artifactRow(a) {
   return `
     <div class="list-item notebook-artifact-item" data-art-id="${_esc(a.id)}" data-doc-id="${_esc(a.document_id)}">
       <span class="notebook-artifact-kind">${_esc(label)}</span>
-      <span class="grow notebook-artifact-title">${_esc(label)}</span>
+      <span class="grow notebook-artifact-title">${_esc(title)}</span>
       ${hint}
       <span class="dashboard-row-sub notebook-artifact-date">${_esc(_shortDate(a.created_at))}</span>
       <button type="button" class="notebook-src-del notebook-artifact-del" data-art-id="${_esc(a.id)}"
