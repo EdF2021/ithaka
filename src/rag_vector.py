@@ -411,9 +411,15 @@ class VectorRAG:
 
         except Exception as e:
             logger.error(f"search failed: {e}")
-            return self._keyword_search_fallback(query, k, owner=owner)
+            return self._keyword_search_fallback(query, k, owner=owner, notebook_id=notebook_id)
 
-    def _keyword_search_fallback(self, query: str, k: int = 5, owner: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _keyword_search_fallback(
+        self,
+        query: str,
+        k: int = 5,
+        owner: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         try:
             if not self._active_collections():
                 return []
@@ -429,6 +435,8 @@ class VectorRAG:
                 for i, doc in enumerate(all_docs["documents"]):
                     meta = all_docs["metadatas"][i]
                     if owner and meta.get("owner") != owner:
+                        continue
+                    if notebook_id and meta.get("notebook_id") != notebook_id:
                         continue
                     doc_lower = doc.lower()
                     score = sum(1 for w in query_words if w in doc_lower)

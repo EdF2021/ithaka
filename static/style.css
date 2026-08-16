@@ -41017,6 +41017,7 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   letter-spacing: 0.5px;
   color: color-mix(in srgb, var(--fg) 60%, transparent);
   vertical-align: middle;
+  flex-shrink: 0;
 }
 
 /* Notebook-bound sessions: the backend forces retrieval on, so the RAG toggle
@@ -41042,7 +41043,4 @@ body.notebook-session #rag-indicator-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-}
-.notebook-badge {
-  flex-shrink: 0;
 }

@@ -114,3 +114,51 @@ def test_remove_notebook_no_match_is_noop():
     assert res["success"] is True
     assert res["removed_count"] == 0
     assert set(rag._collection.get()["ids"]) == {"a"}
+
+
+# --------------------------------------------------------------------------- #
+# search() error path — _keyword_search_fallback must stay notebook-scoped
+# --------------------------------------------------------------------------- #
+
+
+class _FakeFallbackCollection:
+    def __init__(self, rows):
+        self._ids = [r[0] for r in rows]
+        self._docs = [r[1] for r in rows]
+        self._metas = [r[2] for r in rows]
+
+    def count(self):
+        return len(self._ids)
+
+    def get(self, include=None):
+        return {"ids": list(self._ids), "documents": list(self._docs), "metadatas": list(self._metas)}
+
+
+class _FakeFallbackLane:
+    def __init__(self, name, collection):
+        self.name = name
+        self.collection = collection
+
+    def count(self):
+        return self.collection.count()
+
+
+def test_keyword_fallback_respects_notebook_id(monkeypatch):
+    rows = [
+        ("a", "apple pie recipe", {"owner": "ed", "notebook_id": "nb-1"}),
+        ("b", "apple pie recipe", {"owner": "ed", "notebook_id": "nb-2"}),
+        ("c", "apple pie recipe", {"owner": "ed"}),
+    ]
+    collection = _FakeFallbackCollection(rows)
+    rag = rag_vector.VectorRAG.__new__(rag_vector.VectorRAG)  # skip Chroma connect
+    rag._healthy = True
+    rag._lanes = [_FakeFallbackLane("fastembed", collection)]
+
+    def raising_query_lanes(*args, **kwargs):
+        raise RuntimeError("lane down")
+
+    monkeypatch.setattr(rag_vector, "query_lanes", raising_query_lanes)
+
+    results = rag.search("apple pie", k=5, owner="ed", notebook_id="nb-1")
+    ids = {r["id"] for r in results}
+    assert ids == {"a"}, ids
