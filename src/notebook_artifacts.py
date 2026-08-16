@@ -10,8 +10,11 @@ material, so it goes through src.prompt_security.untrusted_context_message
 the system role. Only the hardcoded kind prompt is trusted framing.
 
 The LLM call goes through task_llm_call_async, which resolves the
-task -> utility -> default endpoint chain without needing a chat session and
-runs at workload="background".
+task -> utility -> default endpoint chain without needing a chat session.
+It runs at workload="foreground" (not the task-call default of
+"background") because generate_artifact is itself called synchronously
+from a tracked foreground request; see the comment at the call site for
+why the background workload would self-deadlock.
 """
 
 from __future__ import annotations
@@ -361,7 +364,18 @@ async def generate_artifact(
     # happens until this call returns. wait_for_quiet=False skips that gate:
     # the gate is for genuine background jobs (scheduler, email pollers),
     # not for an in-request caller like this one.
-    content = await task_llm_call_async(messages, owner=owner, wait_for_quiet=False)
+    #
+    # A second, deeper gate lives in _local_model_slot (src/llm_core.py):
+    # task_llm_call_async defaults kwargs["workload"] to "background", and for
+    # LOCAL endpoints that makes the call wait `while has_foreground_activity()`
+    # (interactive_gate.py), which is also True for the whole lifetime of this
+    # request - a second self-deadlock (capped at 600s) on top of the first.
+    # workload="foreground" tells the local-model slot this is a synchronous
+    # user-facing call, not a genuine background job, so it does not wait on
+    # its own request's activity flag.
+    content = await task_llm_call_async(
+        messages, owner=owner, wait_for_quiet=False, workload="foreground"
+    )
     content = _strip_think_blocks(content or "").strip()
     if not content:
         raise RuntimeError("Het model gaf een leeg antwoord terug")

@@ -342,6 +342,14 @@ async def test_prompt_contains_source_blocks_and_kind_prompt(monkeypatch):
         # Source text is untrusted input and must stay inside the guard block.
         assert "<<<UNTRUSTED_SOURCE_DATA>>>" in user
         assert fake.kwargs.get("owner") == "own"
+        # wait_for_quiet=False skips the interactive-quiet gate (that wait
+        # would block on this very request's own tracked-request entry).
+        # workload="foreground" tells the local-model slot in llm_core.py
+        # this is a synchronous in-request call, not a genuine background
+        # job - without it the call defaults to "background" and deadlocks
+        # a second time on has_foreground_activity() for its own lifetime.
+        assert fake.kwargs.get("wait_for_quiet") is False
+        assert fake.kwargs.get("workload") == "foreground"
     finally:
         s.close()
 
