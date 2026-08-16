@@ -40978,3 +40978,43 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
    the window's type scale and the dropzone's softer corners/padding. */
 :root[data-theme="dageraad"] .notebooks-modal-content { font-size: 13px; }
 :root[data-theme="dageraad"] .notebook-upload-zone { border-radius: 14px; padding: 16px 14px; }
+/* ── Notebook citations (Task 8) ───────────────────────────────────────────
+   Notebook answers cite their sources inline as [1], [2], … . The markers are
+   rendered as anchors to #document-<id> and routed by the chat click-delegate,
+   so they must read as links without shouting over the prose. */
+.cite-ref {
+  color: var(--red);
+  text-decoration: none;
+  font-size: 0.85em;
+  vertical-align: super;
+  line-height: 0;
+  padding: 0 1px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cite-ref:hover,
+.cite-ref:focus-visible {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  text-decoration: underline;
+}
+
+/* [n] label on each row of the RAG sources box — matches the inline markers. */
+.rag-source-index {
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  font-size: 10px;
+}
+
+/* "notebook" badge next to the chat title for notebook-bound sessions. */
+.notebook-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+  vertical-align: middle;
+}

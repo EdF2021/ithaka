@@ -263,12 +263,56 @@ let _researchPollTimer = null;
 // Session list keyboard navigation state
 let _sessionListFocused = false;
 
+/**
+ * Notebook-bound sessions answer strictly from that notebook's sources — the
+ * backend forces retrieval on regardless of the RAG toggle, so leaving the
+ * toggle visible would show a control that does nothing. Hide it there and put
+ * it back exactly as it was when switching to any other session (the RAG
+ * indicator starts out hidden, so restoring blindly to '' would reveal it).
+ */
+function _syncNotebookToolVisibility(meta) {
+  const isNotebook = !!(meta && meta.notebook_id);
+  ['overflow-rag-btn', 'rag-indicator-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (!btn) return;
+    if (isNotebook) {
+      if (btn.dataset.notebookPrevDisplay === undefined) {
+        btn.dataset.notebookPrevDisplay = btn.style.display;
+      }
+      btn.style.display = 'none';
+    } else if (btn.dataset.notebookPrevDisplay !== undefined) {
+      btn.style.display = btn.dataset.notebookPrevDisplay;
+      delete btn.dataset.notebookPrevDisplay;
+    }
+  });
+}
+
+/**
+ * Paint the chat-header title for a session. Notebook-bound sessions get a
+ * small "notebook" badge so it is visible that the answers are limited to that
+ * notebook's sources. Pass null/undefined for "no session selected".
+ */
+function _setChatMetaTitle(meta) {
+  const metaEl = uiModule.el('current-meta');
+  if (metaEl) {
+    metaEl.textContent = meta ? (meta.name || '') : 'Ithaka Chat';
+    if (meta && meta.notebook_id) {
+      const badge = document.createElement('span');
+      badge.className = 'notebook-badge';
+      badge.textContent = 'notebook';
+      badge.title = 'Answers use only this notebook\'s sources';
+      metaEl.appendChild(badge);
+    }
+  }
+  _syncNotebookToolVisibility(meta);
+}
+
 /** Clear current session from UI (after delete/archive). */
 function _deselectCurrentSession(sid) {
   if (currentSessionId !== sid) return;
   currentSessionId = null;
   uiModule.el('chat-history').innerHTML = '';
-  uiModule.el('current-meta').textContent = 'Ithaka Chat';
+  _setChatMetaTitle(null);
   Storage.remove('lastSessionId');
   history.replaceState(null, '', window.location.pathname);
   if (window.chatModule && window.chatModule.showWelcomeScreen) {
@@ -1724,8 +1768,7 @@ export async function loadSessions() {
     } else if (targetId && targetId === currentSessionId) {
       // Same session — just refresh the header name in case it was auto-generated
       const s = sessions.find(x => x.id === targetId);
-      const metaEl = document.getElementById('current-meta');
-      if (metaEl && s) metaEl.textContent = s.name;
+      if (s) _setChatMetaTitle(s);
     }
 
     // No session selected — still enable input so slash commands (e.g. /setup) work
@@ -1853,10 +1896,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     const activeEl = document.querySelector(`.list-item[data-session-id="${id}"]`);
     if (activeEl) activeEl.classList.add('active-session');
 
-    const currentMetaEl = uiModule.el('current-meta');
-    if (currentMetaEl) {
-      currentMetaEl.textContent = meta ? meta.name : 'Ithaka Chat';
-    }
+    _setChatMetaTitle(meta);
     // Update model picker visibility
     updateModelPicker();
 
@@ -2133,11 +2173,8 @@ export function createDirectChat(url, modelId, endpointId) {
   // Update model picker to show the pending model
   updateModelPicker();
 
-  // Update current-meta header
-  const metaEl = document.getElementById('current-meta');
-  if (metaEl) {
-    metaEl.textContent = 'New Chat';
-  }
+  // Update current-meta header — a pending chat is never notebook-bound yet.
+  _setChatMetaTitle({ name: 'New Chat' });
 
   // Enable input
   const msgInput = document.getElementById('message');

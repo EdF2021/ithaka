@@ -3032,6 +3032,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           if (_liveReplyEl && _finalReply) {
             // Render reply into the live-reply container (thinking bar already showing)
             var _replyHtml = markdownModule.mdToHtml(markdownModule.squashOutsideCode(_finalReply));
+            // rag_sources are stashed on `holder` (the first bubble of the turn),
+            // not on the per-round holder we are rendering into.
+            if (holder._ragSources && holder._ragSources.length) {
+              _replyHtml = chatRenderer.linkifyCitations(_replyHtml, holder._ragSources);
+            }
             _liveReplyEl.innerHTML = _replyHtml;
             _liveReplyEl.classList.remove('live-reply-content');
             if (_sourcesData) {
@@ -3042,8 +3047,12 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
             if (_findingsData) _body4.insertAdjacentHTML('beforeend', chatRenderer.buildFindingsBox(_findingsData));
           } else {
             // Full re-render (reply empty or no live-reply container)
+            var _finalHtml = markdownModule.processWithThinking(markdownModule.squashOutsideCode(finalDisplay));
+            if (holder._ragSources && holder._ragSources.length) {
+              _finalHtml = chatRenderer.linkifyCitations(_finalHtml, holder._ragSources);
+            }
             _body4.innerHTML = (_sourcesData ? _buildSourcesBox(_sourcesData, _sourcesType, _wasExpanded) : '')
-              + markdownModule.processWithThinking(markdownModule.squashOutsideCode(finalDisplay))
+              + _finalHtml
               + (_findingsData ? chatRenderer.buildFindingsBox(_findingsData) : '');
           }
         } else if (_sourcesHtml) {
@@ -3083,11 +3092,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           const summary = document.createElement('summary');
           summary.textContent = `Sources (${holder._ragSources.length} documents)`;
           details.appendChild(summary);
-          holder._ragSources.forEach(src => {
+          holder._ragSources.forEach((src, _i) => {
             const item = document.createElement('div');
             item.className = 'rag-source-item';
             const _esc = uiModule.esc;
-            item.innerHTML = `<strong>${_esc(src.filename)}</strong> <span class="rag-similarity">${(src.similarity * 100).toFixed(1)}%</span><div class="rag-snippet">${_esc(src.snippet)}</div>`;
+            // Same [n] prefix as the persisted render in chatRenderer.js, so the
+            // inline citations in the answer match the rows during streaming too.
+            const _n = chatRenderer.ragSourceIndex(src, _i);
+            item.innerHTML = `<span class="rag-source-index">[${_n}]</span> <strong>${_esc(src.filename)}</strong> <span class="rag-similarity">${(src.similarity * 100).toFixed(1)}%</span><div class="rag-snippet">${_esc(src.snippet)}</div>`;
             details.appendChild(item);
           });
           holder.querySelector('.body').appendChild(details);
