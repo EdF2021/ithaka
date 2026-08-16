@@ -126,7 +126,10 @@ def ingest_notebook_file(notebook_id, owner, filename, content_bytes,
         return _failed("no extractable text")
 
     doc_id = str(uuid.uuid4())
-    chunks = rag_manager.vector_rag._split_into_chunks(text)
+    # get_rag_manager() hands routes the bare VectorRAG, while tests pass a
+    # RAGManager-shaped wrapper — accept both.
+    vector_rag = getattr(rag_manager, "vector_rag", rag_manager)
+    chunks = vector_rag._split_into_chunks(text)
     embedded = 0
     try:
         for i, chunk in enumerate(chunks):
