@@ -40967,6 +40967,48 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 /* Failed sources carry their error in title= (hover tooltip). */
 .notebook-status-failed { color: var(--red); border-color: var(--red); }
 
+/* Artifacts section (study guide/briefing/faq/quiz/mindmap) — generate row,
+   kind pill and item rows. Buttons reuse .dashboard-action-btn, delete reuses
+   .notebook-src-del/.notebook-confirm-armed, rows reuse .list-item; only the
+   layout/pill/hint bits below have no existing equivalent. */
+.notebook-artifact-head {
+  font-weight: bold;
+  margin: 2px 0 6px;
+}
+.notebook-artifact-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.notebook-artifact-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  cursor: pointer;
+}
+.notebook-artifact-item.notebook-artifact-opening {
+  opacity: 0.6;
+  pointer-events: none;
+}
+/* Kind pill — same shape/tokens as .notebook-status. */
+.notebook-artifact-kind {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.notebook-artifact-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notebook-artifact-hint { color: var(--color-muted); }
+.notebook-artifact-date { flex-shrink: 0; }
+
 @media (max-width: 700px) {
   .notebooks-modal-content { width: 96vw; }
   .notebook-newform .notebook-input { flex-basis: 100%; }
@@ -40975,7 +41017,10 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 /* Dageraad — the notebook cards are .dashboard-card/.dashboard-card-clickable,
    so the theme's radius/padding/brighten-on-hover rules already cover them.
    Only the two containers that have no dashboard equivalent need a mirror:
-   the window's type scale and the dropzone's softer corners/padding. */
+   the window's type scale and the dropzone's softer corners/padding. The
+   artifact buttons/pill/rows reuse .dashboard-action-btn/.notebook-status's
+   shapes exactly, which already have no Dageraad override either — nothing
+   genuinely new to mirror here. */
 :root[data-theme="dageraad"] .notebooks-modal-content { font-size: 13px; }
 :root[data-theme="dageraad"] .notebook-upload-zone { border-radius: 14px; padding: 16px 14px; }
 /* ── Notebook citations (Task 8) ───────────────────────────────────────────
