@@ -266,36 +266,42 @@ let _sessionListFocused = false;
 /**
  * Notebook-bound sessions answer strictly from that notebook's sources — the
  * backend forces retrieval on regardless of the RAG toggle, so leaving the
- * toggle visible would show a control that does nothing. Hide it there and put
- * it back exactly as it was when switching to any other session (the RAG
- * indicator starts out hidden, so restoring blindly to '' would reveal it).
+ * toggle visible would show a control that does nothing.
+ *
+ * The hide is a class on <body>, not an inline style, on purpose:
+ * `_syncRagIndicator` in static/app.js writes `#rag-indicator-btn.style.display`
+ * directly (from page-load init, the two button click handlers, `/rag on|off`
+ * and model-emitted `ui_control` events). An inline hide would be undone by any
+ * of those mid-session, and stashing the previous inline value goes stale the
+ * moment they run. A `!important` CSS rule keyed on the class beats every one of
+ * those writes and needs no restore bookkeeping at all.
  */
 function _syncNotebookToolVisibility(meta) {
-  const isNotebook = !!(meta && meta.notebook_id);
-  ['overflow-rag-btn', 'rag-indicator-btn'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (!btn) return;
-    if (isNotebook) {
-      if (btn.dataset.notebookPrevDisplay === undefined) {
-        btn.dataset.notebookPrevDisplay = btn.style.display;
-      }
-      btn.style.display = 'none';
-    } else if (btn.dataset.notebookPrevDisplay !== undefined) {
-      btn.style.display = btn.dataset.notebookPrevDisplay;
-      delete btn.dataset.notebookPrevDisplay;
-    }
-  });
+  document.body.classList.toggle('notebook-session', !!(meta && meta.notebook_id));
 }
 
 /**
  * Paint the chat-header title for a session. Notebook-bound sessions get a
  * small "notebook" badge so it is visible that the answers are limited to that
  * notebook's sources. Pass null/undefined for "no session selected".
+ *
+ * The title text lives in an inner `.chat-title-text` span that carries the
+ * ellipsis, so a long notebook name truncates instead of clipping the badge off
+ * the end (#current-meta itself is the flex container). The span is only created
+ * when there is text, so an empty title still leaves #current-meta `:empty` —
+ * style.css hides the whole overlay on that selector.
  */
 function _setChatMetaTitle(meta) {
   const metaEl = uiModule.el('current-meta');
   if (metaEl) {
-    metaEl.textContent = meta ? (meta.name || '') : 'Ithaka Chat';
+    const title = meta ? (meta.name || '') : 'Ithaka Chat';
+    metaEl.textContent = '';
+    if (title) {
+      const titleEl = document.createElement('span');
+      titleEl.className = 'chat-title-text';
+      titleEl.textContent = title;
+      metaEl.appendChild(titleEl);
+    }
     if (meta && meta.notebook_id) {
       const badge = document.createElement('span');
       badge.className = 'notebook-badge';

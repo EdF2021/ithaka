@@ -3092,14 +3092,17 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           const summary = document.createElement('summary');
           summary.textContent = `Sources (${holder._ragSources.length} documents)`;
           details.appendChild(summary);
-          holder._ragSources.forEach((src, _i) => {
+          holder._ragSources.forEach(src => {
             const item = document.createElement('div');
             item.className = 'rag-source-item';
             const _esc = uiModule.esc;
             // Same [n] prefix as the persisted render in chatRenderer.js, so the
             // inline citations in the answer match the rows during streaming too.
-            const _n = chatRenderer.ragSourceIndex(src, _i);
-            item.innerHTML = `<span class="rag-source-index">[${_n}]</span> <strong>${_esc(src.filename)}</strong> <span class="rag-similarity">${(src.similarity * 100).toFixed(1)}%</span><div class="rag-snippet">${_esc(src.snippet)}</div>`;
+            // Only when the backend sent a real index — see buildRagSourcesBox.
+            const _idx = (typeof src.index === 'number' && src.index > 0)
+              ? `<span class="rag-source-index">[${src.index}]</span> `
+              : '';
+            item.innerHTML = `${_idx}<strong>${_esc(src.filename)}</strong> <span class="rag-similarity">${(src.similarity * 100).toFixed(1)}%</span><div class="rag-snippet">${_esc(src.snippet)}</div>`;
             details.appendChild(item);
           });
           holder.querySelector('.body').appendChild(details);

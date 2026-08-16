@@ -1044,8 +1044,15 @@ export function buildRagSourcesBox(sources) {
   for (var i = 0; i < sources.length; i++) {
     var s = sources[i] || {};
     var pct = (typeof s.similarity === 'number') ? (s.similarity * 100).toFixed(1) + '%' : '';
+    // Only when the backend actually sent an index. Messages persisted before
+    // notebooks existed carry no index, and a position-based [n] there would
+    // label rows that nothing in the answer body cites — their rendering must
+    // stay byte-for-byte what it was.
+    var idxLabel = (typeof s.index === 'number' && s.index > 0)
+      ? '<span class="rag-source-index">[' + s.index + ']</span> '
+      : '';
     items += '<div class="rag-source-item">'
-      + '<span class="rag-source-index">[' + ragSourceIndex(s, i) + ']</span> '
+      + idxLabel
       + '<strong>' + esc(s.filename || '') + '</strong>'
       + (pct ? ' <span class="rag-similarity">' + pct + '</span>' : '')
       + '<div class="rag-snippet">' + esc(s.snippet || '') + '</div></div>';

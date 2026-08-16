@@ -41018,3 +41018,31 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   color: color-mix(in srgb, var(--fg) 60%, transparent);
   vertical-align: middle;
 }
+
+/* Notebook-bound sessions: the backend forces retrieval on, so the RAG toggle
+   would be a control that does nothing. Hidden via a body class rather than an
+   inline style because app.js `_syncRagIndicator` writes
+   `#rag-indicator-btn.style.display` from /rag, the click handlers and
+   ui_control events — !important is what keeps those from re-showing it. */
+body.notebook-session #overflow-rag-btn,
+body.notebook-session #rag-indicator-btn {
+  display: none !important;
+}
+
+/* Chat title: the name truncates, the notebook badge does not. #current-meta is
+   the flex container (it keeps its own overflow clip); .chat-title-text carries
+   the ellipsis and .notebook-badge refuses to shrink, so a long notebook name
+   can no longer push the badge out of view on a narrow header. */
+.chat-meta-overlay #current-meta {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.chat-meta-overlay #current-meta .chat-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.notebook-badge {
+  flex-shrink: 0;
+}
