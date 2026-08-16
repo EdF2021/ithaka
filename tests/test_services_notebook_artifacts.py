@@ -32,11 +32,27 @@ def make_notebook(session, owner="ed", name="Thesis"):
     return nb
 
 
-def make_document(session, title="Report", owner="ed"):
-    doc = db.Document(id=str(uuid.uuid4()), title=title, owner=owner)
+def make_document(session, title="Report", owner="ed", content=""):
+    doc = db.Document(id=str(uuid.uuid4()), title=title, owner=owner,
+                      current_content=content)
     session.add(doc)
     session.commit()
     return doc
+
+
+def make_source(session, notebook, filename="a.txt", content="inhoud",
+                status="indexed", with_document=True, owner="ed"):
+    """Attach a NotebookSource (plus its backing Document) to `notebook`."""
+    doc_id = None
+    if with_document:
+        doc_id = make_document(session, title=filename, owner=owner,
+                               content=content).id
+    src = db.NotebookSource(id=str(uuid.uuid4()), notebook_id=notebook.id,
+                            document_id=doc_id, filename=filename,
+                            status=status, chunk_count=1)
+    session.add(src)
+    session.commit()
+    return src
 
 
 def test_notebook_artifact_roundtrip():
@@ -95,5 +111,293 @@ def test_artifact_cascade_on_document_delete():
         s.commit()
 
         assert s.query(db.NotebookArtifact).filter_by(id=artifact_id).count() == 0
+    finally:
+        s.close()
+
+
+# --------------------------------------------------------------------------
+# Artifact generation service (src/notebook_artifacts.py)
+#
+# The LLM call is always monkeypatched: these tests are hermetic and never
+# reach an endpoint. fire_event is stubbed too - the real one schedules a
+# background task on the running loop, which would drag the shared task
+# machinery into an isolated-DB test.
+# --------------------------------------------------------------------------
+import pytest
+
+import src.notebook_artifacts as artifacts
+
+
+class _FakeLLM:
+    """Async stand-in for task_llm_call_async that records its arguments."""
+
+    def __init__(self, result="# Gegenereerd", exc=None):
+        self.result = result
+        self.exc = exc
+        self.messages = None
+        self.kwargs = None
+        self.calls = 0
+
+    async def __call__(self, messages, **kwargs):
+        self.calls += 1
+        self.messages = messages
+        self.kwargs = kwargs
+        if self.exc is not None:
+            raise self.exc
+        return self.result
+
+
+def _patch_llm(monkeypatch, fake):
+    monkeypatch.setattr(artifacts, "task_llm_call_async", fake)
+    monkeypatch.setattr(artifacts, "fire_event", lambda *a, **k: None)
+    return fake
+
+
+def _system_content(messages):
+    return "\n".join(m["content"] for m in messages if m["role"] == "system")
+
+
+def _user_content(messages):
+    return "\n".join(m["content"] for m in messages if m["role"] == "user")
+
+
+# --- registry -------------------------------------------------------------
+
+def test_artifact_kinds_registry_complete():
+    assert set(artifacts.ARTIFACT_KINDS) == {
+        "study_guide", "briefing", "faq", "quiz", "mindmap"
+    }
+    labels = {k: v["label"] for k, v in artifacts.ARTIFACT_KINDS.items()}
+    assert labels == {
+        "study_guide": "Studiegids", "briefing": "Briefing", "faq": "FAQ",
+        "quiz": "Quiz", "mindmap": "Mindmap",
+    }
+    for kind, spec in artifacts.ARTIFACT_KINDS.items():
+        assert spec["prompt"].strip(), kind
+        # Every prompt defers to the source language, never fixes Dutch.
+        assert "taal van de bronnen" in spec["prompt"], kind
+
+
+def test_mindmap_prompt_requires_single_mermaid_fence():
+    prompt = artifacts.ARTIFACT_KINDS["mindmap"]["prompt"]
+    assert "mermaid" in prompt
+    assert "mindmap" in prompt
+
+
+# --- gather_source_text ---------------------------------------------------
+
+def test_gather_skips_failed_and_docless():
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Bronnen")
+        make_source(s, nb, filename="goed.txt", content="GOEDE INHOUD")
+        make_source(s, nb, filename="stuk.txt", content="MISLUKT",
+                    status="failed")
+        make_source(s, nb, filename="leeg.txt", with_document=False)
+
+        text = artifacts.gather_source_text(nb, s)
+
+        assert "=== BRON: goed.txt ===" in text
+        assert "GOEDE INHOUD" in text
+        assert "stuk.txt" not in text
+        assert "MISLUKT" not in text
+        assert "leeg.txt" not in text
+    finally:
+        s.close()
+
+
+def test_gather_returns_empty_without_sources():
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Leeg")
+        assert artifacts.gather_source_text(nb, s) == ""
+    finally:
+        s.close()
+
+
+def test_gather_cap_proportional():
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Groot")
+        make_source(s, nb, filename="a.txt", content="a" * 50_000)
+        make_source(s, nb, filename="b.txt", content="b" * 50_000)
+
+        text = artifacts.gather_source_text(nb, s)
+
+        assert len(text) <= artifacts.MAX_CONTEXT_CHARS
+        assert text.count("(bron ingekort)") == 2
+        assert "=== BRON: a.txt ===" in text
+        assert "=== BRON: b.txt ===" in text
+        # Proportional: two equally sized sources keep roughly equal shares.
+        assert abs(text.count("a") - text.count("b")) < 1_000
+    finally:
+        s.close()
+
+
+def test_gather_keeps_small_sources_intact():
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Klein")
+        make_source(s, nb, filename="a.txt", content="korte tekst")
+
+        text = artifacts.gather_source_text(nb, s)
+
+        assert "(bron ingekort)" not in text
+        assert text.endswith("korte tekst")
+    finally:
+        s.close()
+
+
+# --- generate_artifact ----------------------------------------------------
+
+async def test_generate_creates_document_and_row(monkeypatch):
+    s = _TS()
+    try:
+        _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        art = await artifacts.generate_artifact(nb.id, "own", "faq", s)
+
+        assert art.kind == "faq"
+        assert art.notebook_id == nb.id
+        doc = s.get(db.Document, art.document_id)
+        assert doc.title == "Testboek — FAQ"
+        assert doc.owner == "own"
+        assert doc.current_content == "# Gegenereerd"
+        assert doc.session_id is None
+        assert doc.language == "markdown"
+    finally:
+        s.close()
+
+
+async def test_prompt_contains_source_blocks_and_kind_prompt(monkeypatch):
+    s = _TS()
+    try:
+        fake = _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        await artifacts.generate_artifact(nb.id, "own", "faq", s)
+
+        assert artifacts.ARTIFACT_KINDS["faq"]["prompt"] in _system_content(fake.messages)
+        user = _user_content(fake.messages)
+        assert "=== BRON: a.txt ===" in user
+        assert "brontekst" in user
+        # Source text is untrusted input and must stay inside the guard block.
+        assert "<<<UNTRUSTED_SOURCE_DATA>>>" in user
+        assert fake.kwargs.get("owner") == "own"
+    finally:
+        s.close()
+
+
+async def test_generate_fires_document_created_after_commit(monkeypatch):
+    s = _TS()
+    try:
+        monkeypatch.setattr(artifacts, "task_llm_call_async", _FakeLLM())
+        fired = []
+        monkeypatch.setattr(artifacts, "fire_event",
+                            lambda name, owner=None: fired.append((name, owner)))
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        await artifacts.generate_artifact(nb.id, "own", "briefing", s)
+
+        assert fired == [("document_created", "own")]
+    finally:
+        s.close()
+
+
+async def test_llm_failure_leaves_no_rows(monkeypatch):
+    s = _TS()
+    try:
+        _patch_llm(monkeypatch, _FakeLLM(exc=RuntimeError("endpoint down")))
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+        docs_before = s.query(db.Document).count()
+
+        with pytest.raises(RuntimeError):
+            await artifacts.generate_artifact(nb.id, "own", "quiz", s)
+
+        assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 0
+        assert s.query(db.Document).count() == docs_before
+    finally:
+        s.close()
+
+
+async def test_empty_llm_answer_leaves_no_rows(monkeypatch):
+    s = _TS()
+    try:
+        _patch_llm(monkeypatch, _FakeLLM(result="   "))
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+        docs_before = s.query(db.Document).count()
+
+        with pytest.raises(RuntimeError):
+            await artifacts.generate_artifact(nb.id, "own", "quiz", s)
+
+        assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 0
+        assert s.query(db.Document).count() == docs_before
+    finally:
+        s.close()
+
+
+async def test_no_sources_raises(monkeypatch):
+    s = _TS()
+    try:
+        fake = _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Leeg")
+
+        with pytest.raises(ValueError):
+            await artifacts.generate_artifact(nb.id, "own", "faq", s)
+
+        assert fake.calls == 0
+    finally:
+        s.close()
+
+
+async def test_unknown_kind_raises(monkeypatch):
+    s = _TS()
+    try:
+        fake = _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        with pytest.raises(ValueError):
+            await artifacts.generate_artifact(nb.id, "own", "podcast", s)
+
+        assert fake.calls == 0
+    finally:
+        s.close()
+
+
+async def test_other_owner_raises(monkeypatch):
+    s = _TS()
+    try:
+        fake = _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        with pytest.raises(ValueError):
+            await artifacts.generate_artifact(nb.id, "iemand-anders", "faq", s)
+
+        assert fake.calls == 0
+    finally:
+        s.close()
+
+
+async def test_regenerate_creates_second_artifact(monkeypatch):
+    s = _TS()
+    try:
+        _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        first = await artifacts.generate_artifact(nb.id, "own", "faq", s)
+        second = await artifacts.generate_artifact(nb.id, "own", "faq", s)
+
+        assert first.id != second.id
+        assert first.document_id != second.document_id
+        assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 2
     finally:
         s.close()
