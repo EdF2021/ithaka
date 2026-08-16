@@ -497,3 +497,87 @@ async def test_regenerate_creates_second_artifact(monkeypatch):
         assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 2
     finally:
         s.close()
+
+
+# --------------------------------------------------------------------------
+# Fase 2 fix-wave regression: the gate-bypass seam that the tests above mock
+# away by monkeypatching artifacts.task_llm_call_async directly. The Critical
+# review finding was in task_llm_call_async itself (src/task_endpoint.py):
+# it unconditionally awaited wait_for_interactive_quiet, but the
+# artifacts-POST request that calls generate_artifact is itself tracked as
+# foreground activity (app.py's _InteractiveActivityMiddleware /
+# src.interactive_gate.track_interactive_request), so the wait could never
+# see foreground activity go to zero and hung forever
+# (BACKGROUND_TASK_MAX_WAIT_SECONDS defaults to 0 = wait indefinitely). The
+# fix is generate_artifact passing wait_for_quiet=False. This test exercises
+# the *real* task_llm_call_async (only its two network-reaching dependencies,
+# resolve_task_candidates and llm_call_async_with_fallback, are faked) so the
+# bypass is actually proven end-to-end rather than assumed.
+# --------------------------------------------------------------------------
+import asyncio
+
+import src.task_endpoint as task_endpoint
+from src.interactive_gate import track_interactive_request
+
+
+async def test_generate_artifact_does_not_deadlock_against_own_foreground_request(monkeypatch):
+    def _fake_candidates(**kwargs):
+        return [("http://fake-endpoint.invalid", "fake-model", {})]
+
+    async def _fake_fallback(candidates, messages, **kwargs):
+        return "# Gegenereerd"
+
+    monkeypatch.setattr(task_endpoint, "resolve_task_candidates", _fake_candidates)
+    monkeypatch.setattr(task_endpoint, "llm_call_async_with_fallback", _fake_fallback)
+    monkeypatch.setattr(artifacts, "fire_event", lambda *a, **k: None)
+
+    s = _TS()
+    try:
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        async def _run():
+            # Mirrors what _InteractiveActivityMiddleware does for the real
+            # artifacts-POST request: this generate_artifact call happens
+            # *while* the request is tracked as active foreground traffic.
+            async with track_interactive_request("/api/notebooks/x/artifacts", "POST"):
+                return await artifacts.generate_artifact(nb.id, "own", "faq", s)
+
+        # A short deadline: if the gate-bypass regresses, this call hangs
+        # forever (the default max-wait is 0 = indefinite), so wait_for turns
+        # that hang into a clean test failure instead of a stuck test run.
+        art = await asyncio.wait_for(_run(), timeout=5)
+
+        assert art.kind == "faq"
+        assert s.query(db.NotebookArtifact).filter_by(id=art.id).count() == 1
+    finally:
+        s.close()
+
+
+# --------------------------------------------------------------------------
+# Timeout-exemption predicate (src/notebook_artifacts.is_artifacts_generate_request)
+#
+# Lives here rather than in app.py so it is importable and unit-testable
+# without pulling in the full app module (app.py wires ~40 routers, reads
+# .env, and touches disk at import time).
+# --------------------------------------------------------------------------
+
+def test_artifacts_generate_predicate_matches_post_only():
+    assert artifacts.is_artifacts_generate_request("POST", "/api/notebooks/xyz/artifacts") is True
+    assert artifacts.is_artifacts_generate_request("post", "/api/notebooks/xyz/artifacts") is True
+
+
+def test_artifacts_generate_predicate_rejects_other_methods():
+    assert artifacts.is_artifacts_generate_request("GET", "/api/notebooks/xyz/artifacts") is False
+    assert artifacts.is_artifacts_generate_request("DELETE", "/api/notebooks/xyz/artifacts") is False
+    assert artifacts.is_artifacts_generate_request("PUT", "/api/notebooks/xyz/artifacts") is False
+
+
+def test_artifacts_generate_predicate_rejects_other_paths():
+    # Sources upload/ingest must keep the hard timeout.
+    assert artifacts.is_artifacts_generate_request("POST", "/api/notebooks/xyz/sources") is False
+    # A sub-path (e.g. a future /artifacts/{id} POST) must not match either.
+    assert artifacts.is_artifacts_generate_request("POST", "/api/notebooks/xyz/artifacts/abc") is False
+    # Bare prefix without a notebook id segment.
+    assert artifacts.is_artifacts_generate_request("POST", "/api/notebooks/artifacts") is False
+    assert artifacts.is_artifacts_generate_request("POST", "/api/notebooks//artifacts") is False

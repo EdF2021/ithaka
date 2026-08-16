@@ -17,6 +17,7 @@ runs at workload="background".
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 
 from core.database import Document, Notebook, NotebookArtifact, NotebookSource
@@ -186,6 +187,26 @@ ARTIFACT_KINDS = {
 
 
 # --------------------------------------------------------------------------
+# Request-timeout exemption
+#
+# generate_artifact runs synchronously inside the artifacts-POST request and
+# can legitimately take longer than app.py's REQUEST_HARD_TIMEOUT (45s), so
+# that route needs an exemption from _RequestTimeoutMiddleware. Deliberately
+# narrow (this route only, not a broad "/api/notebooks" prefix): a prefix
+# exemption would also cover source upload/ingest, which should keep the
+# hard timeout. Lives here (not in app.py) so it stays unit-testable without
+# importing the full app module.
+# --------------------------------------------------------------------------
+
+ARTIFACTS_GENERATE_PATH_RE = re.compile(r"^/api/notebooks/[^/]+/artifacts$")
+
+
+def is_artifacts_generate_request(method: str, path: str) -> bool:
+    """True only for POST /api/notebooks/{id}/artifacts."""
+    return (method or "").upper() == "POST" and bool(ARTIFACTS_GENERATE_PATH_RE.match(path or ""))
+
+
+# --------------------------------------------------------------------------
 # Source collection
 # --------------------------------------------------------------------------
 
@@ -304,6 +325,12 @@ async def generate_artifact(
     Raises ValueError for an unknown kind, an unknown/foreign notebook, or a
     notebook without usable sources; RuntimeError when the model returns
     nothing. Endpoint failures propagate from task_llm_call_async.
+
+    Note: db_session is the caller's pooled connection (SessionLocal from
+    routes/notebook_routes.py) and is deliberately held open across the LLM
+    call below, not closed/reopened around it. This is a single-user app on
+    SQLAlchemy's default QueuePool (5 + 10 overflow), so one connection
+    parked for the duration of a generation request is not a starvation risk.
     """
     spec = ARTIFACT_KINDS.get(kind)
     if spec is None:
@@ -325,7 +352,16 @@ async def generate_artifact(
         {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{spec['prompt']}"},
         untrusted_context_message(f"notebook-bronnen: {notebook.name}", source_text),
     ]
-    content = await task_llm_call_async(messages, owner=owner)
+    # This call runs inside the artifacts-POST request itself, which the
+    # interactive-activity middleware already counts as a tracked foreground
+    # request (app.py's _InteractiveActivityMiddleware). The default gate in
+    # task_llm_call_async waits for foreground traffic to go quiet before
+    # running a background-task LLM call - but that wait would be waiting on
+    # this very request's own _ACTIVE_REQUESTS entry to clear, which never
+    # happens until this call returns. wait_for_quiet=False skips that gate:
+    # the gate is for genuine background jobs (scheduler, email pollers),
+    # not for an in-request caller like this one.
+    content = await task_llm_call_async(messages, owner=owner, wait_for_quiet=False)
     content = _strip_think_blocks(content or "").strip()
     if not content:
         raise RuntimeError("Het model gaf een leeg antwoord terug")
