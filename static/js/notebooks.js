@@ -378,20 +378,32 @@ function _setupUploadZone() {
  * app.js's new-chat path: current session → /api/default-chat → the most
  * recent session that has a model. Null when nothing resolves; the session
  * is then created bare (skip_validation) and the user picks a model in chat.
+ *
+ * `endpoint_id` is required, not optional: POST /api/session rejects a raw
+ * endpoint_url without one with 403 "Choose a registered model endpoint" for
+ * every signed-in non-admin (_reject_raw_endpoint_url_for_non_admin,
+ * session_routes.py). /api/sessions does not return endpoint_id at all, so
+ * the two session-derived branches usually fall through to the bare-session
+ * path — which is correct, and mirrors app.js's guard (see
+ * _createDirectChatFromPreferredModel).
  */
+function _usableConfig(cfg) {
+  return !!(cfg && cfg.endpoint_url && cfg.model && cfg.endpoint_id);
+}
+
 async function _resolveChatConfig() {
   const sm = window.sessionModule;
   try {
     const sessions = sm?.getSessions?.() || [];
     const current = sessions.find(s => s.id === sm?.getCurrentSessionId?.());
-    if (current && current.endpoint_url && current.model) return current;
+    if (_usableConfig(current)) return current;
   } catch (_) {}
   try {
     const dc = await _fetchJson(`${API_BASE}/api/default-chat`);
-    if (dc && dc.endpoint_url && dc.model) return dc;
+    if (_usableConfig(dc)) return dc;
   } catch (_) {}
   try {
-    const withModel = (sm?.getSessions?.() || []).filter(s => s.endpoint_url && s.model);
+    const withModel = (sm?.getSessions?.() || []).filter(_usableConfig);
     if (withModel.length) return withModel[0];
   } catch (_) {}
   return null;
@@ -421,9 +433,9 @@ async function _openChat() {
 
     const payload = await _fetchJson(`${API_BASE}/api/session`, { method: 'POST', body: fd });
 
-    // Use the app's own sessions module instance (app.js publishes it on
-    // window) — a dynamic import here would spin up a SECOND module with its
-    // own state, so the sidebar/selection would go out of sync.
+    // Reuse app.js's live sessions instance (published on window), exactly as
+    // dashboard.js does — one obvious instance, and no risk of a duplicate
+    // module record if app.js's import specifier ever grows a ?v= query again.
     const sm = window.sessionModule;
     if (sm?.loadSessions && sm?.selectSession) {
       // The new session must be in the module's list before selectSession

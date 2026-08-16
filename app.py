@@ -891,6 +891,10 @@ async def serve_notes(request: Request):
 async def serve_dashboard(request: Request):
     return await serve_index(request)
 
+@app.get("/notebooks")
+async def serve_notebooks(request: Request):
+    return await serve_index(request)
+
 @app.get("/calendar")
 async def serve_calendar(request: Request):
     return await serve_index(request)
