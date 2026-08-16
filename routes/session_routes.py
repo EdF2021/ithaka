@@ -309,6 +309,9 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                      "has_documents": s.id in doc_session_ids,
                      "has_images": s.id in img_session_ids,
                      "mode": mode_map.get(s.id),
+                     # Notebook-bound sessions render a badge in the chat header
+                     # and hide the RAG toggle, so the list payload must carry it.
+                     "notebook_id": getattr(s, "notebook_id", None),
                      "message_count": msg_count_map.get(s.id, 0)}
                     for s in user_sessions.values()
                     if not s.archived
