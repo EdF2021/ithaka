@@ -1694,6 +1694,8 @@ class Notebook(TimestampMixin, Base):
     archived = Column(Boolean, default=False, nullable=False)
     sources = relationship("NotebookSource", cascade="all, delete-orphan",
                            backref="notebook")
+    artifacts = relationship("NotebookArtifact", cascade="all, delete-orphan",
+                             backref="notebook")
 
     def to_dict(self):
         return {
@@ -1724,6 +1726,25 @@ class NotebookSource(TimestampMixin, Base):
             "status": self.status, "chunk_count": self.chunk_count,
             "error": self.error,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class NotebookArtifact(TimestampMixin, Base):
+    """A generated artifact (e.g. FAQ, summary, podcast) belonging to a Notebook."""
+    __tablename__ = "notebook_artifacts"
+    id = Column(String, primary_key=True)
+    notebook_id = Column(String, ForeignKey("notebooks.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    document_id = Column(String, ForeignKey("documents.id", ondelete="CASCADE"),
+                         nullable=False)
+    kind = Column(String, nullable=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "notebook_id": self.notebook_id,
+            "document_id": self.document_id, "kind": self.kind,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
 
