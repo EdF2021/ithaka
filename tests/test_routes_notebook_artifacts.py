@@ -120,6 +120,32 @@ def test_generate_artifact_unknown_kind_is_400(monkeypatch, ts):
     assert r.status_code == 400
 
 
+def test_generate_artifact_non_dict_json_body_is_400(monkeypatch, ts):
+    """A syntactically valid JSON body that isn't an object (e.g. a bare
+    array) must not 500 on `.get("kind")` - it should fall through to the
+    same unknown-kind 400 as a missing/wrong kind."""
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts", json=[1, 2])
+    assert r.status_code == 400
+
+
+def test_generate_artifact_invalid_json_body_is_400(monkeypatch, ts):
+    """Malformed JSON (request.json() raises) must not 500 either."""
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(
+        f"/api/notebooks/{nb_id}/artifacts",
+        content=b"{not valid json",
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 400
+
+
 def test_generate_artifact_no_sources_is_400_with_message(monkeypatch, ts):
     monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_no_sources)
     c = _client(monkeypatch)

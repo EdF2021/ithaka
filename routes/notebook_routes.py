@@ -128,6 +128,14 @@ def setup_notebook_routes(rag_manager) -> APIRouter:
                  .delete(synchronize_session=False))
             db_session.delete(nb)
             db_session.commit()
+            # Best-effort, same as delete_artifact above: drop any in-memory
+            # active-doc pointers for the artifact Documents just hard-deleted.
+            try:
+                from src.agent_tools.document_tools import clear_active_document
+                for doc_id in artifact_doc_ids:
+                    clear_active_document(doc_id)
+            except Exception:
+                pass
             return {"success": True}
         finally:
             db_session.close()
@@ -228,12 +236,21 @@ def setup_notebook_routes(rag_manager) -> APIRouter:
     @router.post("/api/notebooks/{notebook_id}/artifacts")
     async def create_artifact(request: Request, notebook_id: str):
         user = get_current_user(request)
-        body = await request.json()
-        kind = body.get("kind")
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        kind = body.get("kind") if isinstance(body, dict) else None
         if kind not in ARTIFACT_KINDS:
             raise HTTPException(status_code=400, detail=f"Onbekend artifact-type: {kind}")
         db_session = SessionLocal()
         try:
+            # _get_owned_notebook here + generate_artifact's own owner filter
+            # below is intentional defence-in-depth, not redundancy: this
+            # call gives a clean 404 before any work starts, while
+            # generate_artifact's own check keeps it safe to call directly
+            # (e.g. from a future non-route caller) without relying on the
+            # route to have checked ownership first.
             _get_owned_notebook(db_session, notebook_id, user)
             try:
                 artifact = await generate_artifact(notebook_id, user, kind, db_session)
@@ -250,6 +267,9 @@ def setup_notebook_routes(rag_manager) -> APIRouter:
             except Exception as exc:
                 # LLM/endpoint failure (RuntimeError on an empty answer, or
                 # any error from the endpoint call chain).
+                logger.exception(
+                    "Artifact generation failed for notebook %s (kind=%s)", notebook_id, kind
+                )
                 raise HTTPException(status_code=502, detail=str(exc))
             return artifact.to_dict()
         finally:
@@ -279,6 +299,14 @@ def setup_notebook_routes(rag_manager) -> APIRouter:
             if doc is not None:
                 db_session.delete(doc)
             db_session.commit()
+            # Best-effort: drop the in-memory active-doc pointer so a hard-deleted
+            # artifact Document isn't re-injected into a later chat (#1160), same
+            # as routes/document_routes.py's delete_document.
+            try:
+                from src.agent_tools.document_tools import clear_active_document
+                clear_active_document(artifact.document_id)
+            except Exception:
+                pass
             return {"success": True}
         finally:
             db_session.close()
