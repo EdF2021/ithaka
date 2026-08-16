@@ -1,12 +1,14 @@
 """Chat routes — /api/chat, /api/chat_stream, /api/inject_context, /api/search."""
 
 import asyncio
+import dataclasses
 import json
 import os
 import re
 import time
 import logging
 from datetime import datetime
+from types import MappingProxyType
 from typing import Dict, Any, AsyncGenerator, List, Optional
 
 from fastapi import APIRouter, Request, HTTPException, Form, Query
@@ -40,9 +42,10 @@ from routes.chat_helpers import (
     run_post_response_tasks,
     clean_thinking_for_save,
     _enforce_chat_privileges,
+    _session_notebook_id,
 )
 from src.action_intents import ToolIntent, classify_tool_intent as _classify_tool_intent
-from src.tool_policy import build_effective_tool_policy
+from src.tool_policy import build_effective_tool_policy, known_tool_names
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +137,97 @@ def _is_contextual_web_followup(message: str, sess) -> bool:
     if not message or not _WEB_FOLLOWUP_RE.search(message):
         return False
     return bool(_RECENT_WEB_CONTEXT_RE.search(_recent_session_text(sess)))
+
+
+def _should_escalate_to_agent(
+    sess,
+    chat_mode: str,
+    *,
+    intent_detected: bool = False,
+    wants_web: bool = False,
+    contextual_followup: bool = False,
+) -> bool:
+    """Should this turn be promoted from plain chat to agent mode?
+
+    This only names the conditions that used to sit inline in the chat stream
+    endpoint -- a promotion needs `chat_mode` to be literally "chat" (an unset
+    or already-agent mode never escalates) plus at least one trigger: a
+    tool-needing action intent, an enabled web search, or a contextual web
+    follow-up.
+
+    The one new rule is the notebook veto: a session bound to a notebook must
+    answer strictly from that notebook's sources, so it never gets promoted
+    into the tool-carrying agent path. `sess` may be None at the call sites
+    that run before the session is loaded; the veto is re-applied there once
+    the session is available.
+    """
+    if _session_notebook_id(sess):
+        return False
+    return chat_mode == "chat" and bool(
+        intent_detected or wants_web or contextual_followup
+    )
+
+
+def _apply_notebook_veto(sess, chat_mode: str, auto_escalated: bool, tool_intent):
+    """Undo a chat→agent auto-escalation once the session turns out to be
+    notebook-bound. Returns `(chat_mode, auto_escalated, tool_intent)`.
+
+    The first two escalation sites run before the session is loaded, so
+    `_should_escalate_to_agent` cannot veto there — this is what actually
+    implements the escalation stop for the action-intent and web-toggle
+    triggers.
+
+    Only OUR promotions are undone: `auto_escalated` is False when the user
+    picked agent mode by hand, and rewriting that would be a silent mode change
+    in a case this guard is not about. Such sessions are handled by
+    `_apply_notebook_tool_lockdown` instead.
+
+    The intent is dropped too, and that is load-bearing: a "web" category
+    otherwise sets `_explicit_web_intent`, which deliberately un-disables
+    web_search/web_fetch from the global admin denylist and force-steers the
+    agent loop toward them.
+    """
+    if not (auto_escalated and _session_notebook_id(sess)):
+        return chat_mode, auto_escalated, tool_intent
+    return "chat", False, None
+
+
+_NOTEBOOK_TOOL_REASON = (
+    "This chat answers only from its notebook's sources, so tools are off."
+)
+
+
+def _apply_notebook_tool_lockdown(sess, policy):
+    """Fail-closed tool grendel for notebook-bound sessions.
+
+    Defense in depth behind `_apply_notebook_veto`: a user can still pick agent
+    mode by hand on a notebook session, and that request does reach the agent
+    loop. A denylist alone is not enough there — MCP tools are namespaced
+    dynamically, so `known_tool_names()` cannot enumerate them and
+    `blocks("mcp__x__y")` would return False. Setting `block_all_tool_calls`
+    closes that hole at both enforcement points (src/tool_execution.py and
+    src/agent_loop.py), and `disable_mcp` makes the agent loop drop the MCP
+    manager so the schemas are never even offered.
+
+    The named denylist is kept on top so the prompt builder hides the native
+    tool schemas (it reads `all_disabled_names()`), mirroring what the
+    guide-only path in src/tool_policy.py does — hidden as well as disabled.
+
+    Returns the policy unchanged for non-notebook sessions.
+    """
+    if not _session_notebook_id(sess):
+        return policy
+    names = frozenset(known_tool_names())
+    reasons = dict(policy.reasons)
+    reasons.update({tool: _NOTEBOOK_TOOL_REASON for tool in names})
+    return dataclasses.replace(
+        policy,
+        disabled_tools=policy.disabled_tools | names,
+        hidden_tools=policy.hidden_tools | names,
+        reasons=MappingProxyType(reasons),
+        block_all_tool_calls=True,
+        disable_mcp=True,
+    )
 
 
 def _resolve_request_workspace(request, raw_value) -> tuple:
@@ -457,6 +551,12 @@ def setup_chat_routes(
 
         tool_policy = build_effective_tool_policy(last_user_message=message)
         allow_tool_preprocessing = not tool_policy.block_all_tool_calls
+        # Same notebook lockdown as chat_stream (mirror so the non-streaming
+        # path can't be used to bypass it) — without this, use_research=true on
+        # a notebook session runs a live research call and injects it below.
+        # Applied AFTER allow_tool_preprocessing so notebook retrieval, which is
+        # the whole point of these sessions, still runs.
+        tool_policy = _apply_notebook_tool_lockdown(sess, tool_policy)
 
         # Inline memory command
         memory_response = None
@@ -596,7 +696,14 @@ def setup_chat_routes(
         # shell disabled).
         auto_escalated = False
         _tool_intent = _classify_tool_intent(message) if isinstance(message, str) else None
-        if chat_mode == "chat" and _tool_intent and _tool_intent.needs_tools:
+        # The session is not loaded yet (that happens in the coerce block
+        # below), so pass sess=None here and re-apply the notebook veto once
+        # `sess` exists — see the de-escalation right before the follow-up
+        # check further down.
+        if _should_escalate_to_agent(
+            None, chat_mode,
+            intent_detected=bool(_tool_intent and _tool_intent.needs_tools),
+        ):
             chat_mode = "agent"
             auto_escalated = True
             logger.info(
@@ -604,7 +711,7 @@ def setup_chat_routes(
                 _tool_intent.category,
                 _tool_intent.reason,
             )
-        elif chat_mode == "chat" and _search_enabled:
+        elif _should_escalate_to_agent(None, chat_mode, wants_web=_search_enabled):
             chat_mode = "agent"
             auto_escalated = True
             logger.info("chat→agent auto-escalation: search enabled")
@@ -700,11 +807,25 @@ def setup_chat_routes(
                     400,
                     "No model selected for this chat. Open the model picker and choose one before sending.",
                 )
-            if (
+            # `sess` is loaded now, so the notebook veto can finally be applied
+            # to the two escalations above (see _apply_notebook_veto).
+            _was_escalated = auto_escalated
+            chat_mode, auto_escalated, _tool_intent = _apply_notebook_veto(
+                sess, chat_mode, auto_escalated, _tool_intent,
+            )
+            if _was_escalated and not auto_escalated:
+                logger.info(
+                    "notebook session %s: chat→agent auto-escalation reverted",
+                    _session_notebook_id(sess),
+                )
+            _contextual_followup = (
                 chat_mode == "chat"
                 and isinstance(message, str)
                 and (not _tool_intent or not _tool_intent.needs_tools)
                 and _is_contextual_web_followup(message, sess)
+            )
+            if _should_escalate_to_agent(
+                sess, chat_mode, contextual_followup=_contextual_followup,
             ):
                 _tool_intent = ToolIntent(True, "web", "contextual web lookup follow-up")
                 chat_mode = "agent"
@@ -1013,6 +1134,12 @@ def setup_chat_routes(
             last_user_message=message,
             allowed_tools=_plan_mode_allowed_tools,
         )
+        # Notebook-bound sessions answer strictly from that notebook's sources.
+        # _apply_notebook_veto already keeps them off the agent path, but a user
+        # can pick agent mode by hand — block every tool call, MCP included.
+        tool_policy = _apply_notebook_tool_lockdown(sess, tool_policy)
+        if tool_policy.block_all_tool_calls and _session_notebook_id(sess):
+            logger.info("notebook session %s: all tools blocked", _session_notebook_id(sess))
         disabled_tools = tool_policy.all_disabled_names()
         research_blocked_by_policy = bool(
             tool_policy.blocks("trigger_research")
@@ -1423,11 +1550,15 @@ def setup_chat_routes(
                         _max_rounds = _DEFAULT_ROUNDS
                     _max_rounds = max(1, min(_max_rounds, 200))
 
+                    # Never steer a notebook session toward web tools: the
+                    # policy blocks them, so forcing them only produces a round
+                    # of refused tool calls.
                     _forced_tools = None
-                    if _explicit_web_intent:
-                        _forced_tools = {"web_search", "web_fetch"}
-                    elif _search_enabled:
-                        _forced_tools = {"web_search", "web_fetch"}
+                    if not _session_notebook_id(sess):
+                        if _explicit_web_intent:
+                            _forced_tools = {"web_search", "web_fetch"}
+                        elif _search_enabled:
+                            _forced_tools = {"web_search", "web_fetch"}
 
                     async for chunk in stream_agent_loop(
                         sess.endpoint_url,

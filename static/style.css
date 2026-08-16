@@ -222,6 +222,17 @@ body.bg-pattern-sparkles {
   /* canvas-only backgrounds */
 }
 
+/* Dageraad-gloed — CSS-only ambient: a warm horizon glow rising from the
+   bottom of the viewport into the night-blue theme background. Abstract
+   light only (no sun disc), fixed alpha so it stays subtle/AA-safe
+   regardless of the intensity slider (see _STATIC_PATTERNS in theme.js). */
+body.bg-pattern-dageraad-gloed {
+  background-image:
+    radial-gradient(ellipse 140% 60% at 50% 100%, rgba(240, 168, 104, 0.16) 0%, transparent 65%),
+    radial-gradient(ellipse 120% 50% at 50% 100%, rgba(215, 122, 140, 0.10) 0%, transparent 60%);
+  background-attachment: fixed;
+}
+
 
 /* ── Layout ── */
 
@@ -8214,8 +8225,8 @@ button.hamburger {
 
 /* Agent UI Styling */
 .agent-controls {
-  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-  border: 1px solid #dee2e6;
+  background: var(--panel);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
@@ -8245,8 +8256,8 @@ button.hamburger {
 }
 
 .agent-progress {
-  background: #ffebee;
-  border: 1px solid #ef9a9a;
+  background: color-mix(in srgb, var(--red) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
   border-radius: 6px;
   padding: 12px;
   margin: 8px 0;
@@ -8274,7 +8285,7 @@ button.hamburger {
 }
 
 .workflow-info {
-  background: #f8f9fa;
+  background: var(--panel);
   border: 1px solid var(--red);
   border-radius: 6px;
   padding: 8px 12px;
@@ -40449,4 +40460,587 @@ body.theme-frosted .modal {
 @media (max-width: 768px) {
   .compare-grid[data-cols] { grid-template-columns: 1fr !important; overflow-y: auto; }
   .compare-pane { min-height: 60dvh; }
+}
+
+/* ── Dashboard (Home) start page ─────────────────────────────────────────
+   Card grid overview: today / automations / mail / recent sessions / models
+   plus a quick-actions row. Uses existing tokens only. */
+.dashboard-modal-content {
+  width: min(860px, 94vw);
+  max-width: 860px;
+  background: var(--bg);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: 86dvh;
+}
+.dashboard-body { overflow-y: auto; }
+.dashboard-autoopen-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  opacity: 0.75;
+  margin-right: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.dashboard-autoopen-toggle input { margin: 0; }
+.dashboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.dashboard-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dashboard-action-btn:hover { border-color: var(--fg); }
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+.dashboard-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 90px;
+  min-width: 0;
+}
+.dashboard-card-clickable { cursor: pointer; }
+.dashboard-card-clickable:hover { border-color: var(--fg); }
+.dashboard-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: bold;
+  margin-bottom: 8px;
+  opacity: 0.85;
+}
+.dashboard-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+  min-width: 0;
+}
+.dashboard-row-time {
+  color: var(--color-accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.dashboard-row-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dashboard-row-sub {
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+.dashboard-clickable { cursor: pointer; }
+.dashboard-clickable:hover .dashboard-row-main { color: var(--green); }
+.dashboard-empty { color: var(--color-muted); font-style: italic; }
+.dashboard-count-big { font-size: 26px; color: var(--green); line-height: 1.2; }
+.dashboard-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.dashboard-chip {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.dashboard-chip-offline { color: var(--color-muted); border-style: dashed; }
+/* Narrow viewports: single-column stack, near-full-width window. */
+@media (max-width: 700px) {
+  .dashboard-modal-content { width: 96vw; }
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Dageraad theme-scoped layout ────────────────────────────────────────
+   Fase 2 of the Dageraad port: layout-polish (spacing/radius/type-scale)
+   scoped to the Dageraad preset only, so the default UI stays pixel-
+   identical. Bubble/panel/input colors and the ambient pattern are already
+   set by the fase-1 preset tokens (theme.js) — this block only touches
+   sizing. `[data-theme="dageraad"]` is set on <html> at every theme apply,
+   including first paint (see test_theme_identity_hook_present). */
+
+/* Messages — more breathing room, slightly larger body copy. The
+   asymmetric 18px-family bubble radius is already the base-CSS default
+   (.msg-user / .msg-ai), so it is intentionally left alone here. Note:
+   this is byte-identical to :root.density-spacious .msg (r161) and, being
+   a higher-specificity attribute selector, also wins over
+   :root.density-compact .msg (r157) — Dageraad pins message spacing and
+   intentionally overrides the compact density on this one property. */
+:root[data-theme="dageraad"] .msg {
+  padding: 14px 18px;
+}
+:root[data-theme="dageraad"] .msg .body {
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+/* Composer — rounder shell, roomier padding, amber focus glow. The
+   composer's resting border already tracks --input-border/--border; only
+   the focus state gets the Dageraad accent. #F0A868 is the same amber the
+   fase-1 preset already hardcodes for the dageraad-gloed ambient pattern
+   (body.bg-pattern-dageraad-gloed, above) and for sendBtnBg/brandColor in
+   theme.js — kept literal here to match that existing precedent.
+   Radius/padding are desktop-only (min-width: 769px, mirroring the modal
+   geometry precedent below): the mobile `.chat-input-bar` rule at ~r4588
+   sets `padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px))` for
+   notched phones, same specificity as an unscoped rule here would have —
+   scoping to desktop keeps that safe-area padding intact on mobile. The
+   textarea font-size and focus glow have no mobile counterpart, so they
+   stay unscoped. */
+@media (min-width: 769px) {
+  :root[data-theme="dageraad"] .chat-input-bar {
+    border-radius: 18px;
+    padding: 12px 16px;
+  }
+}
+:root[data-theme="dageraad"] .chat-input-bar textarea#message {
+  font-size: 15px;
+}
+:root[data-theme="dageraad"] .chat-input-bar:focus-within {
+  border-color: #F0A868;
+  box-shadow: 0 0 0 3px rgba(240, 168, 104, 0.25);
+}
+
+/* Modals — softer corners, roomier padding, desktop only (mirrors the
+   min-width: 769px scoping already used for modal geometry, r5272). On
+   mobile, `.modal-content` becomes an edge-to-edge bottom sheet with a
+   flat top (border-radius: 14px 14px 0 0, ~r6976) and a safe-area
+   `padding-top` — an unscoped rule here would out-specificity that sheet
+   styling regardless of viewport (attribute selector beats a plain class)
+   and round off the sheet's top corners / reset its padding. The
+   :root.ui-scale-125 max-height compensations (see top of file) operate on
+   max-height only and are unaffected by this padding/radius change. */
+@media (min-width: 769px) {
+  :root[data-theme="dageraad"] .modal-content {
+    border-radius: 18px;
+    padding: 16px;
+  }
+}
+
+/* Dashboard — bigger radius/padding; cards light up on hover (background +
+   border tint) instead of just swapping border color, per the Dageraad
+   convention of things brightening rather than tilting/transforming. */
+:root[data-theme="dageraad"] .dashboard-card {
+  border-radius: 14px;
+  padding: 14px 16px;
+  transition: background 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+:root[data-theme="dageraad"] .dashboard-card-clickable:hover {
+  border-color: #F0A868;
+  background: color-mix(in srgb, #F0A868 8%, var(--panel));
+}
+:root[data-theme="dageraad"] .dashboard-modal-content {
+  font-size: 13px;
+}
+
+/* Sidebar — slightly larger session-title text; section headers get a
+   touch more letter-spacing. Widths are untouched. */
+:root[data-theme="dageraad"] .list-item span {
+  font-size: 11px;
+}
+:root[data-theme="dageraad"] .section-header-flex h4,
+:root[data-theme="dageraad"] .section-header-flex .section-title {
+  letter-spacing: 0.02em;
+}
+
+/* ── Dageraad intro choreography ─────────────────────────────────────────
+   Fase 3 of the Dageraad port: the cinematic load-time intro, built and
+   played only by static/js/dageraadIntro.js (only under the Dageraad theme,
+   only without prefers-reduced-motion, only once per page load). Every
+   selector below is scoped to classes that module creates — `.dageraad-
+   intro-overlay` is never present in markup unless that module built it.
+   Timeline: warm (~0.2s) → title (~0.6s) → collapse/FLIP (~1.3s) → done
+   (~2.2s), ~2.6s to fully settle. Amber/rose match the existing fase-1
+   preset tokens (theme.js sendBtnBg/brandColor, the dageraad-gloed ambient
+   pattern above) — kept literal here to match that precedent. */
+.dageraad-intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  overflow: hidden;
+  background: #050B14;
+  opacity: 1;
+}
+.dageraad-intro-sky {
+  position: absolute;
+  left: -15%;
+  right: -15%;
+  bottom: 0;
+  height: 140%;
+  opacity: 0;
+  transform: translateY(25%);
+  background: radial-gradient(58% 52% at 50% 100%,
+    rgba(240, 168, 104, 0.9) 0%, rgba(240, 168, 104, 0.5) 22%,
+    rgba(215, 122, 140, 0.35) 44%, rgba(215, 122, 140, 0.08) 62%,
+    rgba(5, 11, 20, 0) 78%);
+  transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.8s ease;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-warm .dageraad-intro-sky {
+  opacity: 0.95;
+  transform: translateY(0);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-sky {
+  opacity: 0.35;
+  transform: translateY(-18%);
+  transition: transform 0.9s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.9s ease;
+}
+.dageraad-intro-horizon {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 14vh;
+  height: 2px;
+  border-radius: 2px;
+  opacity: 0.5;
+  background: linear-gradient(90deg, rgba(240, 168, 104, 0), rgba(240, 168, 104, 0.85),
+    rgba(215, 122, 140, 0.6), rgba(240, 168, 104, 0));
+  box-shadow: 0 0 18px 3px rgba(240, 168, 104, 0.3), 0 0 60px 14px rgba(215, 122, 140, 0.15);
+  transition: opacity 0.7s ease;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-warm .dageraad-intro-horizon {
+  opacity: 0.9;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-horizon {
+  opacity: 0;
+}
+.dageraad-intro-center {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.dageraad-intro-title {
+  display: block;
+  font-size: clamp(40px, 8vw, 72px);
+  font-weight: 600;
+  letter-spacing: 0.045em;
+  line-height: 1.1;
+  color: #EDF2F8;
+  text-shadow: 0 2px 40px rgba(5, 11, 20, 0.6);
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.55s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-title .dageraad-intro-title {
+  opacity: 1;
+  transform: translateY(0);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-title {
+  transform: translate(var(--dageraad-intro-tx, 0px), var(--dageraad-intro-ty, -32vh))
+    scale(var(--dageraad-intro-scale, 0.26));
+  transition: transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-title.dageraad-intro-title-fade-only {
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.45s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-done .dageraad-intro-title {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.dageraad-intro-tagline {
+  display: block;
+  margin-top: 12px;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: #8FA0B5;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.5s ease 0.15s, transform 0.55s cubic-bezier(0.22, 1, 0.36, 1) 0.15s;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-title .dageraad-intro-tagline {
+  opacity: 1;
+  transform: translateY(0);
+}
+.dageraad-intro-overlay.dageraad-intro-phase-collapse .dageraad-intro-tagline {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.3s ease, transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Overlay itself fades away starting at the collapse phase, revealing the
+   workspace underneath while the title is still mid-morph — not held back
+   until "done", which only finalizes/hides it. */
+.dageraad-intro-overlay.dageraad-intro-phase-collapse {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.9s ease;
+}
+.dageraad-intro-overlay.dageraad-intro-phase-done {
+  visibility: hidden;
+}
+
+/* The workspace's own subtle reveal, triggered on <body> once the overlay
+   starts fading (collapse phase) so the app looks like it settles into
+   place underneath rather than just popping into view. Removed again once
+   the intro finishes (dageraadIntro.js cleanup). */
+@keyframes dageraad-intro-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+body.dageraad-intro-reveal .icon-rail,
+body.dageraad-intro-reveal .sidebar,
+body.dageraad-intro-reveal .chat-container {
+  animation: dageraad-intro-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+body.dageraad-intro-reveal .sidebar { animation-delay: 70ms; }
+body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
+
+/* Replay entry point in the theme popup — only meaningful under Dageraad.
+   Reuses the existing Peek pill's visual language (.theme-opacity-wrap):
+   same pill shape, border, hover — no new colors introduced. */
+.dageraad-intro-replay-btn {
+  display: none;
+}
+:root[data-theme="dageraad"] .dageraad-intro-replay-btn {
+  display: inline-flex;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dageraad-intro-overlay { display: none; }
+}
+
+/* ── Notebooks (bounded source sets) ─────────────────────────────────────
+   Two views in one window: a card grid of notebooks (reusing .dashboard-grid
+   / .dashboard-card) and a detail view whose source rows are plain
+   .list-item rows. Only the handful of rules below exist because no current
+   class covers them: the window sizing, the create form, the upload zone,
+   the status pill and the inline "Sure?" confirm state. Tokens only — no
+   new colors or font sizes. */
+.notebooks-modal-content {
+  width: min(760px, 94vw);
+  max-width: 760px;
+  background: var(--bg);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  max-height: 86dvh;
+}
+.notebooks-body { overflow-y: auto; }
+
+/* List view — create row */
+.notebook-newform {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.notebook-newform .notebook-input { width: auto; flex: 1 1 180px; min-width: 0; margin-top: 0; height: 28px; }
+.notebook-newform .dashboard-action-btn { flex-shrink: 0; }
+
+/* Shared inline error line — empty (and therefore invisible) until a fetch
+   fails, so it never reserves space in the happy path. */
+.notebook-error {
+  color: var(--red);
+  margin-bottom: 8px;
+}
+.notebook-error:empty { display: none; }
+
+/* Cards */
+.notebook-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notebook-card-desc {
+  max-width: 100%;
+  margin-bottom: 6px;
+}
+.notebook-card-desc:empty { display: none; }
+.notebook-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notebook-del-btn,
+.notebook-src-del {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  color: var(--color-muted);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.notebook-del-btn:hover,
+.notebook-src-del:hover { color: var(--red); border-color: var(--border); }
+/* Armed state of the two-step delete (label reads "Sure?"); a second click
+   within 5s commits. Deliberately not window.confirm — that blocks browser
+   automation. */
+.notebook-confirm-armed,
+.notebook-confirm-armed:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+/* Detail view */
+.notebook-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.notebook-open-chat-btn { border-color: var(--fg); }
+.notebook-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+.notebook-detail-desc { max-width: 100%; margin-bottom: 8px; }
+.notebook-upload-zone {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px 12px;
+  margin-bottom: 10px;
+  text-align: center;
+  color: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.notebook-upload-zone:hover,
+.notebook-upload-zone.dragover { border-color: var(--fg); color: var(--fg); }
+
+/* Source rows — .list-item supplies the row chrome; these only lay it out. */
+.notebook-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notebook-source-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notebook-source-chunks { flex-shrink: 0; }
+.notebook-status {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Failed sources carry their error in title= (hover tooltip). */
+.notebook-status-failed { color: var(--red); border-color: var(--red); }
+
+@media (max-width: 700px) {
+  .notebooks-modal-content { width: 96vw; }
+  .notebook-newform .notebook-input { flex-basis: 100%; }
+}
+
+/* Dageraad — the notebook cards are .dashboard-card/.dashboard-card-clickable,
+   so the theme's radius/padding/brighten-on-hover rules already cover them.
+   Only the two containers that have no dashboard equivalent need a mirror:
+   the window's type scale and the dropzone's softer corners/padding. */
+:root[data-theme="dageraad"] .notebooks-modal-content { font-size: 13px; }
+:root[data-theme="dageraad"] .notebook-upload-zone { border-radius: 14px; padding: 16px 14px; }
+/* ── Notebook citations (Task 8) ───────────────────────────────────────────
+   Notebook answers cite their sources inline as [1], [2], … . The markers are
+   rendered as anchors to #document-<id> and routed by the chat click-delegate,
+   so they must read as links without shouting over the prose. */
+.cite-ref {
+  color: var(--red);
+  text-decoration: none;
+  font-size: 0.85em;
+  vertical-align: super;
+  line-height: 0;
+  padding: 0 1px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cite-ref:hover,
+.cite-ref:focus-visible {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  text-decoration: underline;
+}
+
+/* [n] label on each row of the RAG sources box — matches the inline markers. */
+.rag-source-index {
+  color: color-mix(in srgb, var(--fg) 55%, transparent);
+  font-size: 10px;
+}
+
+/* "notebook" badge next to the chat title for notebook-bound sessions. */
+.notebook-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* Notebook-bound sessions: the backend forces retrieval on, so the RAG toggle
+   would be a control that does nothing. Hidden via a body class rather than an
+   inline style because app.js `_syncRagIndicator` writes
+   `#rag-indicator-btn.style.display` from /rag, the click handlers and
+   ui_control events — !important is what keeps those from re-showing it. */
+body.notebook-session #overflow-rag-btn,
+body.notebook-session #rag-indicator-btn {
+  display: none !important;
+}
+
+/* Chat title: the name truncates, the notebook badge does not. #current-meta is
+   the flex container (it keeps its own overflow clip); .chat-title-text carries
+   the ellipsis and .notebook-badge refuses to shrink, so a long notebook name
+   can no longer push the badge out of view on a narrow header. */
+.chat-meta-overlay #current-meta {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.chat-meta-overlay #current-meta .chat-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }

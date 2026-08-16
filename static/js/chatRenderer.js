@@ -975,10 +975,67 @@ export function buildSourcesBox(sources, type, expanded) {
 }
 
 /**
+ * 1-based citation number for a rag_sources entry. The backend sends an
+ * explicit `index`; fall back to array position for older/persisted payloads.
+ */
+export function ragSourceIndex(source, position) {
+  var n = source && source.index;
+  return (typeof n === 'number' && n > 0) ? n : (position + 1);
+}
+
+/**
+ * Turn inline `[n]` citation markers into links to the cited document.
+ *
+ * Notebook answers cite their sources as `[1]`, `[2]`, … . Each number maps to
+ * the rag_sources entry with that `index`; when that entry carries a
+ * `document_id` the marker becomes `<a href="#document-<id>" class="cite-ref">`,
+ * which the existing chat click-delegate routes to document.js. Numbers without
+ * a matching source (or without a document_id) stay plain text — a bracketed
+ * number in ordinary prose must not turn into a dead link.
+ *
+ * Two things it deliberately never touches:
+ *  - `<pre>`/`<code>` segments (a `[0]` in a code sample is not a citation);
+ *  - HTML that already contains `cite-ref`, so a re-render (regenerate,
+ *    continue-merge, history reload) cannot nest anchors inside anchors.
+ *
+ * @param {string} html rendered assistant HTML
+ * @param {Array<{document_id?, index?}>} sources rag_sources for this message
+ * @returns {string} html with citation markers linkified
+ */
+export function linkifyCitations(html, sources) {
+  if (!html || !sources || !sources.length) return html;
+  var str = String(html);
+  if (str.indexOf('cite-ref') !== -1) return str;  // already linkified
+  var esc = uiModule.esc;
+  var byIndex = {};
+  var any = false;
+  for (var i = 0; i < sources.length; i++) {
+    var s = sources[i] || {};
+    if (!s.document_id) continue;
+    byIndex[ragSourceIndex(s, i)] = String(s.document_id);
+    any = true;
+  }
+  if (!any) return str;
+  // Split on code segments: String.split keeps the captured delimiters, so the
+  // odd-numbered parts are the untouchable code blocks.
+  var parts = str.split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/i);
+  for (var p = 0; p < parts.length; p += 2) {
+    parts[p] = parts[p].replace(/\[(\d{1,2})\]/g, function(match, num) {
+      var docId = byIndex[Number(num)];
+      if (!docId) return match;
+      return '<a href="#document-' + esc(docId) + '" class="cite-ref">' + match + '</a>';
+    });
+  }
+  return parts.join('');
+}
+
+/**
  * Build the RAG "Sources (N documents)" box — mirrors the live render in
  * chat.js so persisted rag_sources survive a refresh. Items carry a
  * filename, similarity %, and snippet (not URLs, unlike web sources).
- * @param {Array<{filename, similarity, snippet}>} sources
+ * Each row is prefixed with its `[n]` so the inline citations in the answer
+ * can be matched back to a source by eye.
+ * @param {Array<{filename, similarity, snippet, index}>} sources
  */
 export function buildRagSourcesBox(sources) {
   if (!sources || !sources.length) return '';
@@ -987,7 +1044,16 @@ export function buildRagSourcesBox(sources) {
   for (var i = 0; i < sources.length; i++) {
     var s = sources[i] || {};
     var pct = (typeof s.similarity === 'number') ? (s.similarity * 100).toFixed(1) + '%' : '';
-    items += '<div class="rag-source-item"><strong>' + esc(s.filename || '') + '</strong>'
+    // Only when the backend actually sent an index. Messages persisted before
+    // notebooks existed carry no index, and a position-based [n] there would
+    // label rows that nothing in the answer body cites — their rendering must
+    // stay byte-for-byte what it was.
+    var idxLabel = (typeof s.index === 'number' && s.index > 0)
+      ? '<span class="rag-source-index">[' + s.index + ']</span> '
+      : '';
+    items += '<div class="rag-source-item">'
+      + idxLabel
+      + '<strong>' + esc(s.filename || '') + '</strong>'
       + (pct ? ' <span class="rag-similarity">' + pct + '</span>' : '')
       + '<div class="rag-snippet">' + esc(s.snippet || '') + '</div></div>';
   }
@@ -2316,7 +2382,13 @@ export function addMessage(role, content, modelName, metadata) {
           if (isLastTextRound && metadata?.rag_sources?.length) {
             agentFindingsSuffix += buildRagSourcesBox(metadata.rag_sources);
           }
-          body.innerHTML = agentSourcesPrefix + markdownModule.processWithThinking(markdownModule.squashOutsideCode(txt)) + agentFindingsSuffix;
+          // Linkify only the reply body — the sources box already carries its
+          // own literal [n] labels and must not be rewritten into links.
+          var agentBodyHtml = markdownModule.processWithThinking(markdownModule.squashOutsideCode(txt));
+          if (isLastTextRound && metadata?.rag_sources?.length) {
+            agentBodyHtml = linkifyCitations(agentBodyHtml, metadata.rag_sources);
+          }
+          body.innerHTML = agentSourcesPrefix + agentBodyHtml + agentFindingsSuffix;
           wrap.appendChild(body);
           wrap.dataset.raw = txt;
           if (metadata?._db_id) wrap.dataset.dbId = metadata._db_id;
@@ -2515,12 +2587,18 @@ export function addMessage(role, content, modelName, metadata) {
     // If thinking is stored in metadata (not in text), reconstruct the full display
     if (role === 'assistant' && metadata?.thinking) {
       const thinkTime = metadata.thinking_time || null;
-      const thinkHtml = markdownModule.processWithThinking(
+      let thinkHtml = markdownModule.processWithThinking(
         '<think' + (thinkTime ? ` time="${thinkTime}"` : '') + '>' + metadata.thinking + '</think>\n\n' + text
       );
+      // Linkify the reply body only — never the sources box (own [n] labels).
+      if (metadata?.rag_sources?.length) thinkHtml = linkifyCitations(thinkHtml, metadata.rag_sources);
       b.innerHTML = sourcesPrefix + thinkHtml + findingsSuffix;
 	    } else {
-	      b.innerHTML = sourcesPrefix + markdownModule.processWithThinking(text) + findingsSuffix;
+	      let bodyHtml = markdownModule.processWithThinking(text);
+	      if (role === 'assistant' && metadata?.rag_sources?.length) {
+	        bodyHtml = linkifyCitations(bodyHtml, metadata.rag_sources);
+	      }
+	      b.innerHTML = sourcesPrefix + bodyHtml + findingsSuffix;
 	    }
 	    b.dataset.raw = text;
 
@@ -2750,6 +2828,9 @@ const chatRenderer = {
   renderAskUserCard,
   buildSourcesBox,
   buildFindingsBox,
+  buildRagSourcesBox,
+  ragSourceIndex,
+  linkifyCitations,
   appendReportButton,
   buildImageBubble,
   hideWelcomeScreen,

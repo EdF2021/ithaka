@@ -340,7 +340,13 @@ class VectorRAG:
     # Search — hybrid: vector similarity + keyword overlap
     # ------------------------------------------------------------------
 
-    def search(self, query: str, k: int = 5, owner: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        k: int = 5,
+        owner: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         if not self.healthy:
             return []
         if not query or not isinstance(query, str):
@@ -349,7 +355,17 @@ class VectorRAG:
             return []
 
         try:
-            where_filter = {"owner": owner} if owner else None
+            conditions = []
+            if owner:
+                conditions.append({"owner": owner})
+            if notebook_id:
+                conditions.append({"notebook_id": notebook_id})
+            if len(conditions) > 1:
+                where_filter = {"$and": conditions}
+            elif conditions:
+                where_filter = conditions[0]
+            else:
+                where_filter = None
             query_words = set(query.lower().split())
             candidates = []
 
@@ -395,9 +411,15 @@ class VectorRAG:
 
         except Exception as e:
             logger.error(f"search failed: {e}")
-            return self._keyword_search_fallback(query, k, owner=owner)
+            return self._keyword_search_fallback(query, k, owner=owner, notebook_id=notebook_id)
 
-    def _keyword_search_fallback(self, query: str, k: int = 5, owner: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _keyword_search_fallback(
+        self,
+        query: str,
+        k: int = 5,
+        owner: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         try:
             if not self._active_collections():
                 return []
@@ -413,6 +435,8 @@ class VectorRAG:
                 for i, doc in enumerate(all_docs["documents"]):
                     meta = all_docs["metadatas"][i]
                     if owner and meta.get("owner") != owner:
+                        continue
+                    if notebook_id and meta.get("notebook_id") != notebook_id:
                         continue
                     doc_lower = doc.lower()
                     score = sum(1 for w in query_words if w in doc_lower)
@@ -582,6 +606,39 @@ class VectorRAG:
             return {"success": True, "removed_count": n, "message": f"Removed {n} chunks"}
         except Exception as e:
             logger.error(f"remove_directory {directory}: {e}")
+            return {"success": False, "message": str(e)}
+
+    def remove_notebook(self, notebook_id: str, document_id: Optional[str] = None) -> Dict[str, Any]:
+        """Remove chunks tagged with ``notebook_id`` (optionally scoped to one ``document_id``).
+
+        Same Python-side metadata-filter shape as remove_directory: fetch each
+        active lane's ids/metadatas, select by exact ``notebook_id`` match
+        (and ``document_id`` match when given), then delete just those ids.
+        """
+        if not self.healthy:
+            return {"success": False, "message": "Collection not initialized"}
+        try:
+            removed_ids = set()
+            for _lane_name, collection in self._collections_for_delete():
+                results = collection.get(include=["metadatas"])
+                ids = [
+                    results["ids"][i]
+                    for i, m in enumerate(results["metadatas"])
+                    if isinstance(m, dict)
+                    and m.get("notebook_id") == notebook_id
+                    and (document_id is None or m.get("document_id") == document_id)
+                ]
+                if ids:
+                    collection.delete(ids=ids)
+                    removed_ids.update(ids)
+            if not removed_ids:
+                return {"success": True, "removed_count": 0, "message": "No docs found"}
+
+            n = len(removed_ids)
+            logger.info(f"Removed {n} chunks for notebook {notebook_id}")
+            return {"success": True, "removed_count": n, "message": f"Removed {n} chunks"}
+        except Exception as e:
+            logger.error(f"remove_notebook {notebook_id}: {e}")
             return {"success": False, "message": str(e)}
 
     def reindex_directory(

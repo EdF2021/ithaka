@@ -706,6 +706,10 @@ app.include_router(setup_cleanup_routes(session_manager))
 from routes.personal_routes import setup_personal_routes
 app.include_router(setup_personal_routes(personal_docs_mgr, rag_manager, rag_available))
 
+# Notebooks (bounded, sources-only source sets for strict-chat)
+from routes.notebook_routes import setup_notebook_routes
+app.include_router(setup_notebook_routes(rag_manager))
+
 # Embedding model management
 from routes.embedding_routes import setup_embedding_routes
 app.include_router(setup_embedding_routes())
@@ -807,6 +811,14 @@ set_mcp_manager(mcp_manager)
 app.include_router(setup_mcp_routes(mcp_manager))
 logger.info("MCP routes initialized")
 
+# Plugins (installable bundles: skills + MCP server configs, admin-only)
+from services.plugins import PluginManager
+from routes.plugin_routes import setup_plugin_routes
+
+plugin_manager = PluginManager(skills_manager)
+app.include_router(setup_plugin_routes(plugin_manager))
+logger.info("Plugin routes initialized")
+
 # AI Interaction tools (debates, pipelines, self-managing AI, UI control)
 from src.ai_interaction import set_session_manager as set_ai_session_manager, set_memory_manager as set_ai_memory_manager, set_rag_manager as set_ai_rag_manager
 set_ai_session_manager(session_manager)
@@ -873,6 +885,14 @@ async def serve_index(request: Request):
 
 @app.get("/notes")
 async def serve_notes(request: Request):
+    return await serve_index(request)
+
+@app.get("/dashboard")
+async def serve_dashboard(request: Request):
+    return await serve_index(request)
+
+@app.get("/notebooks")
+async def serve_notebooks(request: Request):
     return await serve_index(request)
 
 @app.get("/calendar")

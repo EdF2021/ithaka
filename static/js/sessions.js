@@ -263,12 +263,82 @@ let _researchPollTimer = null;
 // Session list keyboard navigation state
 let _sessionListFocused = false;
 
+/**
+ * Notebook-bound sessions answer strictly from that notebook's sources — the
+ * backend forces retrieval on regardless of the RAG toggle, so leaving the
+ * toggle visible would show a control that does nothing.
+ *
+ * The hide is a class on <body>, not an inline style, on purpose:
+ * `_syncRagIndicator` in static/app.js writes `#rag-indicator-btn.style.display`
+ * directly (from page-load init, the two button click handlers, `/rag on|off`
+ * and model-emitted `ui_control` events). An inline hide would be undone by any
+ * of those mid-session, and stashing the previous inline value goes stale the
+ * moment they run. A `!important` CSS rule keyed on the class beats every one of
+ * those writes and needs no restore bookkeeping at all.
+ */
+function _syncNotebookToolVisibility(meta) {
+  document.body.classList.toggle('notebook-session', !!(meta && meta.notebook_id));
+}
+
+/**
+ * Paint the chat-header title for a session. Notebook-bound sessions get a
+ * small "notebook" badge so it is visible that the answers are limited to that
+ * notebook's sources. Pass null/undefined for "no session selected".
+ *
+ * The title text lives in an inner `.chat-title-text` span that carries the
+ * ellipsis, so a long notebook name truncates instead of clipping the badge off
+ * the end (#current-meta itself is the flex container). The span is only created
+ * when there is text, so an empty title still leaves #current-meta `:empty` —
+ * style.css hides the whole overlay on that selector.
+ */
+function _setChatMetaTitle(meta) {
+  const metaEl = uiModule.el('current-meta');
+  if (metaEl) {
+    const title = meta ? (meta.name || '') : 'Ithaka Chat';
+    metaEl.textContent = '';
+    if (title) {
+      const titleEl = document.createElement('span');
+      titleEl.className = 'chat-title-text';
+      titleEl.textContent = title;
+      metaEl.appendChild(titleEl);
+    }
+    if (meta && meta.notebook_id) {
+      const badge = document.createElement('span');
+      badge.className = 'notebook-badge';
+      badge.textContent = 'notebook';
+      badge.title = 'Answers use only this notebook\'s sources';
+      metaEl.appendChild(badge);
+    }
+  }
+  _syncNotebookToolVisibility(meta);
+}
+
+/**
+ * Repaint the chat header for whatever session is current. For any code outside
+ * this module that needs to put the header back (the header rename in app.js
+ * cancelling, committing, or blurring unchanged): writing
+ * `#current-meta`.textContent directly would flatten the title span and the
+ * notebook badge into one bare text node, so route it through here instead.
+ *
+ * `fallbackName` covers the case where the current session isn't in the list
+ * yet (a pending chat that has never been materialized) — without it the header
+ * would drop back to "Ithaka Chat".
+ */
+export function refreshChatMetaTitle(fallbackName) {
+  const meta = currentSessionId ? sessions.find(s => s.id === currentSessionId) : null;
+  if (!meta && fallbackName) {
+    _setChatMetaTitle({ name: fallbackName });
+    return;
+  }
+  _setChatMetaTitle(meta || null);
+}
+
 /** Clear current session from UI (after delete/archive). */
 function _deselectCurrentSession(sid) {
   if (currentSessionId !== sid) return;
   currentSessionId = null;
   uiModule.el('chat-history').innerHTML = '';
-  uiModule.el('current-meta').textContent = 'Ithaka Chat';
+  _setChatMetaTitle(null);
   Storage.remove('lastSessionId');
   history.replaceState(null, '', window.location.pathname);
   if (window.chatModule && window.chatModule.showWelcomeScreen) {
@@ -1724,8 +1794,7 @@ export async function loadSessions() {
     } else if (targetId && targetId === currentSessionId) {
       // Same session — just refresh the header name in case it was auto-generated
       const s = sessions.find(x => x.id === targetId);
-      const metaEl = document.getElementById('current-meta');
-      if (metaEl && s) metaEl.textContent = s.name;
+      if (s) _setChatMetaTitle(s);
     }
 
     // No session selected — still enable input so slash commands (e.g. /setup) work
@@ -1853,10 +1922,7 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
     const activeEl = document.querySelector(`.list-item[data-session-id="${id}"]`);
     if (activeEl) activeEl.classList.add('active-session');
 
-    const currentMetaEl = uiModule.el('current-meta');
-    if (currentMetaEl) {
-      currentMetaEl.textContent = meta ? meta.name : 'Ithaka Chat';
-    }
+    _setChatMetaTitle(meta);
     // Update model picker visibility
     updateModelPicker();
 
@@ -2133,11 +2199,8 @@ export function createDirectChat(url, modelId, endpointId) {
   // Update model picker to show the pending model
   updateModelPicker();
 
-  // Update current-meta header
-  const metaEl = document.getElementById('current-meta');
-  if (metaEl) {
-    metaEl.textContent = 'New Chat';
-  }
+  // Update current-meta header — a pending chat is never notebook-bound yet.
+  _setChatMetaTitle({ name: 'New Chat' });
 
   // Enable input
   const msgInput = document.getElementById('message');
@@ -3458,6 +3521,7 @@ const sessionModule = {
   getPendingChat,
   getCurrentSessionId,
   getSessions,
+  refreshChatMetaTitle,
   getCurrentModel,
   getCurrentEndpointUrl,
   setCurrentSessionId,

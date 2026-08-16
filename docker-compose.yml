@@ -161,7 +161,16 @@ services:
     # minutes, making interactive browser auth a race you can't win. With
     # bare tailscaled the key is generated once by a single `tailscale up`
     # and the printed auth URL stays valid until it is used.
-    entrypoint: ["tailscaled", "--tun=userspace-networking", "--statedir=/var/lib/tailscale"]
+    # --port=41642: the Windows host's own Tailscale client already uses UDP
+    # 41641 behind the same NAT; sharing that port made peers pick a broken
+    # router-hairpin path that dropped large packets (small responses passed,
+    # full pages and TLS handshakes hung).
+    entrypoint: ["tailscaled", "--tun=userspace-networking", "--statedir=/var/lib/tailscale", "--port=41642"]
+    # The WSL<->Windows path silently drops packets over ~1200 bytes (probed
+    # with `tailscale ping --size`: 1200 pong, 1300 timeout). Cap the tunnel
+    # MTU so full-size data packets stay under that black hole.
+    environment:
+      - TS_DEBUG_MTU=1130
     volumes:
       - tailscale-state:/var/lib/tailscale
     restart: unless-stopped

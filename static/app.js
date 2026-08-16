@@ -45,6 +45,7 @@ import spinnerModule from './js/spinner.js';
 import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
 import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js';
 import { initSectionCollapse, initSectionDrag } from './js/section-management.js';
+import { maybePlayDageraadIntro } from './js/dageraadIntro.js';
 
 const API_BASE = window.location.origin;
 window.themeModule = themeModule;
@@ -169,6 +170,7 @@ function initRailHoverLabels() {
     'rail-gallery': 'Gallery',
     'rail-archive': 'Library',
     'rail-memory': 'Brain',
+    'rail-notebooks': 'Notebooks',
     'rail-notes': 'Notes',
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
@@ -596,7 +598,11 @@ function initializeEventListeners() {
       input.value = currentName;
       input.className = 'session-rename-input';
       input.style.cssText = 'font-size:inherit;background:transparent;border:none;border-bottom:1px solid var(--accent, var(--red));color:var(--fg);outline:none;width:100%;padding:0;';
-      const origText = metaEl.textContent;
+      // Read the title from its own span, not from metaEl: #current-meta also
+      // holds the notebook badge, so .textContent would snapshot
+      // "MyNotebooknotebook" and write that back as the name on cancel.
+      const _titleEl = metaEl.querySelector('.chat-title-text');
+      const origText = _titleEl ? _titleEl.textContent : metaEl.textContent;
       metaEl.textContent = '';
       metaEl.appendChild(input);
       input.focus();
@@ -609,23 +615,26 @@ function initializeEventListeners() {
           if (!sid && sessionModule.materializePendingSession) {
             try { await sessionModule.materializePendingSession(); sid = sessionModule.getCurrentSessionId(); } catch (_) {}
           }
-          if (!sid) { metaEl.textContent = newName; return; }
+          if (!sid) { sessionModule.refreshChatMetaTitle(newName); return; }
           const fd = new FormData();
           fd.append('name', newName);
           await fetch(`${API_BASE}/api/session/${sid}`, { method: 'PATCH', body: fd });
           const _m = sessionModule.getSessions().find(s => s.id === sid);
           if (_m) _m.name = newName;
-          metaEl.textContent = newName;
+          // Rebuild the header through sessions.js so the title span and the
+          // notebook badge come back — a raw textContent write would flatten
+          // both until the next session switch.
+          sessionModule.refreshChatMetaTitle(newName);
           uiModule.showToast('Renamed');
           sessionModule.loadSessions();
         } else {
-          metaEl.textContent = origText;
+          sessionModule.refreshChatMetaTitle(origText);
         }
       };
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-        if (ev.key === 'Escape') { input.removeEventListener('blur', commit); metaEl.textContent = origText; }
+        if (ev.key === 'Escape') { input.removeEventListener('blur', commit); sessionModule.refreshChatMetaTitle(origText); }
       });
     });
   }
@@ -1054,6 +1063,37 @@ function initializeEventListeners() {
     });
   }
 
+  // Dashboard (Home) tool button
+  const toolDashboardBtn = el('tool-dashboard-btn');
+  if (toolDashboardBtn) {
+    toolDashboardBtn.addEventListener('click', async () => {
+      const Modals = await import('./js/modalManager.js');
+      const dashboardModule = await import('./js/dashboard.js');
+      // toggle returns true when a registered modal was minimized/restored;
+      // returns false when nothing is registered → open fresh.
+      if (!Modals.toggle('dashboard-modal')) {
+        if (dashboardModule.isDashboardOpen()) dashboardModule.closeDashboard();
+        else dashboardModule.openDashboard();
+      }
+    });
+  }
+
+  // Notebooks tool button (sidebar + rail) — bounded source sets for
+  // strict, grounded chat. Same toggle contract as the dashboard above.
+  const notebooksBtns = [el('tool-notebooks-btn'), el('rail-notebooks')].filter(Boolean);
+  notebooksBtns.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const Modals = await import('./js/modalManager.js');
+      const notebooksModule = await import('./js/notebooks.js');
+      // toggle returns true when a registered modal was minimized/restored;
+      // returns false when nothing is registered → open fresh.
+      if (!Modals.toggle('notebooks-modal')) {
+        if (notebooksModule.isNotebooksOpen()) notebooksModule.closeNotebooks();
+        else notebooksModule.openNotebooks();
+      }
+    });
+  });
+
   // Tasks tool button
   const toolTasksBtn = el('tool-tasks-btn');
   if (toolTasksBtn) {
@@ -1183,6 +1223,13 @@ function initializeEventListeners() {
         setTimeout(_go, 50);
         setTimeout(_go, 200);
       }
+    },
+    '/dashboard': () => document.getElementById('tool-dashboard-btn')?.click(),
+    '/notebooks': () => {
+      // Collapse the wide sidebar → icon rail so navigation stays visible
+      // beside the notebook window (same reasoning as /email and /notes).
+      _collapseSidebarToRail();
+      document.getElementById('tool-notebooks-btn')?.click();
     },
     '/calendar': () => calendarModule && calendarModule.openCalendar(),
     '/cookbook': () => document.getElementById('tool-cookbook-btn')?.click(),
@@ -1958,7 +2005,10 @@ function initializeEventListeners() {
     const plusBtn = el('overflow-plus-btn');
     if (!plusBtn) return;
     const menu = el('overflow-menu');
-    const anyActive = menu ? Array.from(menu.querySelectorAll('.overflow-menu-item.active')).some(item => item.style.display !== 'none') : false;
+    // getComputedStyle, not item.style: items can also be hidden by a CSS rule
+    // (a notebook session hides the RAG item via body.notebook-session), and an
+    // active-but-hidden item must not light the dot.
+    const anyActive = menu ? Array.from(menu.querySelectorAll('.overflow-menu-item.active')).some(item => getComputedStyle(item).display !== 'none') : false;
     plusBtn.classList.toggle('has-active', anyActive);
   }
   // External modules (compare) dispatch this when their overflow state changes
@@ -3588,6 +3638,11 @@ function startIthakaApp() {
   document.documentElement.style.setProperty('--line-height', '20px');
   initRailHoverLabels();
 
+  // Purely visual, on top of everything else — never let it block session
+  // loading below. <html data-theme="..."> is already set by the
+  // first-paint script in index.html, so this is safe to call this early.
+  try { maybePlayDageraadIntro(); } catch (e) { console.warn('Dageraad intro failed:', e); }
+
   // Smooth keyboard open/close on mobile — keep chat scrolled to bottom
   if (window.visualViewport && 'ontouchstart' in window) {
     let _prevVPH = visualViewport.height;
@@ -4208,6 +4263,16 @@ function startIthakaApp() {
         if (window._ithakaRouteOpener) {
           try { window._ithakaRouteOpener(); } catch (_) {}
           window._ithakaRouteOpener = null;
+        } else {
+          // No explicit URL route — open the Home dashboard unless the user
+          // turned the startup pref off (unset/null counts as ON).
+          fetch(`${API_BASE}/api/prefs/dashboard_autoopen`, { credentials: 'same-origin' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => {
+              if (d && d.value === false) return;
+              return import('./js/dashboard.js').then(m => m.openDashboard());
+            })
+            .catch(e => console.warn('dashboard auto-open skipped:', e));
         }
       });
   } else {

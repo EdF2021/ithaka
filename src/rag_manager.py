@@ -32,8 +32,16 @@ class RAGManager:
         logger.info("RAGManager initialized as wrapper for VectorRAG")
     
     # Delegate all methods to VectorRAG
-    def search(self, query: str, k: int = 5, owner: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        k: int = 5,
+        owner: Optional[str] = None,
+        notebook_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Search for documents - delegates to VectorRAG."""
+        if notebook_id is not None:
+            return self.vector_rag.search(query, k, owner=owner, notebook_id=notebook_id)
         return self.vector_rag.search(query, k, owner=owner)
     
     def index_personal_documents(
@@ -68,3 +76,7 @@ class RAGManager:
     def add_documents_batch(self, docs: List[tuple]) -> Dict[str, Any]:
         """Add documents in batch - delegates to VectorRAG."""
         return self.vector_rag.add_documents_batch(docs)
+
+    def remove_notebook(self, notebook_id: str, document_id: Optional[str] = None) -> Dict[str, Any]:
+        """Remove notebook-scoped chunks - delegates to VectorRAG."""
+        return self.vector_rag.remove_notebook(notebook_id, document_id=document_id)
