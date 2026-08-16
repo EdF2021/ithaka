@@ -436,12 +436,18 @@ async function _openArtifact(row) {
   try {
     let dm = window.documentModule;
     if (!dm || !dm.loadDocument) {
+      // Relies on document.js already being loaded on this page without a
+      // `?v=` cache-buster query string: a busted URL here would import a
+      // second, distinct module record/instance of document.js rather than
+      // reusing the one the rest of the app already initialized against.
       const mod = await import('./document.js');
       dm = (mod && mod.default) || mod;
     }
     if (!dm || !dm.loadDocument) throw new Error('Document module unavailable');
-    closeNotebooks();
+    // Only close the notebooks modal once the document actually loaded, so a
+    // failure here still has #notebook-artifact-error visible to report to.
     await dm.loadDocument(docId);
+    closeNotebooks();
   } catch (e) {
     _showError('notebook-artifact-error', `Could not open artifact (${e.message})`);
   } finally {
