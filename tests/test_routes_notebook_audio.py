@@ -115,6 +115,17 @@ def test_create_podcast_cross_owner_is_404(monkeypatch, ts):
 
 
 def test_create_podcast_no_sources_is_400(monkeypatch, ts):
+    """No route-level gather_source_text check anymore (F7): the TTS
+    pre-check must pass first (mocked enabled here) so this exercises the
+    real start_podcast_job, whose own "Geen geïndexeerde bronnen" ValueError
+    is what the route maps to 400 - same status+detail as before.
+
+    start_podcast_job's default db_session_factory is src.notebook_audio's
+    own module-level SessionLocal (bound at import time, independent of
+    routes.notebook_routes.SessionLocal), so it needs its own redirect to
+    the `ts` temp sqlite the notebook was created in."""
+    monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "endpoint:x")
+    monkeypatch.setattr(notebook_audio, "SessionLocal", ts)
     c = _client(monkeypatch)
     nb_id = _make_notebook(c)
 
@@ -139,15 +150,19 @@ def test_create_podcast_tts_not_configured_is_400_before_job_start(monkeypatch, 
     assert called == []
 
 
-def test_create_podcast_bronnen_checked_before_tts(monkeypatch, ts):
-    """No sources AND TTS disabled -> the bronnen-400 wins (validatievolgorde)."""
+def test_create_podcast_tts_checked_before_bronnen(monkeypatch, ts):
+    """No sources AND TTS disabled -> the TTS-400 wins now (F7: the route no
+    longer has its own bronnen pre-check, so the TTS pre-check - still
+    route-level and unconditional - is the only thing that can fire before
+    start_podcast_job, which is what would otherwise raise the bronnen
+    ValueError, ever gets called)."""
     monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "disabled")
     c = _client(monkeypatch)
     nb_id = _make_notebook(c)
 
     r = c.post(f"/api/notebooks/{nb_id}/podcast")
     assert r.status_code == 400
-    assert r.json()["detail"] == "Geen geïndexeerde bronnen"
+    assert r.json()["detail"] == "TTS is niet geconfigureerd (Settings → TTS)"
 
 
 def test_create_podcast_starts_job_returns_running(monkeypatch, ts):
@@ -275,12 +290,12 @@ def test_get_podcast_status_cross_owner_notebook_is_404(monkeypatch, ts):
 
 
 def test_get_podcast_status_running_passthrough(monkeypatch, ts):
-    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
-        "status": "running", "phase": "tts", "segment": 3, "total": 10,
-        "error": None, "artifact": None,
-    })
     c = _client(monkeypatch)
     nb_id = _make_notebook(c)
+    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
+        "status": "running", "phase": "tts", "segment": 3, "total": 10,
+        "error": None, "artifact": None, "notebook_id": nb_id,
+    })
 
     r = c.get(f"/api/notebooks/{nb_id}/podcast/job-1")
     assert r.status_code == 200
@@ -292,12 +307,12 @@ def test_get_podcast_status_running_passthrough(monkeypatch, ts):
 
 def test_get_podcast_status_done_includes_artifact(monkeypatch, ts):
     artifact = {"id": "a1", "kind": "podcast", "audio_path": "x.wav"}
-    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
-        "status": "done", "phase": "done", "segment": 10, "total": 10,
-        "error": None, "artifact": artifact,
-    })
     c = _client(monkeypatch)
     nb_id = _make_notebook(c)
+    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
+        "status": "done", "phase": "done", "segment": 10, "total": 10,
+        "error": None, "artifact": artifact, "notebook_id": nb_id,
+    })
 
     r = c.get(f"/api/notebooks/{nb_id}/podcast/job-1")
     assert r.status_code == 200
@@ -306,12 +321,12 @@ def test_get_podcast_status_done_includes_artifact(monkeypatch, ts):
 
 
 def test_get_podcast_status_cancelled_is_mapped_to_error(monkeypatch, ts):
-    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
-        "status": "cancelled", "phase": "tts", "segment": 2, "total": 10,
-        "error": "Generatie afgebroken", "artifact": None,
-    })
     c = _client(monkeypatch)
     nb_id = _make_notebook(c)
+    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
+        "status": "cancelled", "phase": "tts", "segment": 2, "total": 10,
+        "error": "Generatie afgebroken", "artifact": None, "notebook_id": nb_id,
+    })
 
     r = c.get(f"/api/notebooks/{nb_id}/podcast/job-1")
     assert r.status_code == 200
@@ -321,18 +336,34 @@ def test_get_podcast_status_cancelled_is_mapped_to_error(monkeypatch, ts):
 
 
 def test_get_podcast_status_cancelled_without_error_gets_default_message(monkeypatch, ts):
-    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
-        "status": "cancelled", "phase": "tts", "segment": 2, "total": 10,
-        "error": None, "artifact": None,
-    })
     c = _client(monkeypatch)
     nb_id = _make_notebook(c)
+    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
+        "status": "cancelled", "phase": "tts", "segment": 2, "total": 10,
+        "error": None, "artifact": None, "notebook_id": nb_id,
+    })
 
     r = c.get(f"/api/notebooks/{nb_id}/podcast/job-1")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "error"
     assert body["error"] == "Generatie afgebroken"
+
+
+def test_get_podcast_status_job_from_another_notebook_is_404(monkeypatch, ts):
+    """A job id that resolves (same owner) but belongs to a different
+    notebook is unknown from this route's point of view - same 404 shape
+    as an unknown job id, not a cross-notebook peek."""
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c, name="A")
+    other_nb_id = _make_notebook(c, name="B")
+    monkeypatch.setattr(nbr, "get_job", lambda job_id, owner: {
+        "status": "running", "phase": "tts", "segment": 1, "total": 5,
+        "error": None, "artifact": None, "notebook_id": other_nb_id,
+    })
+
+    r = c.get(f"/api/notebooks/{nb_id}/podcast/job-1")
+    assert r.status_code == 404
 
 
 # ---- GET /api/notebook-audio/{filename} ----
@@ -429,6 +460,26 @@ def test_delete_artifact_missing_audio_file_does_not_500(monkeypatch, tmp_path, 
 
     r = c.delete(f"/api/notebooks/{nb_id}/artifacts/{artifact['id']}")
     assert r.status_code == 200
+
+
+def test_unlink_podcast_audio_missing_file_is_silent(monkeypatch, tmp_path, caplog):
+    """F3 regression: cleanup of an already-gone file must not go through
+    resolve_notebook_audio_path (which 404s for a missing file) and must not
+    log a spurious "Could not remove" warning - unlink(missing_ok=True) on
+    the directly-built path is the whole story."""
+    monkeypatch.setattr(notebook_audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+    filename = uuid.uuid4().hex + ".wav"
+    assert not (tmp_path / filename).exists()
+
+    with caplog.at_level("WARNING"):
+        nbr._unlink_podcast_audio(filename)
+
+    assert "Could not remove podcast audio" not in caplog.text
+
+
+def test_unlink_podcast_audio_rejects_bad_filename_without_raising(monkeypatch, tmp_path):
+    monkeypatch.setattr(notebook_audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+    nbr._unlink_podcast_audio("../../etc/passwd")  # must not raise
 
 
 def test_delete_artifact_text_kind_has_no_audio_to_unlink(monkeypatch, ts):

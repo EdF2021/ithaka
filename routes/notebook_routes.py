@@ -1,18 +1,22 @@
 """Notebook routes — CRUD for notebooks + per-notebook source upload/removal."""
 
 import logging
+import os
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse
 
+import src.notebook_audio as notebook_audio
 from core.database import Document, SessionLocal, Notebook, NotebookArtifact, NotebookSource
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
-from src.notebook_artifacts import ARTIFACT_KINDS, gather_source_text, generate_artifact
+from src.notebook_artifacts import ARTIFACT_KINDS, generate_artifact
 from src.notebook_audio import (
     NOTEBOOK_AUDIO_HEADERS,
+    NOTEBOOK_AUDIO_RE,
     get_job,
     resolve_notebook_audio_path,
     set_synthesizer,
@@ -39,11 +43,25 @@ def _current_tts_provider() -> str:
 
 
 def _unlink_podcast_audio(audio_path: Optional[str]) -> None:
-    """Best-effort removal of a podcast's WAV file. Never raises."""
-    if not audio_path:
+    """Best-effort removal of a podcast's WAV file. Never raises.
+
+    Deliberately does not call resolve_notebook_audio_path: that function
+    raises HTTPException(404) when the file is already gone, which makes
+    unlink(missing_ok=True) dead code and turns every cleanup of an
+    already-removed file into a logged "Could not remove" warning. Validates
+    the filename with the same whitelist regex + commonpath guard instead,
+    reading NOTEBOOK_AUDIO_DIR off the notebook_audio module (not
+    src.constants) at call time so tests that monkeypatch it there still
+    apply here, exactly like resolve_notebook_audio_path itself does.
+    """
+    if not isinstance(audio_path, str) or not NOTEBOOK_AUDIO_RE.fullmatch(audio_path):
         return
     try:
-        path = resolve_notebook_audio_path(audio_path)
+        directory = Path(notebook_audio.NOTEBOOK_AUDIO_DIR)
+        root = directory.resolve()
+        path = (directory / audio_path).resolve()
+        if os.path.commonpath([str(root), str(path)]) != str(root):
+            return
         path.unlink(missing_ok=True)
     except Exception as exc:
         logger.warning("Could not remove podcast audio %s: %s", audio_path, exc)
@@ -375,15 +393,16 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         user = get_current_user(request)
         db_session = SessionLocal()
         try:
-            # Validatievolgorde (spec §Componenten 3): owner-404, dan
-            # bronnen-400, dan TTS-400 — in die volgorde, vóór jobstart.
-            # start_podcast_job below re-checks owner/bronnen/synthesizer
-            # itself (it can be called without a route in front of it), but
-            # its TTS RuntimeError text ("TTS niet geconfigureerd") is not the
-            # spec's user-facing string, so that one check has to happen here.
-            nb = _get_owned_notebook(db_session, notebook_id, user)
-            if not gather_source_text(nb, db_session):
-                raise HTTPException(status_code=400, detail="Geen geïndexeerde bronnen")
+            # Validatievolgorde: owner-404, dan TTS-400 — in die volgorde,
+            # vóór jobstart. start_podcast_job below re-checks owner/bronnen/
+            # synthesizer itself (it can be called without a route in front
+            # of it) and is the sole source of the bronnen-400 now (no
+            # route-level gather_source_text duplicate): its ValueError
+            # "Geen geïndexeerde bronnen" is mapped to 400 below with the
+            # same text. Its TTS RuntimeError text ("TTS niet geconfigureerd")
+            # is not the spec's user-facing string though, so that one check
+            # still has to happen here, ahead of the job start.
+            _get_owned_notebook(db_session, notebook_id, user)
             if _current_tts_provider() in ("disabled", "browser"):
                 raise HTTPException(status_code=400, detail=_TTS_NOT_CONFIGURED_DETAIL)
         finally:
@@ -408,7 +427,10 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             db_session.close()
 
         job = get_job(job_id, user)
-        if job is None:
+        # A job that exists but belongs to a different notebook (same owner,
+        # e.g. re-used across two of the user's own notebooks) is unknown
+        # from this route's point of view: same 404 as an unknown job id.
+        if job is None or job.get("notebook_id") != notebook_id:
             raise HTTPException(status_code=404, detail="Job not found")
 
         # get_job's owner-check already keeps this cross-owner-safe; "cancelled"
