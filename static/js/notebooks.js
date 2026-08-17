@@ -627,10 +627,12 @@ async function _generatePodcast(btn) {
 /**
  * Open a generated artifact in the document viewer. Mirrors _openChat's
  * handoff shape: prefer the live window.documentModule singleton (published
- * by document.js at module load, document.js:11038), close the notebooks
- * modal, then load — falling back to a dynamic import of document.js itself
- * when the singleton isn't on window yet (e.g. document.js not loaded on
- * this page load path).
+ * by document.js at module load, document.js:11038) — falling back to a
+ * dynamic import of document.js itself when the singleton isn't on window
+ * yet (e.g. document.js not loaded on this page load path) — then load,
+ * and only close the notebooks modal once that load succeeds. Load-then-close
+ * (not close-then-load) so a failed load still has #notebook-artifact-error
+ * visible in the (still-open) notebooks modal to report the failure to.
  */
 async function _openArtifact(row) {
   if (!_detail || row.dataset.opening === '1') return;
@@ -760,6 +762,39 @@ async function _openChat() {
   _showError('notebook-detail-error', '');
 
   try {
+    // Resume an existing session bound to this notebook rather than
+    // spawning a new one on every click. GET /api/sessions (session_routes.py)
+    // includes notebook_id on each session object — added specifically so
+    // "notebook-bound sessions render a badge ... and hide the RAG toggle"
+    // (see that route's comment), so no separate backend lookup is needed:
+    // scan the already-loaded window.sessionModule.getSessions() list.
+    // Deliberately does NOT call sm.loadSessions() first to force a refetch:
+    // loadSessions() also auto-selects/switches the currently open session as
+    // a side effect (sessions.js's targetId resolution, ~line 1791) — doing
+    // that on every "Open chat" click, including the common case where no
+    // notebook session exists yet, would risk silently switching the visible
+    // chat behind this modal before the create path even runs. The already
+    // loaded list is fresh enough for what matters here: a session created
+    // earlier in this page load (including by this same function, below,
+    // which does call loadSessions() — but only after creating one). Only
+    // active (non-archived) sessions are in the list, which is fine: an
+    // archived match would fall through to creating a new session below, but
+    // there is none in that case since it's filtered out entirely.
+    const sm = window.sessionModule;
+    const candidates = (sm?.getSessions?.() || []).filter(s => s.notebook_id === _detail.id);
+    if (candidates.length && sm?.selectSession) {
+      // The bug this fixes is users already having several duplicate
+      // sessions for one notebook — resume the most recently active one
+      // (by last message, else last update, else creation), not just
+      // whichever order the list happens to return.
+      candidates.sort((a, b) =>
+        (_parseTs(b.last_message_at || b.updated_at || b.created_at) || 0) -
+        (_parseTs(a.last_message_at || a.updated_at || a.created_at) || 0));
+      closeNotebooks();
+      await sm.selectSession(candidates[0].id);
+      return;
+    }
+
     const cfg = await _resolveChatConfig();
     const fd = new FormData();
     fd.append('name', _detail.name || 'Notebook');
@@ -778,7 +813,7 @@ async function _openChat() {
     // Reuse app.js's live sessions instance (published on window), exactly as
     // dashboard.js does — one obvious instance, and no risk of a duplicate
     // module record if app.js's import specifier ever grows a ?v= query again.
-    const sm = window.sessionModule;
+    // (`sm` was already resolved above, for the existing-session lookup.)
     if (sm?.loadSessions && sm?.selectSession) {
       // The new session must be in the module's list before selectSession
       // can resolve it — load first, then select.
