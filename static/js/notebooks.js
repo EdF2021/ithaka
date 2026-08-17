@@ -298,7 +298,7 @@ function _showList() {
       <button type="button" class="dashboard-action-btn" id="notebook-create-btn">${_ICONS.plus}<span>New notebook</span></button>
     </div>
     <label class="memory-bulk-check-all notebook-archived-toggle">
-      <input type="checkbox" id="notebook-archived-toggle"${_showArchived ? ' checked' : ''}> Toon gearchiveerd
+      <input type="checkbox" id="notebook-archived-toggle"${_showArchived ? ' checked' : ''}> Show archived
     </label>
     <div class="notebook-error" id="notebook-list-error"></div>
     <div class="dashboard-grid" id="notebook-grid">
@@ -790,8 +790,10 @@ async function _openChat() {
       candidates.sort((a, b) =>
         (_parseTs(b.last_message_at || b.updated_at || b.created_at) || 0) -
         (_parseTs(a.last_message_at || a.updated_at || a.created_at) || 0));
-      closeNotebooks();
+      // Select first, close after: a selectSession failure must land in the
+      // still-visible #notebook-detail-error, not a closed modal.
       await sm.selectSession(candidates[0].id);
+      closeNotebooks();
       return;
     }
 
@@ -818,8 +820,8 @@ async function _openChat() {
       // The new session must be in the module's list before selectSession
       // can resolve it — load first, then select.
       await sm.loadSessions();
-      closeNotebooks();
       await sm.selectSession(payload.id);
+      closeNotebooks();
     } else {
       window.location.hash = '#' + payload.id;
       window.location.reload();
