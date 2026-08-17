@@ -105,7 +105,7 @@ class TTSService:
 
     # ── API endpoint ──
 
-    def _synthesize_api(self, text: str, endpoint_id: str, model: str, voice: str, speed: float = 1.0) -> Optional[bytes]:
+    def _synthesize_api(self, text: str, endpoint_id: str, model: str, voice: str, speed: float = 1.0, response_format: str = "mp3") -> Optional[bytes]:
         from src.database import SessionLocal, ModelEndpoint
 
         db = SessionLocal()
@@ -128,7 +128,7 @@ class TTSService:
             "model": model,
             "input": text,
             "voice": voice,
-            "response_format": "mp3",
+            "response_format": response_format,
             "speed": speed,
         }
 
@@ -183,6 +183,63 @@ class TTSService:
 
         if audio_data and use_cache:
             key = self._cache_key(text, provider, model, voice, speed)
+            self._put_cache(key, audio_data)
+
+        return audio_data
+
+    def synthesize_voice(self, text: str, voice: str, use_cache: bool = True) -> bytes:
+        """Synthesize `text` with an explicit per-call `voice`, bypassing the
+        settings-configured default voice. Used by the notebook podcast job to
+        give each dialogue turn its own speaker. Unlike `synthesize()`:
+        - no 5000-char truncation (the caller chunks long turns itself);
+        - the endpoint provider is asked for `response_format="wav"` (podcast
+          audio is concatenated with stdlib `wave`, which requires WAV);
+        - failures raise RuntimeError instead of returning None, so a failed
+          turn aborts the job instead of silently producing a gap.
+        - the cache key folds the format into the voice (`f"{voice}|wav"`):
+          synthesize() caches its mp3 output under the plain voice string, so
+          without this an earlier chat-TTS mp3 for the same text/voice would
+          be served here and fail deterministically in `wave.open` until the
+          cache was cleared.
+        """
+        settings = self._load_settings()
+        provider = settings["tts_provider"]
+        model = settings["tts_model"]
+        speed = _safe_speed(settings.get("tts_speed", "1"))
+
+        if provider in ("disabled", "browser"):
+            raise RuntimeError("TTS niet geconfigureerd")
+
+        # Distinct from synthesize()'s cache key (which uses the bare voice)
+        # so an mp3 cached by the chat-TTS path never satisfies this WAV path.
+        cache_voice = f"{voice}|wav"
+
+        if use_cache:
+            key = self._cache_key(text, provider, model, cache_voice, speed)
+            cached = self._get_cached(key)
+            if cached:
+                logger.info(f"TTS cache hit ({len(text)} chars, voice={voice})")
+                return cached
+
+        audio_data = None
+
+        if provider == "local":
+            kokoro = self._get_kokoro()
+            if kokoro and kokoro.available:
+                audio_data = kokoro.synthesize_raw(text, voice)
+            else:
+                logger.warning("Kokoro TTS not available")
+        elif provider.startswith("endpoint:"):
+            endpoint_id = provider.split(":", 1)[1]
+            audio_data = self._synthesize_api(text, endpoint_id, model, voice, speed, response_format="wav")
+        else:
+            logger.error(f"Unknown TTS provider: {provider}")
+
+        if not audio_data:
+            raise RuntimeError("TTS synthesis failed")
+
+        if use_cache:
+            key = self._cache_key(text, provider, model, cache_voice, speed)
             self._put_cache(key, audio_data)
 
         return audio_data

@@ -48,6 +48,7 @@ BG_JOBS_DIR = os.path.join(DATA_DIR, "bg_jobs")
 DEEP_RESEARCH_DIR = os.path.join(DATA_DIR, "deep_research")
 MCP_OAUTH_DIR = os.path.join(DATA_DIR, "mcp_oauth")
 GENERATED_IMAGES_DIR = os.path.join(DATA_DIR, "generated_images")
+NOTEBOOK_AUDIO_DIR = os.path.join(DATA_DIR, "notebook_audio")
 TTS_CACHE_DIR = os.path.join(DATA_DIR, "tts_cache")
 EMAIL_URGENCY_CACHE_DIR = os.path.join(DATA_DIR, "email_urgency_cache")
 SKILLS_DIR = os.path.join(DATA_DIR, "skills")
@@ -55,6 +56,17 @@ GALLERY_DIR = os.path.join(DATA_DIR, "gallery")
 GALLERY_UPLOADS_DIR = os.path.join(DATA_DIR, "gallery_uploads")
 MEMORY_VECTORS_DIR = os.path.join(DATA_DIR, "memory_vectors")
 PLUGINS_DIR = os.path.join(DATA_DIR, "plugins")
+
+# NOTEBOOK_AUDIO_DIR is created eagerly here (unlike the other data
+# subdirectories above, which their owning module creates lazily on first
+# write) so it exists defensively before the podcast job-runner's first
+# write. DATA_DIR itself is always writable (the whole app depends on it),
+# but guard anyway per the constants-rule: never let directory creation
+# crash import — an unwritable path should degrade, not take the app down.
+try:
+    os.makedirs(NOTEBOOK_AUDIO_DIR, exist_ok=True)
+except OSError:
+    pass
 
 # Paths with an intentional dedicated env override, defaulting under DATA_DIR.
 MAIL_ATTACHMENTS_DIR = os.getenv("ITHAKA_MAIL_ATTACHMENTS_DIR", os.path.join(DATA_DIR, "mail-attachments"))
