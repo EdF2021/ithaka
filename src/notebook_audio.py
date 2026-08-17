@@ -383,6 +383,32 @@ def cleanup_orphaned_audio(db_session_factory, *, max_age_seconds: int = 3600) -
         logger.debug("Podcast-janitor: kon %s niet lezen (%s)", directory, exc)
         return (0, 0)
 
+    # Age-gate the files BEFORE reading the DB: any artifact-row committed
+    # after the stat pass but before the query then still protects its file,
+    # which shrinks the (already theoretical) publish-vs-commit race window
+    # to zero instead of widening it with query latency.
+    now = time.time()
+    candidates: list[tuple[Path, str, os.stat_result]] = []
+    for path in entries:
+        if not path.is_file():
+            continue
+        name = path.name
+        is_stale_tmp = name.startswith(".podcast-") and name.endswith(".tmp")
+        is_wav = bool(NOTEBOOK_AUDIO_RE.fullmatch(name))
+        if not (is_stale_tmp or is_wav):
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if (now - st.st_mtime) <= max_age_seconds:
+            continue
+        candidates.append((path, name, st))
+
+    if not candidates:
+        logger.debug("Podcast-janitor: niets om op te ruimen")
+        return (0, 0)
+
     session = db_session_factory()
     try:
         referenced_names = {
@@ -394,22 +420,10 @@ def cleanup_orphaned_audio(db_session_factory, *, max_age_seconds: int = 3600) -
     finally:
         session.close()
 
-    now = time.time()
     removed = 0
     freed = 0
-    for path in entries:
-        if not path.is_file():
-            continue
-        name = path.name
-        is_stale_tmp = name.startswith(".podcast-") and name.endswith(".tmp")
-        is_orphan_wav = bool(NOTEBOOK_AUDIO_RE.fullmatch(name)) and name not in referenced_names
-        if not (is_stale_tmp or is_orphan_wav):
-            continue
-        try:
-            st = path.stat()
-        except OSError:
-            continue
-        if (now - st.st_mtime) <= max_age_seconds:
+    for path, name, st in candidates:
+        if not name.startswith(".podcast-") and name in referenced_names:
             continue
         try:
             size = st.st_size

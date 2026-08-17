@@ -22,6 +22,10 @@ import { makeWindowDraggable } from './windowDrag.js';
 
 const API_BASE = window.location.origin;
 let _open = false;
+// Bumped on every openNotebooks(); async flows capture it before an await and
+// only closeNotebooks() when unchanged, so a close-then-reopen during the
+// await can't tear down the freshly opened modal.
+let _openEpoch = 0;
 let _escHandler = null;
 // Notebook object when the detail view is showing, null on the list view.
 let _detail = null;
@@ -203,7 +207,9 @@ async function _renderNotebookGrid() {
     // ?archived=1 is inclusive (all notebooks, not archived-only — see
     // routes/notebook_routes.py's list_notebooks), so an empty result here
     // means no notebooks exist at all, same as the unfiltered case.
-    grid.innerHTML = '<div class="dashboard-empty">No notebooks yet</div>';
+    grid.innerHTML = `<div class="dashboard-empty">${_showArchived
+      ? 'No notebooks yet'
+      : 'No notebooks yet (archived ones are hidden — check "Show archived")'}</div>`;
     return;
   }
   grid.innerHTML = notebooks.map(_notebookCard).join('');
@@ -655,8 +661,9 @@ async function _openArtifact(row) {
     if (!dm || !dm.loadDocument) throw new Error('Document module unavailable');
     // Only close the notebooks modal once the document actually loaded, so a
     // failure here still has #notebook-artifact-error visible to report to.
+    const epoch = _openEpoch;
     await dm.loadDocument(docId);
-    closeNotebooks();
+    if (epoch === _openEpoch) closeNotebooks();
   } catch (e) {
     _showError('notebook-artifact-error', `Could not open artifact (${e.message})`);
   } finally {
@@ -790,10 +797,12 @@ async function _openChat() {
       candidates.sort((a, b) =>
         (_parseTs(b.last_message_at || b.updated_at || b.created_at) || 0) -
         (_parseTs(a.last_message_at || a.updated_at || a.created_at) || 0));
-      // Select first, close after: a selectSession failure must land in the
-      // still-visible #notebook-detail-error, not a closed modal.
+      // Select first, close after — keeps the modal up while the chat loads.
+      // (selectSession catches its own errors internally, so this ordering is
+      // about visual continuity, not error reporting.)
+      const epoch = _openEpoch;
       await sm.selectSession(candidates[0].id);
-      closeNotebooks();
+      if (epoch === _openEpoch) closeNotebooks();
       return;
     }
 
@@ -819,9 +828,10 @@ async function _openChat() {
     if (sm?.loadSessions && sm?.selectSession) {
       // The new session must be in the module's list before selectSession
       // can resolve it — load first, then select.
+      const epoch = _openEpoch;
       await sm.loadSessions();
       await sm.selectSession(payload.id);
-      closeNotebooks();
+      if (epoch === _openEpoch) closeNotebooks();
     } else {
       window.location.hash = '#' + payload.id;
       window.location.reload();
@@ -881,6 +891,7 @@ function _showDetail(nb) {
 export function openNotebooks() {
   if (_open) return;
   _open = true;
+  _openEpoch++;
   _detail = null;
 
   const modal = document.createElement('div');

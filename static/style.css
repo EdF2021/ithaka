@@ -40919,7 +40919,7 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   border-color: var(--red);
 }
 
-/* Archived notebooks stay visible (behind the "Toon gearchiveerd" toggle)
+/* Archived notebooks stay visible (behind the "Show archived" toggle)
    but visually recede — same technique as other muted/secondary rows in
    this file, just opacity on top of existing tokens, no new color. */
 .notebook-card-archived { opacity: 0.6; }
