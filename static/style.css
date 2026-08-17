@@ -7027,12 +7027,6 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
         background-clip: padding-box;
         animation: none;
       }
-      .memory-modal-content .close-btn,
-      .memory-modal-content .modal-close,
-      .settings-modal-content .close-btn,
-      .settings-modal-content .modal-close {
-        display: none !important;
-      }
       .memory-modal-content,
       .settings-modal-content {
         touch-action: pan-y;
@@ -7142,10 +7136,10 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
         border-bottom: 6px solid transparent;
         background-clip: padding-box;
       }
-      /* Keep the close X visible on mobile: swipe-down also dismisses, but
-         the gesture is undiscoverable on its own — without a visible close
-         a first-time user has no obvious way out of a fullscreen sheet. */
-      /* Hide the auto-injected minimize (_) button on mobile — the dock
+      /* NOTE: the close X stays visible on mobile (no hide rule anywhere in
+         this block, including for memory/settings sheets). Swipe-down also
+         dismisses, but the gesture is undiscoverable on its own.
+         Hide only the auto-injected minimize (_) button on mobile — the dock
          chip already represents the minimized state, and the swipe-down
          gesture is the canonical minimize action. */
       .modal-minimize-btn,

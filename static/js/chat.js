@@ -435,13 +435,42 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
   // API key pattern for the guard in handleChatSubmit
   const API_KEY_RE = /^(sk-[a-zA-Z0-9_\-]{20,}|gsk_[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_\-]{30,}|xai-[a-zA-Z0-9]{20,})$/;
 
+  // Extract a human-readable message from an HTTP error body. FastAPI's
+  // HTTPException uses "detail" (a string, or a list for 422s), providers
+  // nest under "message"/"error.message". Structured parse first — a regex
+  // garbles bodies with escaped quotes. Returns null when nothing readable
+  // was found (caller keeps its generic "Error <status>" text); never
+  // returns raw JSON.
+  function _parseErrorBodyMessage(errBody) {
+    try {
+      const parsed = JSON.parse(errBody);
+      if (typeof parsed?.detail === 'string') return parsed.detail;
+      if (typeof parsed?.message === 'string') return parsed.message;
+      if (typeof parsed?.error?.message === 'string') return parsed.error.message;
+      return null;
+    } catch {}
+    const m = errBody.match(/"message"\s*:\s*"([^"]+)"/);
+    if (m) return m[1].replace(/\\"/g, '"');
+    if (errBody.length < 200 && !errBody.trimStart().startsWith('{')) return errBody;
+    return null;
+  }
+
   // Shown when a message is sent before any AI model is connected. The typed
   // message stays in the input so the user can retry after connecting.
-  const NO_MODEL_CONNECTED_HELP =
-    'No AI model is connected yet — your message is still in the box below.\n\n' +
-    '- Click `Select model` at the bottom right and pick a model\n' +
-    '- No models listed? Use the `+` button there to connect one\n' +
-    '- Or type `/setup` for a guided setup';
+  // Role-aware: connecting endpoints is admin-only, so a regular user gets
+  // "ask your admin" instead of a dead-end '+' button (mirrors models.js).
+  function _noModelConnectedHelp() {
+    const intro = 'No AI model is connected yet — your message is still in the box below.\n\n';
+    if (!(typeof window !== 'undefined' && window._isAdmin)) {
+      return intro +
+        '- Ask an admin to connect a model\n' +
+        '- Then click `Select model` in the chat box and pick it';
+    }
+    return intro +
+      '- Click `Select model` in the chat box and pick a model\n' +
+      '- No models listed? Use the `+` button there to connect one\n' +
+      '- Or type `/setup` for a guided setup';
+  }
 
   const _queuedAgentRequests = [];
   let _queuedDrainTimer = null;
@@ -844,12 +873,12 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
         } else {
           // Keep the user's typed message in the input — losing it on a
           // config problem is hostile to first-time users.
-          addMessage('assistant', NO_MODEL_CONNECTED_HELP);
+          addMessage('assistant', _noModelConnectedHelp());
           _releaseSendFlag();
           return;
         }
       } catch (e) {
-        addMessage('assistant', NO_MODEL_CONNECTED_HELP);
+        addMessage('assistant', _noModelConnectedHelp());
         _releaseSendFlag();
         return;
       }
@@ -1368,12 +1397,8 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
         let errText = `Error ${res.status}`;
         try {
           const errBody = await res.text();
-          // Parse nested JSON error if present. Providers nest under
-          // "message"; FastAPI's own HTTPException uses "detail" — without
-          // matching it the user sees raw {"detail":"..."} JSON in the chat.
-          const m = errBody.match(/"(?:message|detail)"\s*:\s*"([^"]+)"/);
-          if (m) errText = m[1].replace(/\\"/g, '"');
-          else if (errBody.length < 200) errText = errBody;
+          const parsedMsg = _parseErrorBodyMessage(errBody);
+          if (parsedMsg) errText = parsedMsg;
         } catch {}
         // Auto-switch to chat mode for tool-related errors
         if (errText.includes('tool') || errText.includes('auto')) {
