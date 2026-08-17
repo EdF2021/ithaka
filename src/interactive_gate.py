@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import os
+import re
 import time
 
 
@@ -73,15 +74,34 @@ _PASSIVE_PREFIXES = (
     "/api/prefs",
 )
 
+# Exact/prefix matching can't express "this path has a dynamic id segment",
+# which is why the podcast job-status poller (GET
+# /api/notebooks/{notebook_id}/podcast/{job_id}, polled every 2s by
+# static/js/notebooks.js) fell through to "tracked" for a whole podcast job's
+# lifetime. Keep this list as narrow and auditable as the exact/prefix lists
+# above: one strictly status-poll-shaped pattern per passive dynamic route,
+# never a broad `/api/notebooks/.*` wildcard that would also make writing
+# notebook routes passive.
+_PASSIVE_PATTERNS = (
+    re.compile(r"^/api/notebooks/[^/]+/podcast/[^/]+$"),
+)
+
 
 def should_track_interactive_request(path: str, method: str = "GET") -> bool:
     if not _enabled():
         return False
-    if (method or "").upper() == "OPTIONS":
+    method_upper = (method or "").upper()
+    if method_upper == "OPTIONS":
         return False
     if path in _PASSIVE_EXACT_PATHS:
         return False
     if any(path.startswith(prefix) for prefix in _PASSIVE_PREFIXES):
+        return False
+    # GET-only: the job-start POST to /api/notebooks/{id}/podcast has no
+    # trailing job-id segment so it can't match this shape anyway, but the
+    # method check keeps the regex branch from ever being stretched to cover
+    # a write to the same path shape.
+    if method_upper == "GET" and any(p.match(path) for p in _PASSIVE_PATTERNS):
         return False
     return True
 
