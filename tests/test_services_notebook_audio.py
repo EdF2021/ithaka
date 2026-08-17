@@ -175,6 +175,34 @@ def test_synthesize_voice_cache_key_distinguishes_voice(tmp_path):
     assert calls == ["alloy", "onyx"]
 
 
+def test_synthesize_voice_does_not_reuse_an_mp3_cached_by_synthesize(tmp_path):
+    """F2 regression: synthesize() (chat TTS, mp3) and synthesize_voice()
+    (podcast, wav) must not share a cache entry for the same text/voice -
+    the old shared key served an earlier mp3 to the wav path, which then
+    failed deterministically in wave.open until the cache was cleared."""
+    service = TTSService(cache_dir=str(tmp_path))
+    service._load_settings = lambda: _settings("endpoint:ep1")
+
+    # Prime the mp3 cache via the ordinary chat-TTS path.
+    service._synthesize_api = lambda text, endpoint_id, model, voice, speed: b"ID3-mp3-bytes"
+    mp3_result = service.synthesize("dezelfde tekst")
+    assert mp3_result == b"ID3-mp3-bytes"
+
+    # synthesize_voice() for the same text/voice must not be served that mp3
+    # - it has to call the API again (with response_format="wav").
+    calls = []
+
+    def fake_api(text, endpoint_id, model, voice, speed, response_format="mp3"):
+        calls.append(response_format)
+        return b"real-wav-bytes"
+
+    service._synthesize_api = fake_api
+    wav_result = service.synthesize_voice("dezelfde tekst", "alloy")
+
+    assert wav_result == b"real-wav-bytes"
+    assert calls == ["wav"]
+
+
 # ── existing synthesize() behaviour unchanged ──
 
 

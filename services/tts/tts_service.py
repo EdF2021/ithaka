@@ -196,6 +196,11 @@ class TTSService:
           audio is concatenated with stdlib `wave`, which requires WAV);
         - failures raise RuntimeError instead of returning None, so a failed
           turn aborts the job instead of silently producing a gap.
+        - the cache key folds the format into the voice (`f"{voice}|wav"`):
+          synthesize() caches its mp3 output under the plain voice string, so
+          without this an earlier chat-TTS mp3 for the same text/voice would
+          be served here and fail deterministically in `wave.open` until the
+          cache was cleared.
         """
         settings = self._load_settings()
         provider = settings["tts_provider"]
@@ -205,8 +210,12 @@ class TTSService:
         if provider in ("disabled", "browser"):
             raise RuntimeError("TTS niet geconfigureerd")
 
+        # Distinct from synthesize()'s cache key (which uses the bare voice)
+        # so an mp3 cached by the chat-TTS path never satisfies this WAV path.
+        cache_voice = f"{voice}|wav"
+
         if use_cache:
-            key = self._cache_key(text, provider, model, voice, speed)
+            key = self._cache_key(text, provider, model, cache_voice, speed)
             cached = self._get_cached(key)
             if cached:
                 logger.info(f"TTS cache hit ({len(text)} chars, voice={voice})")
@@ -230,7 +239,7 @@ class TTSService:
             raise RuntimeError("TTS synthesis failed")
 
         if use_cache:
-            key = self._cache_key(text, provider, model, voice, speed)
+            key = self._cache_key(text, provider, model, cache_voice, speed)
             self._put_cache(key, audio_data)
 
         return audio_data

@@ -52,8 +52,10 @@ SSE (polling volstaat), meertalige stemkeuze-UI.
   leest provider uit settings; `local` → `kokoro.synthesize_raw(text, voice)`;
   `endpoint:<id>` → `_synthesize_api(text, endpoint_id, model, voice, speed, response_format="wav")`;
   `disabled`/`browser` → `RuntimeError("TTS niet geconfigureerd")`. Geen 5000-char-truncatie hier:
-  caller chunked; wel dezelfde cache als `synthesize()` (cache-key bevat voice al, `tts_service.py:77-79`).
-  Retour None/lege bytes → RuntimeError.
+  caller chunked. Cache-key bevat het formaat (`f"{voice}|wav"`, niet de kale `voice`):
+  `synthesize()` cachet zijn mp3-output onder dezelfde `voice`-string, dus zonder dat onderscheid
+  zou een eerdere chat-TTS-mp3 voor dezelfde tekst/stem hier geserveerd worden en deterministisch
+  falen in `wave.open` tot de cache geleegd wordt. Retour None/lege bytes → RuntimeError.
 
 ### 2. Audio-module (`src/notebook_audio.py`)
 
@@ -63,8 +65,11 @@ SSE (polling volstaat), meertalige stemkeuze-UI.
 - `parse_dialogue(script: str) -> list[tuple[str, str]]`: strip_think (hergebruik uit
   `notebook_artifacts`), regelgewijs regex `^\s*(S1|S2)\s*:\s*(.+)$` (case-insensitive),
   multi-regel-beurten: regels zonder prefix horen bij de vorige beurt; lege lijst → RuntimeError.
-- `split_turn(text, limit=4500) -> list[str]`: splitst een te lange beurt op zinsgrenzen.
-- `concat_wavs(segments: list[bytes]) -> bytes`: stdlib `wave`; parameter-mismatch → RuntimeError.
+- `split_turn(text, limit=4000) -> list[str]`: splitst een te lange beurt op zinsgrenzen (4000, niet
+  5000: de echte OpenAI `/audio/speech`-limiet is 4096 tekens).
+- `concat_wavs_to_file(segments, dest_path) -> int`: stdlib `wave`, streamt rechtstreeks naar
+  `dest_path` (geen volledige audio ooit in het geheugen); parameter-mismatch of 0 frames totaal →
+  RuntimeError.
 - Job-runner naar research-vorm: module-level `_active_jobs: dict[str, dict]`
   (`{status, phase, segment, total, error, artifact, owner, notebook_id, started_at}`).
   `start_podcast_job(notebook_id, owner) -> str` (job_id = uuid4().hex): valideert notebook/owner en
