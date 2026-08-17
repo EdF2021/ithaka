@@ -337,6 +337,115 @@ def resolve_notebook_audio_path(filename: str) -> Path:
 
 
 # --------------------------------------------------------------------------
+# Janitor (issue #6)
+#
+# `_generate` publishes the WAV with a tempfile-in-directory + os.replace
+# pattern (regel 603-635) and only afterwards opens a session to write the
+# Document/NotebookArtifact rows. A hard process kill in either gap (during
+# the write, or after os.replace but before commit) leaves a stray
+# `.podcast-*.tmp` or an orphaned `<hex>.wav` behind - nothing else in the
+# app ever removes them, so the directory grows unbounded over years. This
+# sweep is called periodically (see app.py's _notebook_audio_janitor_loop)
+# and is safe to call any time: everything younger than `max_age_seconds` is
+# left alone, so a job that is mid-write or has just replaced but not yet
+# committed is never touched.
+# --------------------------------------------------------------------------
+
+def cleanup_orphaned_audio(db_session_factory, *, max_age_seconds: int = 3600) -> tuple[int, int]:
+    """Delete stale podcast tmp files and orphaned WAVs from NOTEBOOK_AUDIO_DIR.
+
+    Two candidate shapes, both mtime-gated by `max_age_seconds`:
+
+    - `.podcast-*.tmp` - left behind when a job is killed between
+      NamedTemporaryFile and os.replace.
+    - `<hex>.wav` matching NOTEBOOK_AUDIO_RE whose filename is not any
+      NotebookArtifact.audio_path - left behind when a job is killed after
+      os.replace but before the row commit.
+
+    Every other filename is left alone, unconditionally - this function only
+    ever removes files matching one of the two shapes above. All
+    NotebookArtifact.audio_path values are loaded in a single query (session
+    from `db_session_factory`, always closed) rather than one query per file.
+    Each unlink is wrapped individually: one locked or permission-denied file
+    must not abort the rest of the sweep.
+
+    Returns (files_removed, bytes_removed). Logs one INFO line with both
+    numbers when anything was removed; otherwise at most a DEBUG line.
+    """
+    directory = Path(NOTEBOOK_AUDIO_DIR)
+    if not directory.is_dir():
+        logger.debug("Podcast-janitor: %s bestaat niet, niets te doen", directory)
+        return (0, 0)
+
+    try:
+        entries = list(directory.iterdir())
+    except OSError as exc:
+        logger.debug("Podcast-janitor: kon %s niet lezen (%s)", directory, exc)
+        return (0, 0)
+
+    # Age-gate the files BEFORE reading the DB: any artifact-row committed
+    # after the stat pass but before the query then still protects its file,
+    # which shrinks the (already theoretical) publish-vs-commit race window
+    # to zero instead of widening it with query latency.
+    now = time.time()
+    candidates: list[tuple[Path, str, os.stat_result]] = []
+    for path in entries:
+        if not path.is_file():
+            continue
+        name = path.name
+        is_stale_tmp = name.startswith(".podcast-") and name.endswith(".tmp")
+        is_wav = bool(NOTEBOOK_AUDIO_RE.fullmatch(name))
+        if not (is_stale_tmp or is_wav):
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if (now - st.st_mtime) <= max_age_seconds:
+            continue
+        candidates.append((path, name, st))
+
+    if not candidates:
+        logger.debug("Podcast-janitor: niets om op te ruimen")
+        return (0, 0)
+
+    session = db_session_factory()
+    try:
+        referenced_names = {
+            row[0]
+            for row in session.query(NotebookArtifact.audio_path)
+            .filter(NotebookArtifact.audio_path.isnot(None))
+            .all()
+        }
+    finally:
+        session.close()
+
+    removed = 0
+    freed = 0
+    for path, name, st in candidates:
+        if not name.startswith(".podcast-") and name in referenced_names:
+            continue
+        try:
+            size = st.st_size
+            path.unlink()
+        except OSError as exc:
+            logger.debug("Podcast-janitor: kon %s niet verwijderen (%s)", name, exc)
+            continue
+        removed += 1
+        freed += size
+
+    if removed:
+        logger.info(
+            "Podcast-janitor: %s verweesd bestand(en) opgeruimd (%s bytes)",
+            removed, freed,
+        )
+    else:
+        logger.debug("Podcast-janitor: niets om op te ruimen")
+
+    return removed, freed
+
+
+# --------------------------------------------------------------------------
 # Voices and the synthesizer hook
 # --------------------------------------------------------------------------
 

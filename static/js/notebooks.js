@@ -22,6 +22,10 @@ import { makeWindowDraggable } from './windowDrag.js';
 
 const API_BASE = window.location.origin;
 let _open = false;
+// Bumped on every openNotebooks(); async flows capture it before an await and
+// only closeNotebooks() when unchanged, so a close-then-reopen during the
+// await can't tear down the freshly opened modal.
+let _openEpoch = 0;
 let _escHandler = null;
 // Notebook object when the detail view is showing, null on the list view.
 let _detail = null;
@@ -130,14 +134,31 @@ const _ICONS = {
   upload: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>',
   trash: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   close: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  // lucide "archive" — box with a lid, for the non-destructive archive toggle.
+  archive: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>',
+  // lucide "archive-restore" — same box, arrow pointing back out, for unarchive.
+  unarchive: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>',
 };
 
 // ---- List view ----
 
+// Whether the list view currently includes archived notebooks (?archived=1).
+// Module-local, no persistence — resets to "off" on a fresh page load, which
+// matches every other notebooks-modal view state (e.g. _detail).
+let _showArchived = false;
+
 function _notebookCard(nb) {
   const desc = (nb.description || '').trim();
+  const archived = !!nb.archived;
+  // Non-destructive toggle: a single click, no _armConfirm two-step (that
+  // pattern is for delete, per the file header's doc comment).
+  const archiveBtn = archived
+    ? `<button type="button" class="notebook-archive-btn" data-nb-id="${_esc(nb.id)}" data-archived="1"
+               title="Unarchive notebook">${_ICONS.unarchive}<span>Unarchive</span></button>`
+    : `<button type="button" class="notebook-archive-btn" data-nb-id="${_esc(nb.id)}" data-archived="0"
+               title="Archive notebook">${_ICONS.archive}<span>Archive</span></button>`;
   return `
-    <div class="dashboard-card dashboard-card-clickable notebook-card" data-nb-id="${_esc(nb.id)}">
+    <div class="dashboard-card dashboard-card-clickable notebook-card${archived ? ' notebook-card-archived' : ''}" data-nb-id="${_esc(nb.id)}">
       <div class="dashboard-card-title">${_ICONS.notebookSmall}<span class="notebook-card-name">${_esc(nb.name || '(untitled)')}</span></div>
       <div class="dashboard-card-body">
         <div class="dashboard-row-sub notebook-card-desc">${desc ? _esc(desc) : ''}</div>
@@ -145,6 +166,7 @@ function _notebookCard(nb) {
           <span class="dashboard-row-sub notebook-card-count" data-count-for="${_esc(nb.id)}">&hellip;</span>
           <span class="dashboard-row-sub">${_esc(_shortDate(nb.created_at))}</span>
           <span style="flex:1"></span>
+          ${archiveBtn}
           <button type="button" class="notebook-del-btn" data-nb-id="${_esc(nb.id)}"
                   title="Delete notebook">${_ICONS.trash}<span>Delete</span></button>
         </div>
@@ -172,7 +194,8 @@ async function _renderNotebookGrid() {
   if (!grid) return;
   let data;
   try {
-    data = await _fetchJson(`${API_BASE}/api/notebooks`);
+    const url = _showArchived ? `${API_BASE}/api/notebooks?archived=1` : `${API_BASE}/api/notebooks`;
+    data = await _fetchJson(url);
   } catch (e) {
     grid.innerHTML = '';
     _showError('notebook-list-error', `Could not load notebooks (${e.message})`);
@@ -181,7 +204,12 @@ async function _renderNotebookGrid() {
   _showError('notebook-list-error', '');
   const notebooks = data.notebooks || [];
   if (!notebooks.length) {
-    grid.innerHTML = '<div class="dashboard-empty">No notebooks yet</div>';
+    // ?archived=1 is inclusive (all notebooks, not archived-only — see
+    // routes/notebook_routes.py's list_notebooks), so an empty result here
+    // means no notebooks exist at all, same as the unfiltered case.
+    grid.innerHTML = `<div class="dashboard-empty">${_showArchived
+      ? 'No notebooks yet'
+      : 'No notebooks yet (archived ones are hidden — check "Show archived")'}</div>`;
     return;
   }
   grid.innerHTML = notebooks.map(_notebookCard).join('');
@@ -198,6 +226,13 @@ async function _renderNotebookGrid() {
       _armConfirm(btn, () => _deleteNotebook(btn.dataset.nbId));
     });
   });
+  grid.querySelectorAll('.notebook-archive-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // One-click toggle, no arm/confirm step — archiving isn't destructive.
+      _toggleArchived(btn.dataset.nbId, btn.dataset.archived !== '1');
+    });
+  });
 
   _loadCounts(notebooks);
 }
@@ -207,6 +242,19 @@ async function _deleteNotebook(id) {
     await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(id)}`, { method: 'DELETE' });
   } catch (e) {
     _showError('notebook-list-error', `Delete failed (${e.message})`);
+    return;
+  }
+  _renderNotebookGrid();
+}
+
+async function _toggleArchived(id, archived) {
+  try {
+    await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      ..._jsonBody({ archived }),
+    });
+  } catch (e) {
+    _showError('notebook-list-error', `${archived ? 'Archive' : 'Unarchive'} failed (${e.message})`);
     return;
   }
   _renderNotebookGrid();
@@ -255,6 +303,9 @@ function _showList() {
              placeholder="Description (optional)" autocomplete="off">
       <button type="button" class="dashboard-action-btn" id="notebook-create-btn">${_ICONS.plus}<span>New notebook</span></button>
     </div>
+    <label class="memory-bulk-check-all notebook-archived-toggle">
+      <input type="checkbox" id="notebook-archived-toggle"${_showArchived ? ' checked' : ''}> Show archived
+    </label>
     <div class="notebook-error" id="notebook-list-error"></div>
     <div class="dashboard-grid" id="notebook-grid">
       <div class="dashboard-empty">Loading&hellip;</div>
@@ -265,6 +316,10 @@ function _showList() {
     document.getElementById(id)?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); _createNotebook(); }
     });
+  });
+  document.getElementById('notebook-archived-toggle')?.addEventListener('change', (e) => {
+    _showArchived = !!e.target.checked;
+    _renderNotebookGrid();
   });
 
   _renderNotebookGrid();
@@ -578,10 +633,12 @@ async function _generatePodcast(btn) {
 /**
  * Open a generated artifact in the document viewer. Mirrors _openChat's
  * handoff shape: prefer the live window.documentModule singleton (published
- * by document.js at module load, document.js:11038), close the notebooks
- * modal, then load — falling back to a dynamic import of document.js itself
- * when the singleton isn't on window yet (e.g. document.js not loaded on
- * this page load path).
+ * by document.js at module load, document.js:11038) — falling back to a
+ * dynamic import of document.js itself when the singleton isn't on window
+ * yet (e.g. document.js not loaded on this page load path) — then load,
+ * and only close the notebooks modal once that load succeeds. Load-then-close
+ * (not close-then-load) so a failed load still has #notebook-artifact-error
+ * visible in the (still-open) notebooks modal to report the failure to.
  */
 async function _openArtifact(row) {
   if (!_detail || row.dataset.opening === '1') return;
@@ -604,8 +661,9 @@ async function _openArtifact(row) {
     if (!dm || !dm.loadDocument) throw new Error('Document module unavailable');
     // Only close the notebooks modal once the document actually loaded, so a
     // failure here still has #notebook-artifact-error visible to report to.
+    const epoch = _openEpoch;
     await dm.loadDocument(docId);
-    closeNotebooks();
+    if (epoch === _openEpoch) closeNotebooks();
   } catch (e) {
     _showError('notebook-artifact-error', `Could not open artifact (${e.message})`);
   } finally {
@@ -711,6 +769,43 @@ async function _openChat() {
   _showError('notebook-detail-error', '');
 
   try {
+    // Resume an existing session bound to this notebook rather than
+    // spawning a new one on every click. GET /api/sessions (session_routes.py)
+    // includes notebook_id on each session object — added specifically so
+    // "notebook-bound sessions render a badge ... and hide the RAG toggle"
+    // (see that route's comment), so no separate backend lookup is needed:
+    // scan the already-loaded window.sessionModule.getSessions() list.
+    // Deliberately does NOT call sm.loadSessions() first to force a refetch:
+    // loadSessions() also auto-selects/switches the currently open session as
+    // a side effect (sessions.js's targetId resolution, ~line 1791) — doing
+    // that on every "Open chat" click, including the common case where no
+    // notebook session exists yet, would risk silently switching the visible
+    // chat behind this modal before the create path even runs. The already
+    // loaded list is fresh enough for what matters here: a session created
+    // earlier in this page load (including by this same function, below,
+    // which does call loadSessions() — but only after creating one). Only
+    // active (non-archived) sessions are in the list, which is fine: an
+    // archived match would fall through to creating a new session below, but
+    // there is none in that case since it's filtered out entirely.
+    const sm = window.sessionModule;
+    const candidates = (sm?.getSessions?.() || []).filter(s => s.notebook_id === _detail.id);
+    if (candidates.length && sm?.selectSession) {
+      // The bug this fixes is users already having several duplicate
+      // sessions for one notebook — resume the most recently active one
+      // (by last message, else last update, else creation), not just
+      // whichever order the list happens to return.
+      candidates.sort((a, b) =>
+        (_parseTs(b.last_message_at || b.updated_at || b.created_at) || 0) -
+        (_parseTs(a.last_message_at || a.updated_at || a.created_at) || 0));
+      // Select first, close after — keeps the modal up while the chat loads.
+      // (selectSession catches its own errors internally, so this ordering is
+      // about visual continuity, not error reporting.)
+      const epoch = _openEpoch;
+      await sm.selectSession(candidates[0].id);
+      if (epoch === _openEpoch) closeNotebooks();
+      return;
+    }
+
     const cfg = await _resolveChatConfig();
     const fd = new FormData();
     fd.append('name', _detail.name || 'Notebook');
@@ -729,13 +824,14 @@ async function _openChat() {
     // Reuse app.js's live sessions instance (published on window), exactly as
     // dashboard.js does — one obvious instance, and no risk of a duplicate
     // module record if app.js's import specifier ever grows a ?v= query again.
-    const sm = window.sessionModule;
+    // (`sm` was already resolved above, for the existing-session lookup.)
     if (sm?.loadSessions && sm?.selectSession) {
       // The new session must be in the module's list before selectSession
       // can resolve it — load first, then select.
+      const epoch = _openEpoch;
       await sm.loadSessions();
-      closeNotebooks();
       await sm.selectSession(payload.id);
+      if (epoch === _openEpoch) closeNotebooks();
     } else {
       window.location.hash = '#' + payload.id;
       window.location.reload();
@@ -795,6 +891,7 @@ function _showDetail(nb) {
 export function openNotebooks() {
   if (_open) return;
   _open = true;
+  _openEpoch++;
   _detail = null;
 
   const modal = document.createElement('div');

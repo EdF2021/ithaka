@@ -40889,6 +40889,7 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   align-items: center;
   gap: 8px;
 }
+.notebook-archive-btn,
 .notebook-del-btn,
 .notebook-src-del {
   display: inline-flex;
@@ -40906,6 +40907,9 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 }
 .notebook-del-btn:hover,
 .notebook-src-del:hover { color: var(--red); border-color: var(--border); }
+/* Archive/unarchive is non-destructive — hover highlights like a normal
+   action button (--fg), not the delete row's --red warning color. */
+.notebook-archive-btn:hover { color: var(--fg); border-color: var(--border); }
 /* Armed state of the two-step delete (label reads "Sure?"); a second click
    within 5s commits. Deliberately not window.confirm — that blocks browser
    automation. */
@@ -40914,6 +40918,17 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   color: var(--red);
   border-color: var(--red);
 }
+
+/* Archived notebooks stay visible (behind the "Show archived" toggle)
+   but visually recede — same technique as other muted/secondary rows in
+   this file, just opacity on top of existing tokens, no new color. */
+.notebook-card-archived { opacity: 0.6; }
+
+/* .memory-bulk-check-all is display:flex; every existing usage sits inside a
+   flex row that constrains it. #notebooks-body is a plain block container,
+   so without an explicit width this would stretch full-width and paint its
+   hover background as a strip across the whole modal. */
+.notebook-archived-toggle { margin-bottom: 8px; width: fit-content; }
 
 /* Detail view */
 .notebook-detail-head {
