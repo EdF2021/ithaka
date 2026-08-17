@@ -61,11 +61,16 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
 
     # Install the synthesizer hook once, at wiring time, mirroring how every
     # other route factory in this codebase gets its dependencies injected as
-    # arguments rather than reading globals. src.notebook_audio.start_podcast_job
-    # treats an absent synthesizer as "TTS not configured" (RuntimeError), so a
-    # provider that is disabled/browser at boot is intentionally left unwired;
-    # the POST route below still re-reads settings live for its own 400.
-    if tts_service is not None and _current_tts_provider() not in ("disabled", "browser"):
+    # arguments rather than reading globals. Unconditional on the provider:
+    # TTSService.synthesize_voice re-reads settings live on every call and
+    # raises its own RuntimeError when the provider is disabled/browser, so
+    # gating this on the boot-time provider would only cause a stale gap —
+    # TTS enabled in Settings after boot would stay unwired until a restart,
+    # even though the POST route's own live provider-check would let the
+    # request through. The route's pre-check below is what actually produces
+    # the spec's 400 for a disabled/browser provider; this line only needs to
+    # know whether a TTSService exists at all.
+    if tts_service is not None:
         set_synthesizer(tts_service.synthesize_voice)
 
     def _remove_notebook_chunks(notebook_id, document_id=None):

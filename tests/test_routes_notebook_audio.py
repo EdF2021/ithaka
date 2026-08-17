@@ -190,6 +190,12 @@ def test_create_podcast_runtimeerror_from_job_start_is_400(monkeypatch, ts):
 
 
 # ---- setup-time synthesizer wiring ----
+#
+# Unconditional on the boot-time provider: TTSService.synthesize_voice
+# already re-reads settings live on every call and raises its own
+# RuntimeError for disabled/browser (tts_service.py:200-206), so gating the
+# wiring on the boot-time provider only created a stale gap — see the
+# regression test below.
 
 def test_setup_wires_synthesizer_when_provider_enabled(monkeypatch, ts):
     class _FakeTTS:
@@ -200,13 +206,51 @@ def test_setup_wires_synthesizer_when_provider_enabled(monkeypatch, ts):
     assert notebook_audio.get_synthesizer() is not None
 
 
-def test_setup_leaves_synthesizer_unset_when_provider_disabled(monkeypatch, ts):
+def test_setup_wires_synthesizer_even_when_provider_disabled_at_boot(monkeypatch, ts):
+    """A TTSService instance is always wired once tts_service is not None.
+    The disabled/browser 400 for the user comes entirely from the POST
+    route's live provider pre-check, not from leaving the synthesizer unset."""
     class _FakeTTS:
         def synthesize_voice(self, text, voice):
             return b"x"
     monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "disabled")
     _client(monkeypatch, tts_service=_FakeTTS())
+    assert notebook_audio.get_synthesizer() is not None
+
+
+def test_setup_leaves_synthesizer_unset_when_no_tts_service(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "endpoint:x")
+    _client(monkeypatch, tts_service=None)
     assert notebook_audio.get_synthesizer() is None
+
+
+def test_post_podcast_works_after_tts_enabled_post_boot_without_restart(monkeypatch, ts):
+    """Regression for the reviewed bug: TTS was disabled at boot (tts_service
+    is still passed in, as app.py always does), the user later enables TTS in
+    Settings without restarting the app, and the POST route must succeed
+    instead of failing on a synthesizer that was never wired (which used to
+    surface the module's bare "TTS niet geconfigureerd" instead of the
+    spec's "TTS is niet geconfigureerd (Settings → TTS)" text)."""
+    class _FakeTTS:
+        def synthesize_voice(self, text, voice):
+            return b"x"
+
+    provider = {"value": "disabled"}
+    monkeypatch.setattr(nbr, "_current_tts_provider", lambda: provider["value"])
+    c = _client(monkeypatch, tts_service=_FakeTTS())
+    nb_id = _make_notebook(c)
+    _add_source(c, nb_id)
+
+    # Boot-time state was disabled, yet the synthesizer is already installed.
+    assert notebook_audio.get_synthesizer() is not None
+
+    # User flips TTS on in Settings, no restart.
+    provider["value"] = "endpoint:x"
+    monkeypatch.setattr(nbr, "start_podcast_job", lambda notebook_id, owner: "job-post-boot")
+
+    r = c.post(f"/api/notebooks/{nb_id}/podcast")
+    assert r.status_code == 200
+    assert r.json() == {"job_id": "job-post-boot", "status": "running"}
 
 
 # ---- GET /api/notebooks/{id}/podcast/{job_id} ----
