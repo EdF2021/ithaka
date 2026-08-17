@@ -530,25 +530,30 @@ def test_split_turn_hard_splits_a_single_oversized_sentence():
     assert all(len(p) <= 500 for p in parts)
 
 
-def test_split_turn_default_limit_is_4500():
+def test_split_turn_default_limit_is_4000():
     parts = audio.split_turn("zin. " * 2000)
-    assert all(len(p) <= 4500 for p in parts)
+    assert all(len(p) <= 4000 for p in parts)
 
 
-# ── concat_wavs ──────────────────────────────────────────────────────────
+# ── concat_wavs_to_file ──────────────────────────────────────────────────
 
-def test_concat_wavs_joins_frames_and_keeps_parameters():
+def test_concat_wavs_to_file_joins_frames_and_keeps_parameters(tmp_path):
     # Deliberately different durations: an implementation comparing whole
     # getparams() tuples (which include nframes) would wrongly reject these.
     a, b = _wav(100), _wav(250)
+    dest = tmp_path / "out.wav"
 
-    result = audio.concat_wavs([a, b])
+    total = audio.concat_wavs_to_file([a, b], dest)
 
-    assert _wav_info(result) == (1, 2, 24000, 350)
+    assert total == 350
+    assert _wav_info(dest.read_bytes()) == (1, 2, 24000, 350)
 
 
-def test_concat_wavs_single_segment_roundtrips():
-    assert _wav_info(audio.concat_wavs([_wav(42)])) == (1, 2, 24000, 42)
+def test_concat_wavs_to_file_single_segment_roundtrips(tmp_path):
+    dest = tmp_path / "out.wav"
+    total = audio.concat_wavs_to_file([_wav(42)], dest)
+    assert total == 42
+    assert _wav_info(dest.read_bytes()) == (1, 2, 24000, 42)
 
 
 @pytest.mark.parametrize("mismatch", [
@@ -556,19 +561,28 @@ def test_concat_wavs_single_segment_roundtrips():
     {"nchannels": 2},
     {"sampwidth": 1},
 ])
-def test_concat_wavs_raises_on_parameter_mismatch(mismatch):
+def test_concat_wavs_to_file_raises_on_parameter_mismatch(tmp_path, mismatch):
     with pytest.raises(RuntimeError):
-        audio.concat_wavs([_wav(100), _wav(100, **mismatch)])
+        audio.concat_wavs_to_file([_wav(100), _wav(100, **mismatch)], tmp_path / "out.wav")
 
 
-def test_concat_wavs_raises_on_unreadable_segment():
+def test_concat_wavs_to_file_raises_on_unreadable_segment(tmp_path):
     with pytest.raises(RuntimeError):
-        audio.concat_wavs([_wav(100), b"dit-is-geen-wav-maar-mp3"])
+        audio.concat_wavs_to_file(
+            [_wav(100), b"dit-is-geen-wav-maar-mp3"], tmp_path / "out.wav"
+        )
 
 
-def test_concat_wavs_raises_on_empty_input():
+def test_concat_wavs_to_file_raises_on_empty_input(tmp_path):
     with pytest.raises(RuntimeError):
-        audio.concat_wavs([])
+        audio.concat_wavs_to_file([], tmp_path / "out.wav")
+
+
+def test_concat_wavs_to_file_raises_on_zero_total_frames(tmp_path):
+    """Every segment parses fine but none carries any audio - F6: a job must
+    not silently publish a 0-frame WAV."""
+    with pytest.raises(RuntimeError, match="0 frames"):
+        audio.concat_wavs_to_file([_wav(0), _wav(0)], tmp_path / "out.wav")
 
 
 # ── resolve_notebook_audio_path ──────────────────────────────────────────
@@ -951,6 +965,20 @@ async def test_unwritable_audio_dir_errors_cleanly(monkeypatch, tmp_path):
     job = await _await_job(audio.start_podcast_job(nb_id, "own", _TS))
     assert job["status"] == "error"
     assert "bestaat-niet" in job["error"]
+    _assert_no_traces(tmp_path, nb_id, documents_before)
+
+
+async def test_all_empty_synthesized_segments_errors_cleanly(monkeypatch, tmp_path):
+    """F6: every segment is a valid-but-empty WAV (0 frames) - the job must
+    error instead of publishing a silent, empty podcast, and the failure
+    invariant (no row, no Document, no file, no stray .tmp) still holds."""
+    _prepare(monkeypatch, tmp_path, synth=_FakeSynth(frames=0))
+    nb_id = _seed_notebook()
+    documents_before = _document_count()
+
+    job = await _await_job(audio.start_podcast_job(nb_id, "own", _TS))
+    assert job["status"] == "error"
+    assert "0 frames" in job["error"]
     _assert_no_traces(tmp_path, nb_id, documents_before)
 
 

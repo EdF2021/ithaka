@@ -74,8 +74,9 @@ logger = logging.getLogger(__name__)
 JOB_TIMEOUT_SECONDS = 1800
 
 # Upper bound on the text handed to the TTS provider in one call. Kept below
-# the 5000-char limit most OpenAI-compatible /audio/speech endpoints enforce.
-MAX_SEGMENT_CHARS = 4500
+# OpenAI's /audio/speech input cap of 4096 characters (most OpenAI-compatible
+# endpoints mirror that limit).
+MAX_SEGMENT_CHARS = 4000
 
 # Per-provider default voice pair (speaker A, speaker B).
 _VOICE_DEFAULTS = {"local": ("af_heart", "am_michael")}
@@ -206,23 +207,35 @@ def split_turn(text: str, limit: int = MAX_SEGMENT_CHARS) -> list[str]:
 
 # --------------------------------------------------------------------------
 # WAV concatenation
+#
+# Streams straight to disk: earlier versions built a `frames` bytes list,
+# fed it through a BytesIO and returned the whole thing via getvalue(), which
+# meant the caller's already-collected segment list, the frames list, the
+# BytesIO buffer and the returned bytes object could all be alive at once
+# (~4x a 20-minute episode's audio in RAM). `_StreamingWavConcat` instead
+# opens the destination file once (format defined by the first segment) and
+# writes every segment's frames straight through, so the only thing that
+# accumulates is the running frame count.
 # --------------------------------------------------------------------------
 
-def concat_wavs(segments: list[bytes]) -> bytes:
-    """Concatenate WAV segments into one WAV, stdlib only.
+class _StreamingWavConcat:
+    """Validates and streams WAV segments directly into an on-disk WAV file.
 
     Only the format-defining parameters (channels, sample width, frame rate)
-    have to agree - nframes differs per segment by definition, so a whole
-    getparams() comparison would reject every valid concat. A segment that is
-    unreadable (an endpoint that ignored response_format="wav" and returned
-    mp3) or formatted differently is a RuntimeError: v1 does not resample.
+    have to agree across segments - nframes differs per segment by
+    definition, so a whole getparams() comparison would reject every valid
+    concat. A segment that is unreadable (an endpoint that ignored
+    response_format="wav" and returned mp3) or formatted differently is a
+    RuntimeError: v1 does not resample.
     """
-    if not segments:
-        raise RuntimeError("Geen audiofragmenten om samen te voegen")
 
-    params: Optional[tuple[int, int, int]] = None
-    frames: list[bytes] = []
-    for index, data in enumerate(segments, start=1):
+    def __init__(self, dest_path):
+        self._dest_path = dest_path
+        self._writer: Optional[wave.Wave_write] = None
+        self._params: Optional[tuple[int, int, int]] = None
+        self.total_frames = 0
+
+    def add_segment(self, index: int, data: bytes) -> None:
         try:
             with wave.open(io.BytesIO(data), "rb") as reader:
                 current = (
@@ -230,7 +243,8 @@ def concat_wavs(segments: list[bytes]) -> bytes:
                     reader.getsampwidth(),
                     reader.getframerate(),
                 )
-                chunk = reader.readframes(reader.getnframes())
+                nframes = reader.getnframes()
+                chunk = reader.readframes(nframes)
         # Deliberately narrow: a MemoryError on a very long podcast must not be
         # reported as "not a readable WAV file".
         except (wave.Error, EOFError, OSError, ValueError) as exc:
@@ -238,24 +252,52 @@ def concat_wavs(segments: list[bytes]) -> bytes:
                 f"Audiofragment {index} is geen leesbaar WAV-bestand ({exc}). "
                 "Levert de TTS-provider wel WAV terug?"
             ) from exc
-        frames.append(chunk)
-        if params is None:
-            params = current
-        elif current != params:
+
+        if self._writer is None:
+            self._params = current
+            self._writer = wave.open(str(self._dest_path), "wb")
+            self._writer.setnchannels(current[0])
+            self._writer.setsampwidth(current[1])
+            self._writer.setframerate(current[2])
+        elif current != self._params:
             raise RuntimeError(
                 f"Audiofragment {index} heeft afwijkende WAV-parameters "
-                f"(kanalen/bits/samplerate {current} tegenover {params}). "
+                f"(kanalen/bits/samplerate {current} tegenover {self._params}). "
                 "Alle fragmenten moeten hetzelfde formaat hebben."
             )
+        self._writer.writeframes(chunk)
+        # `chunk` (and `data`) fall out of scope with the next loop iteration -
+        # nothing beyond the running total survives a segment.
+        self.total_frames += nframes
 
-    output = io.BytesIO()
-    with wave.open(output, "wb") as writer:
-        writer.setnchannels(params[0])
-        writer.setsampwidth(params[1])
-        writer.setframerate(params[2])
-        for chunk in frames:
-            writer.writeframes(chunk)
-    return output.getvalue()
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
+
+
+def concat_wavs_to_file(segments, dest_path) -> int:
+    """Concatenate an iterable of WAV byte segments straight into `dest_path`.
+
+    Returns the total number of frames written. Raises RuntimeError when
+    `segments` is empty, when a segment is unreadable or format-mismatched
+    (see `_StreamingWavConcat`), or when every segment parsed but the result
+    holds zero frames (an empty podcast is a job error, not a 0-byte file).
+    """
+    writer = _StreamingWavConcat(dest_path)
+    count = 0
+    try:
+        for index, data in enumerate(segments, start=1):
+            writer.add_segment(index, data)
+            count += 1
+    finally:
+        writer.close()
+
+    if count == 0:
+        raise RuntimeError("Geen audiofragmenten om samen te voegen")
+    if writer.total_frames == 0:
+        raise RuntimeError("TTS leverde geen audio (0 frames)")
+    return writer.total_frames
 
 
 # --------------------------------------------------------------------------
@@ -515,18 +557,11 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
     entry["phase"] = "tts"
     entry["segment"] = 0
     entry["total"] = len(plan)
-    audio_segments: list[bytes] = []
-    for index, (chunk, voice) in enumerate(plan):
-        # The synthesizer is blocking (HTTP call or GPU inference); off the
-        # event loop it goes, or the whole app stalls for the job's duration.
-        audio_segments.append(await asyncio.to_thread(synthesize, chunk, voice))
-        entry["segment"] = index + 1
 
-    # ── phase: concat ──
-    entry["phase"] = "concat"
-    merged = await asyncio.to_thread(concat_wavs, audio_segments)
-
-    # ── write the file, then the rows ──
+    # Streamed straight to the eventual file: each turn is synthesized, its
+    # frames are written and the bytes are dropped before the next turn is
+    # requested, so at most one segment's audio is ever in memory (see
+    # _StreamingWavConcat's docstring for what this replaces).
     filename = uuid.uuid4().hex + ".wav"
     directory = Path(NOTEBOOK_AUDIO_DIR)
     final_path = directory / filename
@@ -535,24 +570,42 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
         # NOTEBOOK_AUDIO_DIR is created eagerly (and guarded) in src.constants;
         # this module never mkdirs. An absent or unwritable directory surfaces
         # here as a clean job error instead of a traceback.
-        with tempfile.NamedTemporaryFile(
+        handle = tempfile.NamedTemporaryFile(
             dir=str(directory), prefix=".podcast-", suffix=".tmp", delete=False
-        ) as handle:
-            temp_path = Path(handle.name)
-            handle.write(merged)
+        )
+        temp_path = Path(handle.name)
+        handle.close()
+
+        writer = _StreamingWavConcat(temp_path)
+        try:
+            for index, (chunk, voice) in enumerate(plan, start=1):
+                # The synthesizer is blocking (HTTP call or GPU inference);
+                # off the event loop it goes, or the whole app stalls for the
+                # job's duration.
+                data = await asyncio.to_thread(synthesize, chunk, voice)
+                writer.add_segment(index, data)
+                entry["segment"] = index
+        finally:
+            writer.close()
+        if writer.total_frames == 0:
+            raise RuntimeError("TTS leverde geen audio (0 frames)")
+
         # Atomic publish: no reader ever sees a half-written file.
         os.replace(temp_path, final_path)
+        temp_path = None  # published - the cleanup below must leave it alone
     except OSError as exc:
+        raise RuntimeError(
+            f"Kon het audiobestand niet opslaan in {directory} ({exc})"
+        ) from exc
+    finally:
         if temp_path is not None:
             try:
                 temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
-        raise RuntimeError(
-            f"Kon het audiobestand niet opslaan in {directory} ({exc})"
-        ) from exc
 
     session = factory()
+    artifact: Optional[NotebookArtifact] = None
     try:
         notebook = (
             session.query(Notebook)
@@ -579,17 +632,23 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
         )
         session.add(artifact)
         session.commit()
-        # After the commit but before the close: commit expires the attributes
-        # and to_dict() needs a live session to refresh them.
-        artifact_dict = artifact.to_dict()
     except Exception:
         session.rollback()
+        session.close()
         # Rows and file are all-or-nothing: drop the audio we just published.
         try:
             final_path.unlink(missing_ok=True)
         except OSError:
             pass
         raise
+
+    # Past this point the commit already succeeded: rows and file are
+    # durably published. to_dict() needs the still-open session to refresh
+    # commit-expired attributes, but a failure here must not roll back or
+    # delete what already landed - that would turn a serialization bug into
+    # data loss, so it stays out of the try/except above on purpose.
+    try:
+        artifact_dict = artifact.to_dict()
     finally:
         session.close()
 
