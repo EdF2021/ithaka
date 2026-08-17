@@ -717,7 +717,7 @@ app.include_router(setup_personal_routes(personal_docs_mgr, rag_manager, rag_ava
 
 # Notebooks (bounded, sources-only source sets for strict-chat)
 from routes.notebook_routes import setup_notebook_routes
-app.include_router(setup_notebook_routes(rag_manager))
+app.include_router(setup_notebook_routes(rag_manager, tts_service=tts_service))
 
 # Embedding model management
 from routes.embedding_routes import setup_embedding_routes
