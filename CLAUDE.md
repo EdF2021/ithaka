@@ -49,6 +49,7 @@ Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*`
 - **`core/`** — auth (`AuthManager`), database, middleware, session manager. `core/constants.py` only re-exports `src/constants.py` for backward compatibility.
 - **`static/`** — vanilla JS ES modules, no framework, no build step. `static/index.html` loads the scripts; `static/js/` holds 65+ modules (`MODULE_SUMMARY.md` there is a partial, historical overview).
 - **`scripts/`** — CLI entry points (`ithaka`, `ithaka-backup`, `ithaka-cookbook`, …) and maintenance scripts.
+- **Notebooks** (NotebookLM-style, cross-cutting): `routes/notebook_routes.py` + `src/notebook_ingest.py` + `static/js/notebooks.js`. Sources are indexed per notebook via a `notebook_id` metadata filter in the RAG layer (`rag_manager.py` / `rag_vector.py`); notebook chat runs strictly grounded with `[n]` citations and a server-side tool lockdown (all tools + MCP disabled). Datamodel incl. `NotebookArtifact` lives in `core/database.py`. Design docs: `docs/notebooklm-gap-analyse.md` and `docs/superpowers/specs/2026-08-16-notebooks-fase2-design.md`.
 
 ### Constants rule (enforced in review)
 
@@ -59,6 +60,7 @@ Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*`
 - **Commits:** Conventional Commits — `type(scope): summary` (e.g. `fix(search): …`, `feat(notes): …`).
 - **Visual changes** (anything touching CSS/HTML/SVG or DOM-drawing JS): run the app and look at it in a browser — tests alone don't count; attach a screenshot (mobile too when relevant). Reuse existing CSS variables (`--red`, `--fg`, `--bg`, `--card`, `--border`, …) and existing button/input/card classes; don't introduce new color values, font sizes, or parallel components. **No Unicode emoji in UI or code** — inline monochrome SVG or plain text. Primary UI font is monospaced (`Fira Code`); dark theme is default and light-mode work goes through the existing theme system.
 - Small, single-purpose PRs; no broad rewrites or formatting-only changes.
+- **Dependency pin:** `mcp<2` in `requirements.txt` is deliberate — mcp 2.0 drops the `Server.list_tools()` decorator API that `mcp_servers/*` use. Don't bump it without porting those servers.
 
 ## Deployment specifics of this fork
 

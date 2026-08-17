@@ -268,6 +268,17 @@ function _showList() {
 
 // ---- Detail view ----
 
+// Fixed generate-button order and Dutch labels per the design spec — the
+// backend only accepts these five `kind` values.
+const ARTIFACT_KINDS = ['study_guide', 'briefing', 'faq', 'quiz', 'mindmap'];
+const KIND_LABELS = {
+  study_guide: 'Studiegids',
+  briefing: 'Briefing',
+  faq: 'FAQ',
+  quiz: 'Quiz',
+  mindmap: 'Mindmap',
+};
+
 function _sourceRow(src) {
   const failed = src.status !== 'indexed';
   const chunks = Number(src.chunk_count || 0);
@@ -319,6 +330,130 @@ async function _deleteSource(sourceId) {
     return;
   }
   _renderSources();
+}
+
+function _artifactRow(a) {
+  const label = KIND_LABELS[a.kind] || a.kind;
+  const title = a.title || label;
+  // A sibling span, not text inside .notebook-artifact-title: that span is
+  // nowrap+ellipsis, so text appended inside it would be the first thing
+  // clipped on a narrow viewport — and this hint is required, per spec.
+  const hint = a.kind === 'mindmap'
+    ? '<span class="notebook-artifact-hint">(Preview voor de mindmap)</span>' : '';
+  return `
+    <div class="list-item notebook-artifact-item" data-art-id="${_esc(a.id)}" data-doc-id="${_esc(a.document_id)}">
+      <span class="notebook-artifact-kind">${_esc(label)}</span>
+      <span class="grow notebook-artifact-title">${_esc(title)}</span>
+      ${hint}
+      <span class="dashboard-row-sub notebook-artifact-date">${_esc(_shortDate(a.created_at))}</span>
+      <button type="button" class="notebook-src-del notebook-artifact-del" data-art-id="${_esc(a.id)}"
+              title="Delete artifact">${_ICONS.close}</button>
+    </div>`;
+}
+
+async function _renderArtifacts() {
+  const box = document.getElementById('notebook-artifacts');
+  if (!box || !_detail) return;
+  let data;
+  try {
+    data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_detail.id)}/artifacts`);
+  } catch (e) {
+    box.innerHTML = '';
+    _showError('notebook-artifact-error', `Could not load artifacts (${e.message})`);
+    return;
+  }
+  const artifacts = data.artifacts || [];
+  if (!artifacts.length) {
+    box.innerHTML = '<div class="dashboard-empty">No artifacts yet — generate one above</div>';
+    return;
+  }
+  box.innerHTML = artifacts.map(_artifactRow).join('');
+  box.querySelectorAll('.notebook-artifact-item').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.notebook-artifact-del')) return;
+      _openArtifact(row);
+    });
+  });
+  box.querySelectorAll('.notebook-artifact-del').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _armConfirm(btn, () => _deleteArtifact(btn.dataset.artId));
+    });
+  });
+}
+
+async function _deleteArtifact(artifactId) {
+  if (!_detail) return;
+  try {
+    await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_detail.id)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { method: 'DELETE' });
+    _showError('notebook-artifact-error', '');
+  } catch (e) {
+    _showError('notebook-artifact-error', `Delete failed (${e.message})`);
+    return;
+  }
+  _renderArtifacts();
+}
+
+async function _generateArtifact(kind, btn) {
+  if (!_detail) return;
+  const label = btn?.querySelector('span');
+  const original = label ? label.textContent : null;
+  if (btn) btn.disabled = true;
+  if (label) label.textContent = 'Genereren…';
+  _showError('notebook-artifact-error', '');
+  try {
+    await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_detail.id)}/artifacts`, {
+      method: 'POST',
+      ..._jsonBody({ kind }),
+    });
+    await _renderArtifacts();
+  } catch (e) {
+    _showError('notebook-artifact-error', `Could not generate (${e.message})`);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (label && original != null) label.textContent = original;
+  }
+}
+
+/**
+ * Open a generated artifact in the document viewer. Mirrors _openChat's
+ * handoff shape: prefer the live window.documentModule singleton (published
+ * by document.js at module load, document.js:11038), close the notebooks
+ * modal, then load — falling back to a dynamic import of document.js itself
+ * when the singleton isn't on window yet (e.g. document.js not loaded on
+ * this page load path).
+ */
+async function _openArtifact(row) {
+  if (!_detail || row.dataset.opening === '1') return;
+  const docId = row.dataset.docId;
+  if (!docId) return;
+  row.dataset.opening = '1';
+  row.classList.add('notebook-artifact-opening');
+  _showError('notebook-artifact-error', '');
+
+  try {
+    let dm = window.documentModule;
+    if (!dm || !dm.loadDocument) {
+      // Relies on document.js already being loaded on this page without a
+      // `?v=` cache-buster query string: a busted URL here would import a
+      // second, distinct module record/instance of document.js rather than
+      // reusing the one the rest of the app already initialized against.
+      const mod = await import('./document.js');
+      dm = (mod && mod.default) || mod;
+    }
+    if (!dm || !dm.loadDocument) throw new Error('Document module unavailable');
+    // Only close the notebooks modal once the document actually loaded, so a
+    // failure here still has #notebook-artifact-error visible to report to.
+    await dm.loadDocument(docId);
+    closeNotebooks();
+  } catch (e) {
+    _showError('notebook-artifact-error', `Could not open artifact (${e.message})`);
+  } finally {
+    row.dataset.opening = '0';
+    row.classList.remove('notebook-artifact-opening');
+  }
 }
 
 const _ZONE_IDLE = 'Add sources — drop files here or click to upload';
@@ -471,14 +606,27 @@ function _showDetail(nb) {
     <div class="notebook-upload-zone" id="notebook-upload-zone">${_ZONE_IDLE}</div>
     <input type="file" id="notebook-file-input" multiple style="display:none">
     <div class="notebook-error" id="notebook-detail-error"></div>
+    <div class="notebook-artifact-head">Artifacts</div>
+    <div class="notebook-artifact-btns">
+      ${ARTIFACT_KINDS.map(kind => `<button type="button" class="dashboard-action-btn notebook-artifact-gen-btn"
+              data-kind="${_esc(kind)}"><span>${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
+    </div>
+    <div class="notebook-error" id="notebook-artifact-error"></div>
+    <div class="notebook-artifacts" id="notebook-artifacts">
+      <div class="dashboard-empty">Loading&hellip;</div>
+    </div>
     <div class="notebook-sources" id="notebook-sources">
       <div class="dashboard-empty">Loading&hellip;</div>
     </div>`;
 
   document.getElementById('notebook-back').addEventListener('click', _showList);
   document.getElementById('notebook-open-chat').addEventListener('click', _openChat);
+  body.querySelectorAll('.notebook-artifact-gen-btn').forEach(btn => {
+    btn.addEventListener('click', () => _generateArtifact(btn.dataset.kind, btn));
+  });
   _setupUploadZone();
   _renderSources();
+  _renderArtifacts();
 }
 
 // ---- Modal ----

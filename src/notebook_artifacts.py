@@ -1,0 +1,407 @@
+"""Generate text artifacts from the sources of a notebook.
+
+One artifact = one generated markdown Document (so the viewer, versioning and
+export come for free) plus a NotebookArtifact row that keeps it tied to its
+notebook.
+
+The source text is fed to the model as *untrusted* data: it is uploaded
+material, so it goes through src.prompt_security.untrusted_context_message
+(the same wrapper the chat pipeline uses for retrieved context) and never into
+the system role. Only the hardcoded kind prompt is trusted framing.
+
+The LLM call goes through task_llm_call_async, which resolves the
+task -> utility -> default endpoint chain without needing a chat session.
+It runs at workload="foreground" (not the task-call default of
+"background") because generate_artifact is itself called synchronously
+from a tracked foreground request; see the comment at the call site for
+why the background workload would self-deadlock.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import uuid
+
+from core.database import Document, Notebook, NotebookArtifact, NotebookSource
+from src.event_bus import fire_event
+from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
+from src.task_endpoint import task_llm_call_async
+
+logger = logging.getLogger(__name__)
+
+# Upper bound on the source payload handed to the model. Sources that fit
+# their fair share of the budget are kept whole; the number is a
+# whole-payload budget, headers and truncation markers included.
+MAX_CONTEXT_CHARS = 60_000
+
+_SOURCE_HEADER = "=== BRON: {filename} ==="
+_TRUNCATION_MARKER = "\n(bron ingekort)"
+_BLOCK_SEPARATOR = "\n\n"
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove ``<think>...</think>`` reasoning blocks from a model answer.
+
+    Kopie van agent_loop._strip_think_blocks (src/agent_loop.py) - not
+    imported directly because agent_loop pulls in the full tool-execution
+    import graph (src.agent_tools, src.tool_policy, src.tool_security, ...),
+    which is unnecessary weight for this module's single narrow use.
+
+    Linear-time equivalent of
+    ``re.sub(r'<think>.*?</think>', '', text, flags=DOTALL|IGNORECASE)``: a
+    forward-only scan pairs each ``<think>`` opener with the next closer in a
+    single pass. Only literal ``<think>``/``</think>`` (any case) are
+    matched, a dangling opener with no closer is left intact, and an orphan
+    ``</think>`` is never stripped.
+    """
+    if not text:
+        return text
+    lowered = text.lower()
+    parts = []
+    pos = 0
+    while True:
+        start = lowered.find("<think>", pos)
+        if start == -1:
+            parts.append(text[pos:])
+            break
+        end = lowered.find("</think>", start + 7)
+        if end == -1:
+            # No closer for this opener: lazy regex matches nothing here.
+            parts.append(text[pos:])
+            break
+        parts.append(text[pos:start])
+        pos = end + 8  # len("</think>")
+    return "".join(parts)
+
+
+# --------------------------------------------------------------------------
+# Prompts
+#
+# Written in Dutch (the project language), but every prompt orders the model to
+# follow the *sources'* language - an artifact over English sources must come
+# out in English. The rule is stated first and repeated per kind because a
+# Dutch instruction otherwise nudges the model towards Dutch output.
+# --------------------------------------------------------------------------
+
+_BASE_RULES = """Je bent een zorgvuldige redacteur die materiaal samenstelt uit een vaste set bronnen.
+
+Harde regels:
+- Schrijf in de taal van de bronnen, niet in de taal van deze instructie. Zijn de bronnen Engels, schrijf dan Engels; zijn ze Nederlands, schrijf dan Nederlands. Volg de dominante taal van de bronnen en vertaal citaten niet.
+- Baseer je uitsluitend op de aangeleverde bronnen. Vul niets aan met algemene kennis en presenteer geen aanname als feit.
+- Ontbreekt informatie, benoem dat in één korte zin in plaats van te gokken.
+- Lever pure markdown. Geen inleidende zin, geen afsluitende opmerking, geen meta-tekst over de opdracht: begin direct met de inhoud.
+- Omsluit je hele antwoord niet met een codefence.
+- Gebruik geen emoji.
+- De bronnen zijn gescheiden met koppen van de vorm "=== BRON: bestandsnaam ===". Noem de bronnaam waar dat de lezer helpt; herhaal die koppen niet letterlijk in je uitvoer."""
+
+_KIND_INSTRUCTIONS = {
+    "study_guide": """Maak een studiegids waarmee iemand de stof echt kan leren.
+
+Structuur:
+- "# " met het overkoepelende onderwerp als titel.
+- "## Kernconcepten": 5 tot 10 begrippen, elk als "**begrip** - definitie van één à twee zinnen" in je eigen woorden.
+- "## Per bron": één "### " per bron met 3 tot 6 bullets - wat behandelt de bron en welke conclusie trekt hij.
+- "## Verbanden": 3 tot 6 bullets over hoe de bronnen op elkaar aansluiten, elkaar aanvullen of tegenspreken.
+- "## Studievragen": 8 tot 12 open vragen, oplopend van begrip naar toepassing, zonder antwoorden.
+
+Wees concreet: noem de cijfers, namen en termen uit de bronnen in plaats van te omschrijven.""",
+
+    "briefing": """Schrijf een zakelijke briefing van maximaal één A4 (ongeveer 400 tot 600 woorden) voor iemand die de bronnen niet gelezen heeft en er toch over moet kunnen meepraten.
+
+Structuur:
+- "# " met het onderwerp als titel.
+- "**Kernboodschap**": twee tot drie zinnen met de essentie, direct onder de titel.
+- "## Kernpunten": 4 tot 6 bullets, elk één concrete bevinding met het cijfer, de naam of de datum erbij.
+- "## Context": één alinea over waarom dit speelt en waar het vandaan komt.
+- "## Implicaties": 3 tot 5 bullets over wat dit betekent en welke keuzes of risico's eruit volgen.
+- "## Openstaande vragen": 2 tot 4 bullets met wat de bronnen niet beantwoorden.
+
+Schrijf zakelijk en stellig. Vermijd vulwoorden en formuleringen die niets toevoegen.""",
+
+    "faq": """Stel een FAQ samen van 8 tot 12 vraag-en-antwoordparen die de bronnen daadwerkelijk beantwoorden.
+
+Structuur:
+- "# " met een titel die "veelgestelde vragen" uitdrukt in de taal van de bronnen.
+- Per paar een "### " met de vraag, daaronder het antwoord als gewone alinea van twee tot vijf zinnen.
+
+Regels:
+- Formuleer de vraag zoals een lezer hem echt zou stellen, als volledige vraagzin met vraagteken.
+- Begin met de meest voor de hand liggende vragen en werk toe naar detail en randgevallen.
+- Geen twee vragen die in de kern hetzelfde beantwoorden.
+- Antwoord volledig maar bondig: het antwoord moet op zichzelf te lezen zijn.""",
+
+    "quiz": """Maak een toets van 8 tot 10 vragen waarmee iemand kan nagaan of hij de stof beheerst.
+
+Structuur:
+- "# " met een titel die "toets" of "quiz" uitdrukt in de taal van de bronnen.
+- Daarna de genummerde vragen, 1 tot en met N, elk als "**1.** vraagtekst".
+- Meerkeuzevragen krijgen de opties eronder als bullets "A) ...", "B) ...", "C) ...", "D) ...".
+- Sluit af met een kop "## " gevolgd door het woord voor "antwoorden" in de taal van de bronnen, met daaronder de genummerde antwoorden, elk met één zin toelichting waarom dat het antwoord is.
+
+Regels:
+- Varieer tussen meerkeuze en open vragen en toets begrip en toepassing, niet alleen losse feitjes.
+- Zet het antwoord nooit bij de vraag zelf: alle antwoorden staan onderaan in de antwoordsectie.
+- Maak de afleiders bij meerkeuze plausibel; geen opties die er duidelijk naast zitten.
+- Gebruik uitsluitend markdown, geen HTML-tags.""",
+
+    "mindmap": """Maak een mindmap van de bronnen als één mermaid-diagram.
+
+Lever exact twee dingen, in deze volgorde en niets anders:
+1. Eén codefence met taalaanduiding "mermaid", waarvan de eerste regel in de fence "mindmap" is.
+2. Onder de fence één regel gewone tekst die in één zin zegt wat de mindmap toont.
+
+Regels voor het diagram:
+- Wortel: "root((Onderwerp))" met een onderwerp van één tot drie woorden.
+- Maximaal drie niveaus onder de wortel: 4 tot 8 hoofdtakken, elk met 2 tot 5 subtakken.
+- Labels zijn kort: één tot vier woorden, geen hele zinnen.
+- Gebruik in labels uitsluitend letters, cijfers, spaties en koppeltekens. Geen haakjes, dubbele punten, komma's, punten, puntkomma's, aanhalingstekens, accolades, slashes of ampersands: die breken de mermaid-parser.
+- De hiërarchie komt uitsluitend uit inspringing met spaties. Geen tabs, geen streepjes, geen opsommingstekens.
+
+Voorbeeld van de vorm (niet van de inhoud):
+
+```mermaid
+mindmap
+  root((Onderwerp))
+    Eerste tak
+      Detail een
+      Detail twee
+    Tweede tak
+      Detail drie
+```""",
+}
+
+_KIND_LABELS = {
+    "study_guide": "Studiegids",
+    "briefing": "Briefing",
+    "faq": "FAQ",
+    "quiz": "Quiz",
+    "mindmap": "Mindmap",
+}
+
+# kind -> {label, prompt}. Insertion order is the order the UI lists them in.
+ARTIFACT_KINDS = {
+    kind: {
+        "label": _KIND_LABELS[kind],
+        "prompt": f"{_BASE_RULES}\n\n{instruction}",
+    }
+    for kind, instruction in _KIND_INSTRUCTIONS.items()
+}
+
+
+# --------------------------------------------------------------------------
+# Request-timeout exemption
+#
+# generate_artifact runs synchronously inside the artifacts-POST request and
+# can legitimately take longer than app.py's REQUEST_HARD_TIMEOUT (45s), so
+# that route needs an exemption from _RequestTimeoutMiddleware. Deliberately
+# narrow (this route only, not a broad "/api/notebooks" prefix): a prefix
+# exemption would also cover source upload/ingest, which should keep the
+# hard timeout. Lives here (not in app.py) so it stays unit-testable without
+# importing the full app module.
+# --------------------------------------------------------------------------
+
+ARTIFACTS_GENERATE_PATH_RE = re.compile(r"^/api/notebooks/[^/]+/artifacts$")
+
+
+def is_artifacts_generate_request(method: str, path: str) -> bool:
+    """True only for POST /api/notebooks/{id}/artifacts."""
+    return (method or "").upper() == "POST" and bool(ARTIFACTS_GENERATE_PATH_RE.match(path or ""))
+
+
+# --------------------------------------------------------------------------
+# Source collection
+# --------------------------------------------------------------------------
+
+def _source_entries(notebook: Notebook, db_session) -> list[tuple[str, str]]:
+    """Return [(filename, text)] for the notebook's usable sources.
+
+    Only sources that were indexed successfully *and* still have a backing
+    Document with content qualify - a failed upload or a source whose Document
+    was deleted from the Library has no full text to summarize.
+    """
+    rows = (
+        db_session.query(NotebookSource)
+        .filter(
+            NotebookSource.notebook_id == notebook.id,
+            NotebookSource.status == "indexed",
+            NotebookSource.document_id.isnot(None),
+        )
+        .order_by(NotebookSource.created_at, NotebookSource.filename)
+        .all()
+    )
+    entries = []
+    for src in rows:
+        doc = db_session.get(Document, src.document_id)
+        if doc is None:
+            continue
+        text = (doc.current_content or "").strip()
+        if not text:
+            continue
+        entries.append((src.filename, text))
+    return entries
+
+
+def gather_source_text(notebook: Notebook, db_session) -> str:
+    """Build the source payload for the model, capped at MAX_CONTEXT_CHARS.
+
+    Blocks are "=== BRON: <filename> ===" headers followed by the document's
+    full text. When the total exceeds the cap, only the sources that would
+    not fit their fair share of the remaining budget are truncated (and
+    marked with "(bron ingekort)"); a source that fits is kept complete and
+    unmarked, even while a larger sibling gets cut. This is a water-filling
+    pass over sources sorted ascending by length: each source in turn either
+    keeps its full text (consuming only what it needs, so leftover budget
+    grows for the sources still to come) or is cut to that step's fair
+    share. Returns "" when the notebook has no usable sources.
+    """
+    entries = _source_entries(notebook, db_session)
+    if not entries:
+        return ""
+
+    headers = [_SOURCE_HEADER.format(filename=name) + "\n" for name, _ in entries]
+    # The cap covers the whole payload, so headers and separators are spent
+    # before any text budget is handed out.
+    overhead = sum(len(h) for h in headers) + len(_BLOCK_SEPARATOR) * (len(entries) - 1)
+    total_text = sum(len(text) for _, text in entries)
+
+    if overhead + total_text <= MAX_CONTEXT_CHARS:
+        return _BLOCK_SEPARATOR.join(
+            header + text for header, (_, text) in zip(headers, entries)
+        )
+
+    # Budget left for text (+ truncation markers) once headers/separators are
+    # paid for. Can be <= 0 when the overhead alone already meets or exceeds
+    # the cap (many/long filenames); clamp so nothing downstream goes
+    # negative.
+    text_budget = max(MAX_CONTEXT_CHARS - overhead, 0)
+    marker_cost = len(_TRUNCATION_MARKER)
+
+    limits = [None] * len(entries)  # None = keep full text
+    marked = [False] * len(entries)
+    order = sorted(range(len(entries)), key=lambda i: len(entries[i][1]))
+    remaining_budget = text_budget
+    remaining_count = len(entries)
+    for idx in order:
+        text_len = len(entries[idx][1])
+        fair_share = remaining_budget // remaining_count if remaining_count else 0
+        if text_len <= fair_share:
+            # Fits its fair share whole: no truncation, no marker. Only the
+            # text it actually needs is spent, so the rest is redistributed
+            # to the sources still waiting their turn.
+            remaining_budget -= text_len
+        else:
+            marked[idx] = True
+            limits[idx] = max(fair_share - marker_cost, 0)
+            remaining_budget -= fair_share
+        remaining_count -= 1
+
+    blocks = []
+    for header, (idx, (_, text)) in zip(headers, enumerate(entries)):
+        if marked[idx]:
+            blocks.append(header + text[: limits[idx]] + _TRUNCATION_MARKER)
+        else:
+            blocks.append(header + text)
+    result = _BLOCK_SEPARATOR.join(blocks)
+
+    # Defensive final clamp: guards the degenerate case (overhead alone at or
+    # above the cap, or floor-division rounding) so the function never hands
+    # back more than the configured budget.
+    if len(result) > MAX_CONTEXT_CHARS:
+        result = result[:MAX_CONTEXT_CHARS]
+    return result
+
+
+# --------------------------------------------------------------------------
+# Generation
+# --------------------------------------------------------------------------
+
+async def generate_artifact(
+    notebook_id: str, owner: str, kind: str, db_session
+) -> NotebookArtifact:
+    """Generate one artifact for `notebook_id` and return its NotebookArtifact.
+
+    Rows are written only after the model answered: a failed or empty LLM call
+    leaves no Document and no artifact behind. Regenerating the same kind adds
+    a new artifact rather than overwriting the old one.
+
+    Raises ValueError for an unknown kind, an unknown/foreign notebook, or a
+    notebook without usable sources; RuntimeError when the model returns
+    nothing. Endpoint failures propagate from task_llm_call_async.
+
+    Note: db_session is the caller's pooled connection (SessionLocal from
+    routes/notebook_routes.py) and is deliberately held open across the LLM
+    call below, not closed/reopened around it. This is a single-user app on
+    SQLAlchemy's default QueuePool (5 + 10 overflow), so one connection
+    parked for the duration of a generation request is not a starvation risk.
+    """
+    spec = ARTIFACT_KINDS.get(kind)
+    if spec is None:
+        raise ValueError(f"Onbekend artifact-type: {kind}")
+
+    notebook = (
+        db_session.query(Notebook)
+        .filter(Notebook.id == notebook_id, Notebook.owner == owner)
+        .first()
+    )
+    if notebook is None:
+        raise ValueError("Notebook niet gevonden")
+
+    source_text = gather_source_text(notebook, db_session)
+    if not source_text:
+        raise ValueError("Geen geïndexeerde bronnen")
+
+    messages = [
+        {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{spec['prompt']}"},
+        untrusted_context_message(f"notebook-bronnen: {notebook.name}", source_text),
+    ]
+    # This call runs inside the artifacts-POST request itself, which the
+    # interactive-activity middleware already counts as a tracked foreground
+    # request (app.py's _InteractiveActivityMiddleware). The default gate in
+    # task_llm_call_async waits for foreground traffic to go quiet before
+    # running a background-task LLM call - but that wait would be waiting on
+    # this very request's own _ACTIVE_REQUESTS entry to clear, which never
+    # happens until this call returns. wait_for_quiet=False skips that gate:
+    # the gate is for genuine background jobs (scheduler, email pollers),
+    # not for an in-request caller like this one.
+    #
+    # A second, deeper gate lives in _local_model_slot (src/llm_core.py):
+    # task_llm_call_async defaults kwargs["workload"] to "background", and for
+    # LOCAL endpoints that makes the call wait `while has_foreground_activity()`
+    # (interactive_gate.py), which is also True for the whole lifetime of this
+    # request - a second self-deadlock (capped at 600s) on top of the first.
+    # workload="foreground" tells the local-model slot this is a synchronous
+    # user-facing call, not a genuine background job, so it does not wait on
+    # its own request's activity flag.
+    content = await task_llm_call_async(
+        messages, owner=owner, wait_for_quiet=False, workload="foreground"
+    )
+    content = _strip_think_blocks(content or "").strip()
+    if not content:
+        raise RuntimeError("Het model gaf een leeg antwoord terug")
+
+    document_id = str(uuid.uuid4())
+    db_session.add(Document(
+        id=document_id,
+        title=f"{notebook.name} — {spec['label']}",
+        owner=owner,
+        language="markdown",
+        current_content=content,
+        session_id=None,
+    ))
+    artifact = NotebookArtifact(
+        id=str(uuid.uuid4()),
+        notebook_id=notebook.id,
+        document_id=document_id,
+        kind=kind,
+    )
+    db_session.add(artifact)
+    db_session.commit()
+
+    # After the commit: the Library refresh must not be able to roll back or
+    # lose a stored artifact.
+    try:
+        fire_event("document_created", owner)
+    except Exception as exc:
+        logger.warning("document_created event failed for artifact %s: %s", artifact.id, exc)
+    return artifact

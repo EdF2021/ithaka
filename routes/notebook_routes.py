@@ -6,9 +6,10 @@ from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
-from core.database import SessionLocal, Notebook, NotebookSource
+from core.database import Document, SessionLocal, Notebook, NotebookArtifact, NotebookSource
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
+from src.notebook_artifacts import ARTIFACT_KINDS, generate_artifact
 from src.notebook_ingest import ingest_notebook_file
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES, format_byte_limit
 
@@ -98,8 +99,43 @@ def setup_notebook_routes(rag_manager) -> APIRouter:
             nb = _get_owned_notebook(db_session, notebook_id, user)
             _remove_notebook_chunks(nb.id)
             db_session.query(DbSession).filter_by(notebook_id=nb.id).update({"notebook_id": None})
+            # Artifact Documents are generated output owned by the notebook,
+            # so they go with it. Source Documents stay (Fase 1 behaviour):
+            # a source's Document lives in the Library independent of the
+            # notebook and is only unlinked via NotebookSource's own
+            # ondelete=SET NULL when the source row disappears.
+            #
+            # Delete the notebook_artifacts rows via a bulk statement before
+            # touching their Documents: document_id is ondelete=CASCADE, so
+            # deleting the Documents first (or relying on
+            # db_session.delete(nb)'s relationship cascade, whose timing vs.
+            # a raw bulk delete isn't guaranteed) risks SQLite's cascade
+            # removing a notebook_artifacts row the ORM still expects to
+            # delete itself, which trips SQLAlchemy's confirm_deleted_rows
+            # check. Deleting the artifact rows here first removes that race
+            # entirely; the relationship cascade below then finds nothing
+            # left to do.
+            artifact_doc_ids = [
+                doc_id for (doc_id,) in
+                db_session.query(NotebookArtifact.document_id).filter_by(notebook_id=nb.id).all()
+            ]
+            if artifact_doc_ids:
+                (db_session.query(NotebookArtifact)
+                 .filter_by(notebook_id=nb.id)
+                 .delete(synchronize_session=False))
+                (db_session.query(Document)
+                 .filter(Document.id.in_(artifact_doc_ids))
+                 .delete(synchronize_session=False))
             db_session.delete(nb)
             db_session.commit()
+            # Best-effort, same as delete_artifact above: drop any in-memory
+            # active-doc pointers for the artifact Documents just hard-deleted.
+            try:
+                from src.agent_tools.document_tools import clear_active_document
+                for doc_id in artifact_doc_ids:
+                    clear_active_document(doc_id)
+            except Exception:
+                pass
             return {"success": True}
         finally:
             db_session.close()
@@ -169,6 +205,108 @@ def setup_notebook_routes(rag_manager) -> APIRouter:
                 _remove_notebook_chunks(nb.id, document_id=src.document_id)
             db_session.delete(src)
             db_session.commit()
+            return {"success": True}
+        finally:
+            db_session.close()
+
+    # ---- GET /api/notebooks/{id}/artifacts ----
+    @router.get("/api/notebooks/{notebook_id}/artifacts")
+    async def list_artifacts(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            rows = (
+                db_session.query(NotebookArtifact, Document.title)
+                .outerjoin(Document, Document.id == NotebookArtifact.document_id)
+                .filter(NotebookArtifact.notebook_id == nb.id)
+                .order_by(NotebookArtifact.created_at.desc())
+                .all()
+            )
+            artifacts = []
+            for artifact, title in rows:
+                d = artifact.to_dict()
+                d["title"] = title
+                artifacts.append(d)
+            return {"artifacts": artifacts}
+        finally:
+            db_session.close()
+
+    # ---- POST /api/notebooks/{id}/artifacts ----
+    @router.post("/api/notebooks/{notebook_id}/artifacts")
+    async def create_artifact(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        kind = body.get("kind") if isinstance(body, dict) else None
+        if kind not in ARTIFACT_KINDS:
+            raise HTTPException(status_code=400, detail=f"Onbekend artifact-type: {kind}")
+        db_session = SessionLocal()
+        try:
+            # _get_owned_notebook here + generate_artifact's own owner filter
+            # below is intentional defence-in-depth, not redundancy: this
+            # call gives a clean 404 before any work starts, while
+            # generate_artifact's own check keeps it safe to call directly
+            # (e.g. from a future non-route caller) without relying on the
+            # route to have checked ownership first.
+            _get_owned_notebook(db_session, notebook_id, user)
+            try:
+                artifact = await generate_artifact(notebook_id, user, kind, db_session)
+            except HTTPException:
+                # Not raised by generate_artifact today, but this keeps a
+                # future refactor from having HTTPException fall through
+                # into the catch-all below and get remapped to a 502.
+                raise
+            except ValueError as exc:
+                # kind and notebook ownership are already validated above, so
+                # the only ValueError generate_artifact can still raise here
+                # is "geen geïndexeerde bronnen".
+                raise HTTPException(status_code=400, detail=str(exc))
+            except Exception as exc:
+                # LLM/endpoint failure (RuntimeError on an empty answer, or
+                # any error from the endpoint call chain).
+                logger.exception(
+                    "Artifact generation failed for notebook %s (kind=%s)", notebook_id, kind
+                )
+                raise HTTPException(status_code=502, detail=str(exc))
+            return artifact.to_dict()
+        finally:
+            db_session.close()
+
+    # ---- DELETE /api/notebooks/{id}/artifacts/{artifact_id} ----
+    @router.delete("/api/notebooks/{notebook_id}/artifacts/{artifact_id}")
+    async def delete_artifact(request: Request, notebook_id: str, artifact_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            artifact = (db_session.query(NotebookArtifact)
+                       .filter_by(id=artifact_id, notebook_id=nb.id).first())
+            if artifact is None:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            # document_id has ondelete=CASCADE, so if the Document delete
+            # flushes before the artifact's own DELETE, SQLite's cascade
+            # takes the notebook_artifacts row with it and the ORM's
+            # subsequent DELETE for that row matches 0. Flushing the
+            # artifact delete first (no ORM relationship links the two
+            # mappers, so unit-of-work has no dependency to order this by
+            # itself) avoids that race.
+            doc = db_session.get(Document, artifact.document_id)
+            db_session.delete(artifact)
+            db_session.flush()
+            if doc is not None:
+                db_session.delete(doc)
+            db_session.commit()
+            # Best-effort: drop the in-memory active-doc pointer so a hard-deleted
+            # artifact Document isn't re-injected into a later chat (#1160), same
+            # as routes/document_routes.py's delete_document.
+            try:
+                from src.agent_tools.document_tools import clear_active_document
+                clear_active_document(artifact.document_id)
+            except Exception:
+                pass
             return {"success": True}
         finally:
             db_session.close()

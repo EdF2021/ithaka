@@ -186,8 +186,17 @@ _TIMEOUT_EXEMPT_PREFIXES = (
 
 class _RequestTimeoutMiddleware(_BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        from src.notebook_artifacts import is_artifacts_generate_request
+
         path = request.url.path or ""
-        if any(path.startswith(p) for p in _TIMEOUT_EXEMPT_PREFIXES):
+        # Narrow exemption for POST /api/notebooks/{id}/artifacts only: that
+        # route runs the artifact-generation LLM call synchronously in-request
+        # (src/notebook_artifacts.py) and can exceed the 45s hard timeout. A
+        # broad "/api/notebooks" prefix exemption would also cover
+        # upload/ingest, which should keep the hard timeout.
+        if any(path.startswith(p) for p in _TIMEOUT_EXEMPT_PREFIXES) or is_artifacts_generate_request(
+            request.method, path
+        ):
             return await call_next(request)
         try:
             return await _asyncio.wait_for(call_next(request), timeout=REQUEST_HARD_TIMEOUT)
