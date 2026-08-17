@@ -325,11 +325,18 @@ _TS, _ENGINE, _TMPDB = make_temp_sqlite(cdb.Base.metadata)
 # ── fixtures / helpers ───────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def _clear_active_jobs():
-    """_active_jobs is module-level state; never let it leak between tests."""
+def _isolate_module_state():
+    """Both module globals are process-wide; never let them leak.
+
+    `_synthesizer` in particular would otherwise stay installed after this
+    module finishes and make another file's "TTS niet geconfigureerd" test
+    pass or fail depending on collection order.
+    """
+    previous_synthesizer = audio.get_synthesizer()
     audio._active_jobs.clear()
     yield
     audio._active_jobs.clear()
+    audio.set_synthesizer(previous_synthesizer)
 
 
 def _wav(n_frames, nchannels=1, sampwidth=2, framerate=24000, fill=b"\x01\x00"):
@@ -434,7 +441,8 @@ def _prepare(monkeypatch, tmp_path, llm=None, synth=None):
     monkeypatch.setattr(audio, "fire_event", lambda *a, **k: None)
     monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
     monkeypatch.setattr(audio, "load_settings", lambda: {"tts_provider": "local"})
-    audio.set_synthesizer(synth)
+    # Scoped to the test: the setter would leave the hook installed globally.
+    monkeypatch.setattr(audio, "_synthesizer", synth)
     return llm, synth
 
 
@@ -647,9 +655,13 @@ def test_resolve_voices_survives_broken_settings(monkeypatch):
 
 # ── synthesizer hook ─────────────────────────────────────────────────────
 
-def test_set_synthesizer_roundtrip():
+def test_set_synthesizer_roundtrip(monkeypatch):
     def fn(text, voice):
         return b""
+
+    # monkeypatch records the pre-test value and restores it on teardown, so
+    # the setter calls below cannot leak out of this test.
+    monkeypatch.setattr(audio, "_synthesizer", None)
 
     audio.set_synthesizer(fn)
     assert audio.get_synthesizer() is fn
@@ -681,9 +693,41 @@ async def test_start_rejects_notebook_without_indexed_sources(monkeypatch, tmp_p
         audio.start_podcast_job(nb_id, "own", _TS)
 
 
+async def test_start_rejects_notebook_whose_sources_have_no_text(monkeypatch, tmp_path):
+    """An "indexed" source whose Document is empty is not a usable source.
+
+    The column predicates alone would pass here; validation must apply the same
+    rule as notebook_artifacts._source_entries, so this fails at start (400)
+    instead of dying as a job error minutes later.
+    """
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook(content="   \n\t ")
+
+    with pytest.raises(ValueError, match="Geen geïndexeerde bronnen"):
+        audio.start_podcast_job(nb_id, "own", _TS)
+    assert audio._active_jobs == {}
+
+
+async def test_start_rejects_notebook_whose_source_document_is_gone(monkeypatch, tmp_path):
+    """A source row that lost its backing Document has no full text either."""
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook()
+    s = _TS()
+    try:
+        source = s.query(cdb.NotebookSource).filter_by(notebook_id=nb_id).one()
+        source.document_id = None
+        s.commit()
+    finally:
+        s.close()
+
+    with pytest.raises(ValueError, match="Geen geïndexeerde bronnen"):
+        audio.start_podcast_job(nb_id, "own", _TS)
+    assert audio._active_jobs == {}
+
+
 async def test_start_rejects_when_no_synthesizer_is_configured(monkeypatch, tmp_path):
     _prepare(monkeypatch, tmp_path)
-    audio.set_synthesizer(None)
+    monkeypatch.setattr(audio, "_synthesizer", None)
     nb_id = _seed_notebook()
 
     with pytest.raises(RuntimeError, match="TTS niet geconfigureerd"):

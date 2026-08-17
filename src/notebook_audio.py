@@ -59,7 +59,6 @@ from core.database import (
     Document,
     Notebook,
     NotebookArtifact,
-    NotebookSource,
     SessionLocal,
 )
 from src.constants import NOTEBOOK_AUDIO_DIR
@@ -398,19 +397,14 @@ def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None) -> 
         )
         if notebook is None:
             raise ValueError("Notebook niet gevonden")
-        # Cheap existence probe, same filter as notebook_artifacts._source_entries.
-        # The full text is gathered in the job itself, not twice here.
-        has_source = (
-            session.query(NotebookSource.id)
-            .filter(
-                NotebookSource.notebook_id == notebook.id,
-                NotebookSource.status == "indexed",
-                NotebookSource.document_id.isnot(None),
-            )
-            .first()
-            is not None
-        )
-        if not has_source:
+        # Exactly the check Fase 2's artifacts-POST does, for exactly the same
+        # reason: "usable source" means more than three column predicates - the
+        # backing Document must still exist and still hold text. A column-only
+        # probe would accept a notebook whose sources are all empty and let it
+        # die as a job error minutes later, where the spec wants a 400 before
+        # the job starts. The job gathers the text again (the session is closed
+        # in between); that is the same cost profile as the Fase 2 route.
+        if not gather_source_text(notebook, session):
             raise ValueError("Geen geïndexeerde bronnen")
     finally:
         session.close()
