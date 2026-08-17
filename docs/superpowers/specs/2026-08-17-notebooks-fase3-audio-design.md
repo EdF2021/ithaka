@@ -76,7 +76,9 @@ SSE (polling volstaat), meertalige stemkeuze-UI.
   indexed bronnen (hergebruik query-vorm uit `notebook_artifacts`), TTS-beschikbaarheid; registreert
   entry; `asyncio.create_task(_run(job_id, ...))` met `asyncio.wait_for(..., 1800)`.
   `_run`: fase `script` (gather_source_text + LLM + parse) → fase `tts` (per beurt
-  `synthesize_voice`, stem A voor S1 / stem B voor S2, progress `segment/total`) → fase `concat` →
+  `synthesize_voice`, stem A voor S1 / stem B voor S2, progress `segment/total`; frames worden
+  streamend in het tempbestand geschreven — er is geen aparte `concat`-fase meer sinds de
+  fix-wave; de UI-branch voor "Samenvoegen…" is dode maar onschadelijke code) →
   schrijf `<uuid4().hex>.wav` naar `NOTEBOOK_AUDIO_DIR` → script-Document (titel
   `f"{notebook.name} — Podcast"`, language `markdown`, transcript met sprekerLabels) +
   `NotebookArtifact(kind="podcast", audio_path=<filename>)` → `fire_event("document_created", owner)`
