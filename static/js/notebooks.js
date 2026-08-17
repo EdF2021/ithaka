@@ -240,6 +240,10 @@ async function _createNotebook() {
 }
 
 function _showList() {
+  // Leaving the detail view: a running podcast job's polling loop targets
+  // #notebook-artifacts/#notebook-artifact-error, both of which are about to
+  // be torn down — stop it rather than let it keep firing against a gone DOM.
+  _stopPodcastPoll();
   _detail = null;
   const body = _body();
   if (!body) return;
@@ -269,7 +273,10 @@ function _showList() {
 // ---- Detail view ----
 
 // Fixed generate-button order and Dutch labels per the design spec — the
-// backend only accepts these five `kind` values.
+// backend only accepts these five `kind` values via POST /artifacts.
+// `podcast` is a sixth artifact kind, but it is generated through its own
+// endpoint/job flow (see _generatePodcast) — it stays out of ARTIFACT_KINDS
+// and only shares KIND_LABELS (for the pill text on its row).
 const ARTIFACT_KINDS = ['study_guide', 'briefing', 'faq', 'quiz', 'mindmap'];
 const KIND_LABELS = {
   study_guide: 'Studiegids',
@@ -277,6 +284,7 @@ const KIND_LABELS = {
   faq: 'FAQ',
   quiz: 'Quiz',
   mindmap: 'Mindmap',
+  podcast: 'Podcast',
 };
 
 function _sourceRow(src) {
@@ -335,19 +343,35 @@ async function _deleteSource(sourceId) {
 function _artifactRow(a) {
   const label = KIND_LABELS[a.kind] || a.kind;
   const title = a.title || label;
+  const isPodcast = a.kind === 'podcast';
   // A sibling span, not text inside .notebook-artifact-title: that span is
   // nowrap+ellipsis, so text appended inside it would be the first thing
   // clipped on a narrow viewport — and this hint is required, per spec.
   const hint = a.kind === 'mindmap'
     ? '<span class="notebook-artifact-hint">(Preview voor de mindmap)</span>' : '';
-  return `
-    <div class="list-item notebook-artifact-item" data-art-id="${_esc(a.id)}" data-doc-id="${_esc(a.document_id)}">
+  const row = `
+    <div class="list-item notebook-artifact-item${isPodcast ? ' notebook-podcast-item' : ''}"
+         data-art-id="${_esc(a.id)}" data-doc-id="${_esc(a.document_id)}" data-kind="${_esc(a.kind)}">
       <span class="notebook-artifact-kind">${_esc(label)}</span>
       <span class="grow notebook-artifact-title">${_esc(title)}</span>
       ${hint}
       <span class="dashboard-row-sub notebook-artifact-date">${_esc(_shortDate(a.created_at))}</span>
       <button type="button" class="notebook-src-del notebook-artifact-del" data-art-id="${_esc(a.id)}"
               title="Delete artifact">${_ICONS.close}</button>
+    </div>`;
+  if (!isPodcast) return row;
+  // Podcast rows get a sibling panel (not nested — the row's own click
+  // handler toggles it) with the player, a transcript link that reuses the
+  // exact same _openArtifact path as every other artifact kind, and a plain
+  // download link.
+  const audioUrl = `/api/notebook-audio/${_esc(a.audio_path || '')}`;
+  return `${row}
+    <div class="notebook-podcast-panel" id="notebook-podcast-panel-${_esc(a.id)}" hidden>
+      <audio controls preload="none" src="${audioUrl}"></audio>
+      <div class="notebook-podcast-links">
+        <a href="#" class="notebook-podcast-transcript" data-art-id="${_esc(a.id)}">Open transcript</a>
+        <a href="${audioUrl}" download>Download</a>
+      </div>
     </div>`;
 }
 
@@ -371,6 +395,7 @@ async function _renderArtifacts() {
   box.querySelectorAll('.notebook-artifact-item').forEach(row => {
     row.addEventListener('click', (e) => {
       if (e.target.closest('.notebook-artifact-del')) return;
+      if (row.dataset.kind === 'podcast') { _togglePodcastPanel(row); return; }
       _openArtifact(row);
     });
   });
@@ -380,6 +405,24 @@ async function _renderArtifacts() {
       _armConfirm(btn, () => _deleteArtifact(btn.dataset.artId));
     });
   });
+  // "Open transcript" reuses _openArtifact on the row it belongs to (found
+  // by artifact id, since the panel is a sibling of the row, not a
+  // descendant — the row already carries data-doc-id).
+  box.querySelectorAll('.notebook-podcast-transcript').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const row = box.querySelector(`.notebook-artifact-item[data-art-id="${CSS.escape(link.dataset.artId)}"]`);
+      if (row) _openArtifact(row);
+    });
+  });
+}
+
+/** Toggle a podcast row's player/links panel (its sibling, not a descendant —
+ *  so this never routes through the shared _openArtifact document-viewer path). */
+function _togglePodcastPanel(row) {
+  const panel = document.getElementById(`notebook-podcast-panel-${row.dataset.artId}`);
+  if (panel) panel.hidden = !panel.hidden;
 }
 
 async function _deleteArtifact(artifactId) {
@@ -415,6 +458,121 @@ async function _generateArtifact(kind, btn) {
     if (btn) btn.disabled = false;
     if (label && original != null) label.textContent = original;
   }
+}
+
+// ---- Podcast: separate job/polling flow (own endpoint, not /artifacts) ----
+
+// { notebookId, jobId, timer, btn } while a job is running/polling; null
+// otherwise. Module-scope (not per-row) because only one podcast job can run
+// per open notebook at a time — the button is disabled for the duration.
+let _podcastPoll = null;
+
+function _podcastPendingRowHtml(text) {
+  return `
+    <div class="list-item notebook-artifact-item notebook-podcast-pending" id="notebook-podcast-pending">
+      <span class="notebook-artifact-kind">${_esc(KIND_LABELS.podcast)}</span>
+      <span class="grow notebook-artifact-title">${_esc(text)}</span>
+    </div>`;
+}
+
+function _podcastPhaseText(status) {
+  if (status.phase === 'script') return 'Script schrijven…';
+  if (status.phase === 'tts') {
+    const seg = status.segment != null ? status.segment : '?';
+    const total = status.total != null ? status.total : '?';
+    return `Audio genereren… ${seg}/${total}`;
+  }
+  if (status.phase === 'concat') return 'Samenvoegen…';
+  return 'Bezig…';
+}
+
+/** Insert (or update, if already present) the pending row at the top of the
+ *  artifact list — before any fetched artifacts, and before/instead of the
+ *  "no artifacts yet" empty state. */
+function _insertPodcastPending(text) {
+  const box = document.getElementById('notebook-artifacts');
+  if (!box) return;
+  const existing = document.getElementById('notebook-podcast-pending');
+  if (existing) {
+    const titleEl = existing.querySelector('.notebook-artifact-title');
+    if (titleEl) titleEl.textContent = text;
+    return;
+  }
+  if (box.querySelector('.dashboard-empty')) box.innerHTML = '';
+  box.insertAdjacentHTML('afterbegin', _podcastPendingRowHtml(text));
+}
+
+/** Stop the setTimeout polling loop and restore the generate button — safe
+ *  to call whenever (no-op if nothing is running). Called on done/error/404,
+ *  and on modal-close / leaving the detail view so a stale loop never polls
+ *  a notebook/job that is no longer on screen. */
+function _stopPodcastPoll() {
+  if (!_podcastPoll) return;
+  clearTimeout(_podcastPoll.timer);
+  if (_podcastPoll.btn) _podcastPoll.btn.disabled = false;
+  _podcastPoll = null;
+}
+
+async function _pollPodcast() {
+  if (!_podcastPoll) return;
+  const { notebookId, jobId } = _podcastPoll;
+  let status;
+  try {
+    status = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/podcast/${encodeURIComponent(jobId)}`);
+  } catch (e) {
+    // Cancelled (modal closed / view switched) or superseded while the fetch
+    // was in flight — a stale reject must not paint over whatever's on
+    // screen now (a fresh detail view, or a newer job).
+    if (!_podcastPoll || _podcastPoll.jobId !== jobId) return;
+    _stopPodcastPoll();
+    const msg = /^HTTP 404/.test(e.message)
+      ? 'Generatie afgebroken (server herstart)'
+      : `Podcast mislukt (${e.message})`;
+    // _renderArtifacts() replaces #notebook-artifacts wholesale, which both
+    // removes the pending row and restores the empty-state if this was the
+    // notebook's only artifact — plain removal would leave the box empty.
+    await _renderArtifacts();
+    _showError('notebook-artifact-error', msg);
+    return;
+  }
+  if (!_podcastPoll || _podcastPoll.jobId !== jobId) return;
+
+  if (status.status === 'done') {
+    _stopPodcastPoll();
+    await _renderArtifacts();
+    return;
+  }
+  if (status.status === 'error') {
+    _stopPodcastPoll();
+    await _renderArtifacts();
+    _showError('notebook-artifact-error', `Podcast mislukt${status.error ? `: ${status.error}` : ''}`);
+    return;
+  }
+
+  _insertPodcastPending(_podcastPhaseText(status));
+  _podcastPoll.timer = setTimeout(_pollPodcast, 2000);
+}
+
+async function _generatePodcast(btn) {
+  if (!_detail || _podcastPoll) return;
+  _showError('notebook-artifact-error', '');
+  if (btn) btn.disabled = true;
+
+  let jobId;
+  try {
+    const data = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_detail.id)}/podcast`, { method: 'POST' });
+    jobId = data.job_id;
+  } catch (e) {
+    _showError('notebook-artifact-error', `Could not generate (${e.message})`);
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  _insertPodcastPending(_podcastPhaseText({ phase: 'script' }));
+  _podcastPoll = { notebookId: _detail.id, jobId, timer: null, btn };
+  _pollPodcast();
 }
 
 /**
@@ -610,6 +768,8 @@ function _showDetail(nb) {
     <div class="notebook-artifact-btns">
       ${ARTIFACT_KINDS.map(kind => `<button type="button" class="dashboard-action-btn notebook-artifact-gen-btn"
               data-kind="${_esc(kind)}"><span>${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
+      <button type="button" class="dashboard-action-btn notebook-podcast-gen-btn" id="notebook-podcast-btn"
+              data-kind="podcast"><span>${_esc(KIND_LABELS.podcast)}</span></button>
     </div>
     <div class="notebook-error" id="notebook-artifact-error"></div>
     <div class="notebook-artifacts" id="notebook-artifacts">
@@ -624,6 +784,7 @@ function _showDetail(nb) {
   body.querySelectorAll('.notebook-artifact-gen-btn').forEach(btn => {
     btn.addEventListener('click', () => _generateArtifact(btn.dataset.kind, btn));
   });
+  document.getElementById('notebook-podcast-btn').addEventListener('click', (e) => _generatePodcast(e.currentTarget));
   _setupUploadZone();
   _renderSources();
   _renderArtifacts();
@@ -672,6 +833,7 @@ export function openNotebooks() {
 
 export function closeNotebooks() {
   if (!_open) return;
+  _stopPodcastPoll();
   _open = false;
   _detail = null;
   const modal = document.getElementById('notebooks-modal');

@@ -41089,3 +41089,36 @@ body.notebook-session #rag-indicator-btn {
   text-overflow: ellipsis;
   min-width: 0;
 }
+
+/* Podcast (Task 5) — sixth artifact-generate button, in-progress pending row
+   and the player panel that expands under a done podcast row. Buttons/pill/
+   rows/delete all reuse the existing .dashboard-action-btn/.notebook-artifact-*
+   /.notebook-src-del shapes; only the phase text, panel and player are new. */
+.notebook-podcast-pending {
+  cursor: default;
+}
+.notebook-podcast-pending .notebook-artifact-title {
+  color: var(--color-muted);
+}
+.notebook-podcast-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.notebook-podcast-panel[hidden] { display: none; }
+.notebook-podcast-panel audio {
+  width: 100%;
+}
+.notebook-podcast-links {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+}
+.notebook-podcast-links a {
+  color: var(--fg);
+}
