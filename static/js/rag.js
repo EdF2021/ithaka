@@ -41,7 +41,7 @@ export async function loadPersonalDocs() {
 
     if (files.length === 0) {
       const placeholder = document.createElement('div');
-      placeholder.textContent = 'Drop files above to add to RAG';
+      placeholder.textContent = 'Drop files above — the AI can then use their contents to answer you';
       placeholder.style.cssText = 'color:var(--color-muted);font-size:12px;padding:4px 0;';
       box.appendChild(placeholder);
       return;

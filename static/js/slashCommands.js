@@ -6357,6 +6357,13 @@ async function handleSlashCommand(input) {
           }
         }
 
+        // No default — fall back to the command's own handler, which decides
+        // what a bare invocation or unrecognized topic means (e.g. bare
+        // `/setup` opens the guided endpoint wizard in _cmdSetup).
+        if (typeof cmdDef.handler === 'function') {
+          return await cmdDef.handler(args, ctx);
+        }
+
         // Unknown sub — show usage
         slashReply(`Unknown subcommand. Try /${cmdKey} --help`);
         return true;

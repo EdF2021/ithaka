@@ -170,7 +170,14 @@ async function _renderModels() {
   if (!el) return;
   const items = data.items || [];
   if (!items.length) {
-    el.innerHTML = '<div class="dashboard-empty">No endpoints configured</div>';
+    el.innerHTML = `
+      <div class="dashboard-empty">No AI models connected yet</div>
+      <button type="button" class="dashboard-action-btn" id="dash-models-connect-btn">Connect a model</button>`;
+    el.querySelector('#dash-models-connect-btn')?.addEventListener('click', () =>
+      _navigate(() => {
+        if (window.adminModule?.open) window.adminModule.open('services');
+        else window.settingsModule?.open?.('services');
+      }));
     return;
   }
   const modelCount = items.reduce(

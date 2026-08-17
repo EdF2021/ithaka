@@ -435,6 +435,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
   // API key pattern for the guard in handleChatSubmit
   const API_KEY_RE = /^(sk-[a-zA-Z0-9_\-]{20,}|gsk_[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_\-]{30,}|xai-[a-zA-Z0-9]{20,})$/;
 
+  // Shown when a message is sent before any AI model is connected. The typed
+  // message stays in the input so the user can retry after connecting.
+  const NO_MODEL_CONNECTED_HELP =
+    'No AI model is connected yet — your message is still in the box below.\n\n' +
+    '- Click `Select model` at the bottom right and pick a model\n' +
+    '- No models listed? Use the `+` button there to connect one\n' +
+    '- Or type `/setup` for a guided setup';
+
   const _queuedAgentRequests = [];
   let _queuedDrainTimer = null;
   let _queuedPromoteTimer = null;
@@ -834,24 +842,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           _sendPerf.mark('direct_chat_materialize_done');
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         } else {
-          el('message').value = '';
-          if (uiModule.autoResize) uiModule.autoResize(el('message'));
-          addMessage('assistant',
-            'No chat session active. You can:\n\n' +
-            '- Open the model picker in the chat box and pick a model\n' +
-            '- Use the `+` button in the model picker to add a model endpoint\n' +
-            '- Use `/help` to see all available commands');
+          // Keep the user's typed message in the input — losing it on a
+          // config problem is hostile to first-time users.
+          addMessage('assistant', NO_MODEL_CONNECTED_HELP);
           _releaseSendFlag();
           return;
         }
       } catch (e) {
-        el('message').value = '';
-        if (uiModule.autoResize) uiModule.autoResize(el('message'));
-        addMessage('assistant',
-          'No chat session active. You can:\n\n' +
-          '- Open the model picker in the chat box and pick a model\n' +
-          '- Use the `+` button in the model picker to add a model endpoint\n' +
-          '- Use `/help` to see all available commands');
+        addMessage('assistant', NO_MODEL_CONNECTED_HELP);
         _releaseSendFlag();
         return;
       }
@@ -1370,8 +1368,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
         let errText = `Error ${res.status}`;
         try {
           const errBody = await res.text();
-          // Parse nested JSON error if present
-          const m = errBody.match(/"message"\s*:\s*"([^"]+)"/);
+          // Parse nested JSON error if present. Providers nest under
+          // "message"; FastAPI's own HTTPException uses "detail" — without
+          // matching it the user sees raw {"detail":"..."} JSON in the chat.
+          const m = errBody.match(/"(?:message|detail)"\s*:\s*"([^"]+)"/);
           if (m) errText = m[1].replace(/\\"/g, '"');
           else if (errBody.length < 200) errText = errBody;
         } catch {}

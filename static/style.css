@@ -7142,12 +7142,9 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
         border-bottom: 6px solid transparent;
         background-clip: padding-box;
       }
-      /* Hide close X on mobile — swipe down to dismiss */
-      .modal-content .close-btn,
-      .modal-content .modal-close,
-      #theme-popup .close-btn {
-        display: none !important;
-      }
+      /* Keep the close X visible on mobile: swipe-down also dismisses, but
+         the gesture is undiscoverable on its own — without a visible close
+         a first-time user has no obvious way out of a fullscreen sheet. */
       /* Hide the auto-injected minimize (_) button on mobile — the dock
          chip already represents the minimized state, and the swipe-down
          gesture is the canonical minimize action. */
