@@ -364,13 +364,13 @@ function _artifactRow(a) {
   // handler toggles it) with the player, a transcript link that reuses the
   // exact same _openArtifact path as every other artifact kind, and a plain
   // download link.
-  const audioUrl = `/api/notebook-audio/${_esc(a.audio_path || '')}`;
+  const audioUrl = `/api/notebook-audio/${encodeURIComponent(a.audio_path || '')}`;
   return `${row}
     <div class="notebook-podcast-panel" id="notebook-podcast-panel-${_esc(a.id)}" hidden>
       <audio controls preload="none" src="${audioUrl}"></audio>
       <div class="notebook-podcast-links">
         <a href="#" class="notebook-podcast-transcript" data-art-id="${_esc(a.id)}">Open transcript</a>
-        <a href="${audioUrl}" download>Download</a>
+        <a href="${audioUrl}" download="${_esc(title)}.wav">Download</a>
       </div>
     </div>`;
 }
