@@ -1034,5 +1034,88 @@ async def test_get_job_returns_a_copy_not_the_live_entry(monkeypatch, tmp_path):
     assert audio._active_jobs[job_id]["status"] == "done"
 
 
+# ── start_podcast_job: duplicate guard + eviction (F4) ───────────────────
+
+async def test_start_rejects_duplicate_while_running(monkeypatch, tmp_path):
+    """A running job for the same owner+notebook blocks a second start -
+    _active_jobs already carries "running" synchronously, before the
+    scheduled task even gets a turn on the loop, so no synchronisation
+    trickery is needed to observe it."""
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook()
+
+    job_id = audio.start_podcast_job(nb_id, "own", _TS)
+    with pytest.raises(ValueError, match="Er loopt al een podcast-generatie voor dit notebook"):
+        audio.start_podcast_job(nb_id, "own", _TS)
+
+    job = await _await_job(job_id)
+    assert job["status"] == "done", job.get("error")
+
+
+async def test_start_allows_duplicate_for_a_different_owner_or_notebook(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook(owner="own")
+    other_nb_id = _seed_notebook(owner="own", name="Ander boek")
+    nb_id_other_owner = _seed_notebook(owner="ander", name="Boek van ander")
+
+    job_a = audio.start_podcast_job(nb_id, "own", _TS)
+    # Different notebook, same owner - allowed.
+    job_b = audio.start_podcast_job(other_nb_id, "own", _TS)
+    # Same notebook id string reused for a different owner - allowed.
+    job_c = audio.start_podcast_job(nb_id_other_owner, "ander", _TS)
+
+    for job_id, owner in ((job_a, "own"), (job_b, "own"), (job_c, "ander")):
+        job = await _await_job(job_id, owner=owner)
+        assert job["status"] == "done", job.get("error")
+
+
+async def test_fresh_start_after_done_is_allowed(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook()
+
+    first = await _await_job(audio.start_podcast_job(nb_id, "own", _TS))
+    assert first["status"] == "done", first.get("error")
+
+    second_id = audio.start_podcast_job(nb_id, "own", _TS)
+    second = await _await_job(second_id)
+    assert second["status"] == "done", second.get("error")
+
+
+async def test_completed_job_entry_is_evicted_after_the_window(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook()
+    stale_job_id = uuid.uuid4().hex
+    audio._active_jobs[stale_job_id] = {
+        "status": "done", "phase": "done", "segment": 1, "total": 1,
+        "error": None, "artifact": {"id": "x"}, "owner": "own",
+        "notebook_id": nb_id, "started_at": time.time() - 4000,
+        "completed_at": time.time() - (audio._JOB_EVICT_AFTER_SECONDS + 200),
+        "task": None,
+    }
+
+    fresh_id = audio.start_podcast_job(nb_id, "own", _TS)
+
+    assert stale_job_id not in audio._active_jobs
+    await _await_job(fresh_id)
+
+
+async def test_completed_job_entry_within_the_window_is_kept(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook()
+    recent_job_id = uuid.uuid4().hex
+    audio._active_jobs[recent_job_id] = {
+        "status": "done", "phase": "done", "segment": 1, "total": 1,
+        "error": None, "artifact": {"id": "x"}, "owner": "own",
+        "notebook_id": nb_id, "started_at": time.time() - 100,
+        "completed_at": time.time() - 100,
+        "task": None,
+    }
+
+    fresh_id = audio.start_podcast_job(nb_id, "own", _TS)
+
+    assert recent_job_id in audio._active_jobs
+    await _await_job(fresh_id)
+
+
 def test_job_timeout_constant_is_thirty_minutes():
     assert audio.JOB_TIMEOUT_SECONDS == 1800

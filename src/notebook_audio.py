@@ -388,12 +388,29 @@ def get_synthesizer() -> Optional[Callable[[str, str], bytes]]:
 
 _active_jobs: dict[str, dict] = {}
 
+# Terminal (non-running) job entries older than this are dropped the next
+# time a job starts - _active_jobs is unbounded otherwise (nothing else ever
+# removes a finished entry) and a long-lived process would accumulate one
+# per podcast ever generated. A wall-clock timestamp is fine here: this is
+# server-side bookkeeping, not something a client can skew.
+_JOB_EVICT_AFTER_SECONDS = 1800
+
 # Everything get_job hands out. Deliberately excludes "task" (an asyncio.Task
 # is not JSON-serializable) and "owner" (never echo one user's id to a route).
 _PUBLIC_JOB_FIELDS = (
     "status", "phase", "segment", "total", "error", "artifact",
     "notebook_id", "started_at",
 )
+
+
+def _reap_stale_jobs(now: float) -> None:
+    """Drop terminal job entries older than _JOB_EVICT_AFTER_SECONDS."""
+    for job_id, entry in list(_active_jobs.items()):
+        if entry.get("status") == "running":
+            continue
+        completed_at = entry.get("completed_at")
+        if completed_at is not None and (now - completed_at) > _JOB_EVICT_AFTER_SECONDS:
+            _active_jobs.pop(job_id, None)
 
 
 def get_job(job_id: str, owner: str) -> Optional[dict]:
@@ -430,6 +447,14 @@ def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None) -> 
     """
     factory = db_session_factory or SessionLocal
 
+    now = time.time()
+    _reap_stale_jobs(now)
+    for entry in _active_jobs.values():
+        if (entry.get("status") == "running"
+                and entry.get("owner") == owner
+                and entry.get("notebook_id") == notebook_id):
+            raise ValueError("Er loopt al een podcast-generatie voor dit notebook")
+
     session = factory()
     try:
         notebook = (
@@ -465,7 +490,8 @@ def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None) -> 
         # SECURITY: ownership is tracked so every read can filter by user.
         "owner": owner or "",
         "notebook_id": notebook_id,
-        "started_at": time.time(),
+        "started_at": now,
+        "completed_at": None,
         "task": None,
     }
     _active_jobs[job_id] = entry
@@ -500,6 +526,10 @@ async def _run_job(job_id: str, notebook_id: str, owner: str, factory) -> None:
         logger.error("Podcast job %s failed: %s", job_id, exc, exc_info=True)
         entry["status"] = "error"
         entry["error"] = str(exc) or exc.__class__.__name__
+    finally:
+        # Every terminal status (done/error/cancelled/timeout) lands here
+        # exactly once - this is what _reap_stale_jobs ages against.
+        entry["completed_at"] = time.time()
 
 
 async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
