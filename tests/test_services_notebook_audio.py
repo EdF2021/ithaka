@@ -336,10 +336,12 @@ def test_synthesize_api_explicit_response_format_wav(monkeypatch, tmp_path):
 # ==========================================================================
 import asyncio
 import io
+import os
 import re
 import time
 import uuid
 import wave
+from pathlib import Path
 
 from fastapi import HTTPException
 
@@ -1119,3 +1121,152 @@ async def test_completed_job_entry_within_the_window_is_kept(monkeypatch, tmp_pa
 
 def test_job_timeout_constant_is_thirty_minutes():
     assert audio.JOB_TIMEOUT_SECONDS == 1800
+
+
+# ── cleanup_orphaned_audio (janitor, issue #6) ───────────────────────────
+
+def _age(path, seconds_ago):
+    """Backdate a file's mtime (and atime) by `seconds_ago`."""
+    stamp = time.time() - seconds_ago
+    os.utime(path, (stamp, stamp))
+
+
+def _make_artifact_with_audio(session, notebook, audio_path, owner="own"):
+    """A podcast NotebookArtifact whose audio_path references a real file."""
+    doc = cdb.Document(id=str(uuid.uuid4()), title="Podcast", owner=owner,
+                       current_content="transcript")
+    session.add(doc)
+    session.commit()
+    art = cdb.NotebookArtifact(id=str(uuid.uuid4()), notebook_id=notebook.id,
+                               document_id=doc.id, kind="podcast",
+                               audio_path=audio_path)
+    session.add(art)
+    session.commit()
+    return art
+
+
+def test_cleanup_removes_old_tmp_file_keeps_fresh_tmp(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+
+    old_tmp = tmp_path / ".podcast-abc123.tmp"
+    old_tmp.write_bytes(b"half-written")
+    _age(old_tmp, 7200)
+
+    fresh_tmp = tmp_path / ".podcast-def456.tmp"
+    fresh_tmp.write_bytes(b"still-writing")
+
+    removed, freed = audio.cleanup_orphaned_audio(_TS, max_age_seconds=3600)
+
+    assert not old_tmp.exists()
+    assert fresh_tmp.exists()
+    assert removed == 1
+    assert freed == len(b"half-written")
+
+
+def test_cleanup_removes_old_orphan_wav_keeps_referenced_and_fresh(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+
+    s = _TS()
+    try:
+        nb = make_notebook(s)
+        referenced_name = uuid.uuid4().hex + ".wav"
+        _make_artifact_with_audio(s, nb, referenced_name)
+    finally:
+        s.close()
+
+    # Referenced by a NotebookArtifact row: kept even though it's old.
+    referenced_path = tmp_path / referenced_name
+    referenced_path.write_bytes(_wav(10))
+    _age(referenced_path, 7200)
+
+    # No artifact row at all: an old orphan, must be removed.
+    orphan_path = tmp_path / (uuid.uuid4().hex + ".wav")
+    orphan_bytes = _wav(10)
+    orphan_path.write_bytes(orphan_bytes)
+    _age(orphan_path, 7200)
+
+    # No artifact row, but fresh: a job that just os.replace'd but hasn't
+    # committed yet — must not be touched.
+    fresh_orphan_path = tmp_path / (uuid.uuid4().hex + ".wav")
+    fresh_orphan_path.write_bytes(_wav(10))
+
+    removed, freed = audio.cleanup_orphaned_audio(_TS, max_age_seconds=3600)
+
+    assert referenced_path.exists()
+    assert fresh_orphan_path.exists()
+    assert not orphan_path.exists()
+    assert removed == 1
+    assert freed == len(orphan_bytes)
+
+
+def test_cleanup_never_touches_non_matching_filenames(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+
+    evil = tmp_path / "evil.wav"
+    evil.write_bytes(b"not-a-hex-name")
+    notes = tmp_path / "notes.txt"
+    notes.write_text("plain file, wrong extension entirely")
+    _age(evil, 7200)
+    _age(notes, 7200)
+
+    removed, freed = audio.cleanup_orphaned_audio(_TS, max_age_seconds=3600)
+
+    assert evil.exists()
+    assert notes.exists()
+    assert removed == 0
+    assert freed == 0
+
+
+def test_cleanup_return_value_counts_all_removed_files_and_bytes(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+
+    tmp_file = tmp_path / ".podcast-x.tmp"
+    tmp_file.write_bytes(b"12345")
+    _age(tmp_file, 7200)
+
+    orphan = tmp_path / (uuid.uuid4().hex + ".wav")
+    orphan.write_bytes(b"abcdefgh")
+    _age(orphan, 7200)
+
+    expected_bytes = len(b"12345") + len(b"abcdefgh")
+
+    removed, freed = audio.cleanup_orphaned_audio(_TS, max_age_seconds=3600)
+
+    assert removed == 2
+    assert freed == expected_bytes
+
+
+def test_cleanup_one_unlink_failure_does_not_abort_the_sweep(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+
+    bad = tmp_path / (uuid.uuid4().hex + ".wav")
+    bad.write_bytes(b"bad")
+    _age(bad, 7200)
+
+    good = tmp_path / (uuid.uuid4().hex + ".wav")
+    good.write_bytes(b"good")
+    _age(good, 7200)
+
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self, *a, **k):
+        if self.name == bad.name:
+            raise OSError("permission denied")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    removed, freed = audio.cleanup_orphaned_audio(_TS, max_age_seconds=3600)
+
+    assert bad.exists()   # unlink failed — must survive untouched
+    assert not good.exists()
+    assert removed == 1
+    assert freed == len(b"good")
+
+
+def test_cleanup_empty_directory_removes_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+
+    removed, freed = audio.cleanup_orphaned_audio(_TS, max_age_seconds=3600)
+
+    assert (removed, freed) == (0, 0)

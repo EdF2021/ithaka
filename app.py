@@ -1229,6 +1229,23 @@ async def _startup_event():
 
     _startup_tasks.append(asyncio.create_task(_null_owner_sweep_loop()))
 
+    # Podcast-audio janitor — sweeps NOTEBOOK_AUDIO_DIR hourly for stray
+    # `.podcast-*.tmp` files and orphaned `<hex>.wav` files (issue #6): a
+    # process kill between the podcast job's os.replace and its DB commit
+    # can leave either behind, and nothing else in the app ever cleans them
+    # up. First run is delayed so it doesn't compete with boot.
+    async def _notebook_audio_janitor_loop():
+        await asyncio.sleep(300)
+        while True:
+            try:
+                from src.notebook_audio import cleanup_orphaned_audio
+                await asyncio.to_thread(cleanup_orphaned_audio, SessionLocal)
+            except Exception as e:
+                logger.debug(f"Notebook audio janitor skipped: {e}")
+            await asyncio.sleep(3600)
+
+    _startup_tasks.append(asyncio.create_task(_notebook_audio_janitor_loop()))
+
     # Nightly skill audit — at ~02:00 local, test + judge a batch of the
     # least-recently-checked skills, auto-fixing/escalating weak ones (never
     # deletes). Rotates through the library so each night covers different
