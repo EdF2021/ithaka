@@ -45,4 +45,12 @@ conflictscan), cherry-pick naar feat/notebooks-followups, per-taak review + opus
 minors door de controller. Sessielimiet halverwege: T1 had zijn commits al staan (alleen het
 rapport ontbrak), de T3-reviewer is hervat via een vervolgbericht — beide zonder rework.
 
+## Afronding
+
+Ed heeft de features live op :7000 getest — alles OK. Daarna is `main` fast-forward
+gepromoveerd naar `dev` (168f593 → 5db2f8e, 68 commits): main en dev zijn identiek en
+bevatten de volledige notebooks-lijn (Fase 1–3 + follow-ups). De notebooks-roadmap uit
+`docs/notebooklm-gap-analyse.md` is hiermee afgerond; video overviews blijven bewust
+buiten scope.
+
 Ed de Feber, in nauwe samenwerking met Claude

@@ -2,6 +2,13 @@
 
 *2026-08-13 — onderzoek via 3 parallelle verkenningen: NotebookLM-featureset (web + notebooklm-py-skill), Ithaka docs/RAG/chat, Ithaka audio/serving/agent-infra.*
 
+> **Status 2026-08-17: alle drie fasen geïmplementeerd en gemerged.**
+> Fase 1 (fundament: notebooks, bronnen, gegronde chat) — `docs/sessions/2026-08-14-notebooks-fase1.md`;
+> Fase 2 (tekst-artifacts: studiegids/briefing/FAQ/quiz/mindmap) — `docs/sessions/2026-08-16-notebooks-fase2.md`;
+> Fase 3 (audio overview/podcast) — `docs/sessions/2026-08-17-notebooks-fase3.md`;
+> follow-ups (janitor, passieve statuspoll, archief-UI, sessie-hervatting) — `docs/sessions/2026-08-17-notebooks-followups.md`.
+> Video overviews blijven bewust buiten scope (zie "Niet doen" hieronder).
+
 ## Samenvatting
 
 NotebookLM = bronnen uploaden → strikt daarop gegronde chat met citaties → gegenereerde artifacts (podcast, video, study guide, mindmap, quiz, datatabel). Ithaka heeft verrassend veel halffabrikaten: RAG + Chroma, documentstore met viewer/versies/PDF-export, deep research met visueel HTML-rapport, TTS met meerdere engines, mermaid-rendering, task scheduler voor achtergrondjobs. Wat ontbreekt is het **structurerende concept** (notebook = afgebakende bronnenset) en de **koppelingen** tussen bestaande onderdelen.
