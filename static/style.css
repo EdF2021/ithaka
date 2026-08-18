@@ -1920,6 +1920,10 @@ body.bg-pattern-dageraad-gloed {
     }
     @media (max-height: 380px) {
       #welcome-screen { opacity: 0; pointer-events: none; }
+      /* .welcome-actions re-enables pointer-events (see its rule below) —
+         reassert none here so the buttons don't become invisible-but-
+         clickable phantoms while the screen itself is opacity:0. */
+      #welcome-screen .welcome-actions { pointer-events: none; }
     }
     #welcome-screen.hidden { display:none; }
     #welcome-screen.kb-hidden {
@@ -1927,6 +1931,7 @@ body.bg-pattern-dageraad-gloed {
       pointer-events: none;
       transform: translate(-50%, -50%) scale(0.95);
     }
+    #welcome-screen.kb-hidden .welcome-actions { pointer-events: none; }
     @media (max-width: 768px) {
       #welcome-screen { top: 42%; }
       #welcome-screen .welcome-name { margin-bottom: 2px; }
@@ -2008,6 +2013,36 @@ body.bg-pattern-dageraad-gloed {
       font-weight: 500;
       letter-spacing: 0.3px;
     }
+    /* First-run action row (Connect a model / Take the tour / Help) on the
+       welcome screen — issue #11. Row is always flex once JS has run
+       (welcomeActions.js's _setWelcomeFirstRun() only toggles the individual
+       Connect/Tour buttons — #welcome-screen itself owns overall
+       show/hide); markup starts display:none only to avoid a flash before
+       that first paint. #welcome-screen itself is pointer-events:none (it's
+       a centered overlay), so re-enable pointer events here same as
+       .incognito-btn does — see the companion `.welcome-actions {
+       pointer-events:none }` rules wherever #welcome-screen goes
+       opacity:0, so this override doesn't leave invisible clickable
+       buttons floating above the composer. */
+    .welcome-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+      pointer-events: auto;
+    }
+    .welcome-actions .dashboard-action-btn.welcome-action-primary {
+      border-color: var(--accent-primary, var(--red));
+      color: var(--accent-primary, var(--red));
+    }
+    .welcome-actions .dashboard-action-btn.welcome-action-primary:hover {
+      background: color-mix(in srgb, var(--accent-primary, var(--red)) 12%, var(--bg));
+    }
+    /* Tours are desktop-only (see tourAutoplay.js) */
+    @media (max-width: 768px) {
+      #welcome-tour-btn { display: none; }
+    }
     /* When welcome is active, push input bar up toward center */
     .chat-container .chat-input-bar {
       transition: margin 0.3s ease, max-width 0.3s ease;
@@ -2034,6 +2069,13 @@ body.bg-pattern-dageraad-gloed {
         opacity: 0;
         pointer-events: none;
         transform: translate(-50%, -58%) scale(0.96);
+      }
+      /* Same phantom-button guard as the two rules above: .welcome-actions's
+         own pointer-events:auto would otherwise win over the opacity:0
+         #welcome-screen's inherited none. */
+      .chat-container.welcome-active:has(.chat-input-bar:focus-within) #welcome-screen .welcome-actions,
+      .chat-container.welcome-active:has(textarea#message:not(:placeholder-shown)) #welcome-screen .welcome-actions {
+        pointer-events: none;
       }
       .chat-container.welcome-active:has(.input-icon-btn.expanded) #welcome-screen,
       .chat-container.welcome-active:has(.send-btn.newchat-expanded) #welcome-screen,
@@ -23438,6 +23480,14 @@ body:not(.welcome-ready) .welcome-name {
 body:not(.welcome-ready) #welcome-screen {
   opacity: 0;
 }
+/* Same phantom-button guard as the pointer-events:none states above: JS can
+   set #welcome-actions to display:flex (and show Connect/Tour) before fonts
+   are ready / this page has settled, while the splash itself is still
+   opacity:0 here — without this, .welcome-actions's own pointer-events:auto
+   would leave invisible-but-clickable buttons floating over the composer. */
+body:not(.welcome-ready) #welcome-screen .welcome-actions {
+  pointer-events: none;
+}
 @keyframes welcome-name-reveal {
   from {
     clip-path: inset(0 100% 0 0);
@@ -40498,6 +40548,89 @@ body.theme-frosted .modal {
   cursor: pointer;
 }
 .dashboard-action-btn:hover { border-color: var(--fg); }
+/* Help panel (static/js/helpPanel.js) — issue #11. Plain .modal/.modal-content
+   markup; sections reuse the .admin-card h2 look without the card chrome. */
+.help-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.help-section h2 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+}
+.help-tour-list,
+.help-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.help-tour-item {
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+.help-tour-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.help-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.help-command-chip {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--accent-primary, var(--red));
+  font-size: 12px;
+  cursor: pointer;
+}
+.help-command-chip:hover {
+  background: color-mix(in srgb, var(--accent-primary, var(--red)) 10%, transparent);
+}
+.help-command-desc {
+  color: var(--fg);
+  opacity: 0.6;
+  font-size: 12px;
+}
+.help-tours-mobile-note {
+  display: none;
+  color: var(--fg);
+  opacity: 0.5;
+  font-size: 12px;
+}
+/* Tours are desktop-only (see tourAutoplay.js header comment): swap the
+   tours list for a plain-text note below 768px. Pure CSS so it stays
+   reactive on resize without a JS listener (was helpPanel.js's
+   _renderResponsiveState(), computed only on open()). */
+@media (max-width: 768px) {
+  #help-tours-section { display: none; }
+  #help-tours-mobile-note { display: block; }
+}
+.help-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.help-model-line {
+  color: var(--fg);
+  opacity: 0.7;
+  font-size: 13px;
+}
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
