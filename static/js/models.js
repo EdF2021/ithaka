@@ -12,6 +12,7 @@ import spinnerModule from './spinner.js';
 import { modelColor } from './chatRenderer.js';
 import { providerLogo } from './providers.js';
 import { sortModelIds } from './modelSort.js';
+import { _setWelcomeFirstRun } from './welcomeActions.js';
 
 let API_BASE = '';
 let _cachedItems = []; // cached /api/models items for model-switch dropdown
@@ -581,6 +582,7 @@ export async function refreshModels(force = false) {
       if (welcomeSub) welcomeSub.innerHTML = 'Type <span class="setup-trigger-link" style="color:var(--accent,var(--red));font-weight:600;cursor:pointer;text-decoration:underline;" title="Click to launch setup">/setup</span> to get started.';
       const welcomeTip = document.getElementById('welcome-tip');
       if (welcomeTip) welcomeTip.textContent = 'Type /setup, then choose Local models or API.';
+      _setWelcomeFirstRun(false, !!window._isAdmin);
     } else {
       // Configured installs should feel ready, not stuck in onboarding.
       const welcomeSub = document.getElementById('welcome-sub');
@@ -603,6 +605,7 @@ export async function refreshModels(force = false) {
             ];
         welcomeTip.textContent = tips[Math.floor(Math.random() * tips.length)];
       }
+      _setWelcomeFirstRun(true, !!window._isAdmin);
     }
   } catch (e) {
     console.error(e);

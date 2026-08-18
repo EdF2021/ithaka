@@ -2008,6 +2008,30 @@ body.bg-pattern-dageraad-gloed {
       font-weight: 500;
       letter-spacing: 0.3px;
     }
+    /* First-run action row (Connect a model / Take the tour / Help) on the
+       welcome screen — issue #11. Hidden by default; models.js toggles it
+       via welcomeActions.js's _setWelcomeFirstRun(). #welcome-screen itself
+       is pointer-events:none (it's a centered overlay), so re-enable
+       pointer events here same as .incognito-btn does. */
+    .welcome-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+      pointer-events: auto;
+    }
+    .welcome-actions .dashboard-action-btn.welcome-action-primary {
+      border-color: var(--accent-primary, var(--red));
+      color: var(--accent-primary, var(--red));
+    }
+    .welcome-actions .dashboard-action-btn.welcome-action-primary:hover {
+      background: color-mix(in srgb, var(--accent-primary, var(--red)) 12%, var(--bg));
+    }
+    /* Tours are desktop-only (see tourAutoplay.js) */
+    @media (max-width: 768px) {
+      #welcome-tour-btn { display: none; }
+    }
     /* When welcome is active, push input bar up toward center */
     .chat-container .chat-input-bar {
       transition: margin 0.3s ease, max-width 0.3s ease;
@@ -40498,6 +40522,77 @@ body.theme-frosted .modal {
   cursor: pointer;
 }
 .dashboard-action-btn:hover { border-color: var(--fg); }
+/* Help panel (static/js/helpPanel.js) — issue #11. Plain .modal/.modal-content
+   markup; sections reuse the .admin-card h2 look without the card chrome. */
+.help-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.help-section h2 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+}
+.help-tour-list,
+.help-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.help-tour-item {
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+.help-tour-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.help-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.help-command-chip {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--accent-primary, var(--red));
+  font-size: 12px;
+  cursor: pointer;
+}
+.help-command-chip:hover {
+  background: color-mix(in srgb, var(--accent-primary, var(--red)) 10%, transparent);
+}
+.help-command-desc {
+  color: var(--fg);
+  opacity: 0.6;
+  font-size: 12px;
+}
+.help-tours-mobile-note {
+  color: var(--fg);
+  opacity: 0.5;
+  font-size: 12px;
+}
+.help-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.help-model-line {
+  color: var(--fg);
+  opacity: 0.7;
+  font-size: 13px;
+}
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

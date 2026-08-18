@@ -973,6 +973,9 @@
         <span class="user-bar-name" id="user-bar-name">User</span>
       </div>
       <div class="user-bar-actions">
+        <button type="button" class="user-bar-btn" id="user-bar-help" title="Help">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
         <button type="button" class="user-bar-btn" id="user-bar-settings" title="Settings">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
@@ -993,6 +996,11 @@
       <div class="welcome-name"><svg class="welcome-boat" viewBox="0 0 32 32"><path d="M16 4L16 22L6 22Z" fill="currentColor"/><path d="M16 8L16 22L24 22Z" fill="currentColor" opacity="0.6"/><path d="M4 24Q10 20 16 24Q22 28 28 24" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>Ithaka</div>
       <div class="welcome-sub" id="welcome-sub">Welcome, <span class="setup-trigger-link" style="color:var(--accent,var(--red));font-weight:600;cursor:pointer;text-decoration:underline;" title="Click to launch setup">type /setup</span> to get started.</div>
       <div class="welcome-tip" id="welcome-tip"></div>
+      <div id="welcome-actions" class="welcome-actions" style="display:none">
+        <button type="button" class="dashboard-action-btn welcome-action-primary" id="welcome-connect-btn">Connect a model</button>
+        <button type="button" class="dashboard-action-btn" id="welcome-tour-btn">Take the tour</button>
+        <button type="button" class="dashboard-action-btn" id="welcome-help-btn">Help</button>
+      </div>
       <button type="button" class="incognito-btn" id="incognito-btn" title="Enable Nobody mode — no memory, no history saved">
         <svg class="eye-open" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
@@ -1189,6 +1197,34 @@
       <input type="checkbox" id="bash-toggle" style="display:none;">
     </div>
     <form id="chat-form" autocomplete="off" action="javascript:void(0);" style="display:none;"></form>
+
+    <!-- Help panel: tours, command reference, connect-a-model shortcut -->
+    <div id="help-panel" class="modal hidden">
+      <div class="modal-content" role="dialog" aria-label="Help" style="background:var(--bg)">
+        <div class="modal-header">
+          <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Help</h4>
+          <button class="close-btn" id="help-panel-close-btn" aria-label="Close help">&#x2716;</button>
+        </div>
+        <div class="help-panel-body">
+          <div class="help-section" id="help-tours-section">
+            <h2>Tours</h2>
+            <div class="help-tour-list" id="help-tours-list"></div>
+          </div>
+          <div class="help-tours-mobile-note" id="help-tours-mobile-note" style="display:none">Tours are available on desktop.</div>
+          <div class="help-section">
+            <h2>Commands</h2>
+            <div class="help-command-list" id="help-commands-list"></div>
+          </div>
+          <div class="help-section" id="help-model-section" style="display:none">
+            <h2>Model</h2>
+            <div class="help-model-row">
+              <span class="help-model-line">Need a model? Connect one to start chatting.</span>
+              <button type="button" class="dashboard-action-btn" id="help-connect-btn">Connect a model</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Character (custom preset) modal -->
     <div id="custom-preset-modal" class="modal hidden">
@@ -2513,6 +2549,7 @@
 <script type="module" src="/static/js/search-chat.js"></script>
 <script type="module" src="/static/js/compare/index.js"></script>
 <script type="module" src="/static/js/theme.js"></script>
+<script type="module" src="/static/js/helpPanel.js"></script>
 <script type="module" src="/static/js/censor.js"></script>
 <script type="module" src="/static/js/settings.js"></script>
 <script type="module" src="/static/js/admin.js"></script>
