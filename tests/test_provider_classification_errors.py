@@ -23,7 +23,7 @@ class TestFormatUpstreamError:
         )
         assert msg.startswith("xAI rejected the API key")
         assert "Invalid API key" in msg
-        assert "re-paste the key" in msg
+        assert "paste a fresh xAI API key" in msg
 
     def test_403_denies_access(self):
         msg = _format_upstream_error(
