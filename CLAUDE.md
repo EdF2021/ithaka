@@ -39,7 +39,31 @@ ITHAKA_DATA_DIR=<fresh-dir> .venv/bin/python -m uvicorn app:app --port 7001
 node --check static/js/<changed-file>.js
 ```
 
-Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*` (security, routes, services, cli, js, helpers, unit, uncategorized) plus a finer `sub_*` marker, so `-m "area_services and sub_cookbook"` also works. Pytest runs with `asyncio_mode = "auto"` — async test functions need no marker. Testing rules live in `tests/TESTING_STANDARD.md` (policy) and `tests/README.md` (helper reference). There is no linter/formatter configured; the checks are pytest plus the syntax checks below. CI (`.github/workflows/ci.yml`) runs the same things on PRs — full pytest on Python 3.11 and `node --check` over changed JS — plus separate secret-scan/container-scan/dependency-review workflows (see `docs/security-ci.md`).
+Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*` (security, routes, services, cli, js, helpers, unit, uncategorized) plus a finer `sub_*` marker, so `-m "area_services and sub_cookbook"` also works. Pytest runs with `asyncio_mode = "auto"` — async test functions need no marker. Testing rules live in `tests/TESTING_STANDARD.md` (policy) and `tests/README.md` (helper reference). There is no linter/formatter configured; the checks are pytest plus the syntax checks above. CI (`.github/workflows/ci.yml`) runs the same things on PRs — full pytest on Python 3.11 and `node --check` over changed JS — plus separate secret-scan/container-scan/dependency-review workflows (see `docs/security-ci.md`).
+
+### Setup (fresh clone)
+
+```bash
+git clone https://github.com/EdF2021/ithaka.git && cd ithaka
+cp .env.example .env
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+docker compose up -d --build
+docker compose logs --tail=20 ithaka   # first admin password appears here
+```
+
+### UI smoke test (desktop & mobile)
+
+Before merging anything that touches a page, navigation, session state, or file paths: drive the app in a real browser via the chrome-devtools MCP tools at `http://localhost:7000` (or the :7001 smoke instance) — desktop viewport **and** 360 px mobile. Check the flows the change touches plus the console for errors, and paste the full smoke output (commands + result, not just "green") into the PR chat before merging.
+
+### Gotchas & common pitfalls
+
+- **Tailscale MTU blackhole** — packets > ~1200 B drop silently on the Windows↔WSL sidecar (health checks pass, pages/TLS hang). Fix is baked into `docker-compose.yml` (`TS_DEBUG_MTU=1130`); mirror it in the GPU compose variants. Verify with `tailscale ping --size`.
+- **Trailing-dot host entry** — Windows Chrome doesn't resolve `*.ts.net` (DoH); add a hosts entry via admin PowerShell:
+  ```powershell
+  Add-Content C:\Windows\System32\drivers\etc\hosts "100.72.181.25 ithaka.tailb21d35.ts.net."
+  ```
+- **`.claude.local.md`** — personal overrides (keybindings, local shortcuts). Git-ignored, merged at runtime.
 
 ## Architecture
 
@@ -65,5 +89,5 @@ Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*`
 
 ## Deployment specifics of this fork
 
-- Remote access runs through a Tailscale sidecar (`tailscale` service in compose): bare `tailscaled --tun=userspace-networking`, node `ithaka.tailb21d35.ts.net`, app reachable on port 7000 within the tailnet. Do **not** switch it back to containerboot — without `TS_AUTHKEY` containerboot regenerates the nodekey in a loop and auth URLs expire instantly; the fix is bare `tailscaled` + a one-time `docker exec ithaka-tailscale-1 tailscale up --accept-dns=false`.
+- Remote access runs through a Tailscale sidecar (`tailscale` service in compose): bare `tailscaled --tun=userspace-networking`, node `ithaka.tailb21d35.ts.net`, app reachable on port 7000 within the tailnet (HTTPS via `tailscale serve` → https://ithaka.tailb21d35.ts.net). Do **not** switch it back to containerboot — without `TS_AUTHKEY` containerboot regenerates the nodekey in a loop and auth URLs expire instantly; the fix is bare `tailscaled` + a one-time `docker exec ithaka-tailscale-1 tailscale up --accept-dns=false`.
 - `.env` uses `APP_BIND=0.0.0.0` (WSL NAT shields the LAN). The API-token prefix `ody_` is intentionally kept from upstream for existing tokens.
