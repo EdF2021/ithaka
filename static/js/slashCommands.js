@@ -5848,6 +5848,10 @@ const COMMANDS = {
     category: 'Getting started',
     help: 'Add local or API model endpoints',
     handler: _cmdSetup,
+    // Bare `/setup` (the welcome screen's suggested first step) and
+    // unrecognized topics like `/setup theme` route through the default
+    // sub into _cmdSetup, which owns all topic routing and the wizard.
+    default: 'wizard',
     usage: '/setup local URL  ·  /setup groq KEY  ·  /setup copilot  ·  /setup chatgpt-subscription',
     // Provider subs so the autocomplete popup surfaces "/setup deepseek",
     // "/setup openai", etc. when the user types "/setup de". Each sub's
@@ -5857,6 +5861,7 @@ const COMMANDS = {
     // Without the explicit handler, the slash-dispatcher errors with
     // "subDef.handler is not a function".
     subs: {
+      wizard:     { help: 'Guided setup wizard', usage: '/setup',               handler: (a, c) => _cmdSetup(a, c) },
       deepseek:   { help: 'DeepSeek',      usage: '/setup deepseek sk-...',     handler: (a, c) => _cmdSetup(['deepseek',   ...a], c) },
       openai:     { help: 'OpenAI',        usage: '/setup openai sk-proj-...',  handler: (a, c) => _cmdSetup(['openai',     ...a], c) },
       anthropic:  { help: 'Anthropic',     usage: '/setup anthropic sk-ant-...',handler: (a, c) => _cmdSetup(['anthropic',  ...a], c) },

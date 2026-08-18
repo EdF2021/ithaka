@@ -208,8 +208,8 @@ async function _renderNotebookGrid() {
     // routes/notebook_routes.py's list_notebooks), so an empty result here
     // means no notebooks exist at all, same as the unfiltered case.
     grid.innerHTML = `<div class="dashboard-empty">${_showArchived
-      ? 'No notebooks yet'
-      : 'No notebooks yet (archived ones are hidden — check "Show archived")'}</div>`;
+      ? 'No notebooks yet.'
+      : 'No notebooks yet (archived ones are hidden — check "Show archived").'} A notebook groups your own files and lets you chat, quiz, or make a podcast strictly from those sources. Name one above to start.</div>`;
     return;
   }
   grid.innerHTML = notebooks.map(_notebookCard).join('');

@@ -1428,7 +1428,7 @@ def _format_upstream_error(status: int, body: bytes | str, url: str) -> str:
             msg = f"{provider} denied access (403)"
         if detail:
             msg += f" — {detail}"
-        msg += ". Check Model Endpoints → {} and re-paste the key.".format(provider)
+        msg += ". Open Settings → Add Models and paste a fresh {} API key.".format(provider)
         return msg
     if status == 404:
         return f"{provider} returned 404 — check the base URL and model name." + (f" ({detail})" if detail else "")
