@@ -63,7 +63,12 @@ def setup_search_routes(config) -> APIRouter:
             return {"context": context, "sources": sources}
         except Exception as e:
             logger.error(f"Standalone web search failed: {e}")
-            return {"context": "", "sources": [], "error": str(e)}
+            # Raw exception text can carry URLs/keys and reads as noise in the
+            # UI — log the detail above, hand the user an actionable message.
+            return {
+                "context": "", "sources": [],
+                "error": "Web search failed. Check the search provider in Settings → Search, then try again.",
+            }
 
     @router.get("/api/search/providers")
     async def list_search_providers():
