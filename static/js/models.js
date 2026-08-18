@@ -12,7 +12,7 @@ import spinnerModule from './spinner.js';
 import { modelColor } from './chatRenderer.js';
 import { providerLogo } from './providers.js';
 import { sortModelIds } from './modelSort.js';
-import { _setWelcomeFirstRun } from './welcomeActions.js';
+import { _setWelcomeFirstRun, hasUsableModel } from './welcomeActions.js';
 
 let API_BASE = '';
 let _cachedItems = []; // cached /api/models items for model-switch dropdown
@@ -206,6 +206,9 @@ export async function refreshModels(force = false) {
     } catch (e) {
       console.error(e);
       if (box) box.textContent = '(scan failed)';
+      // A broken fresh install (fetch/parse failure) shouldn't strand the
+      // welcome screen with no buttons at all — still surface Connect/Help.
+      _setWelcomeFirstRun(false, !!window._isAdmin);
       return;
     } finally {
       try { _loadingSpinner && _loadingSpinner.stop && _loadingSpinner.stop(); } catch (_) {}
@@ -565,6 +568,7 @@ export async function refreshModels(force = false) {
       box.insertBefore(searchBox, box.firstChild);
     }
 
+    const hasUsable = hasUsableModel(_cachedItems);
     if (!_cachedItems || _cachedItems.length === 0) {
       const noModels = document.createElement('div');
       noModels.className = 'models-empty-state';
@@ -582,7 +586,7 @@ export async function refreshModels(force = false) {
       if (welcomeSub) welcomeSub.innerHTML = 'Type <span class="setup-trigger-link" style="color:var(--accent,var(--red));font-weight:600;cursor:pointer;text-decoration:underline;" title="Click to launch setup">/setup</span> to get started.';
       const welcomeTip = document.getElementById('welcome-tip');
       if (welcomeTip) welcomeTip.textContent = 'Type /setup, then choose Local models or API.';
-      _setWelcomeFirstRun(false, !!window._isAdmin);
+      _setWelcomeFirstRun(hasUsable, !!window._isAdmin);
     } else {
       // Configured installs should feel ready, not stuck in onboarding.
       const welcomeSub = document.getElementById('welcome-sub');
@@ -605,7 +609,7 @@ export async function refreshModels(force = false) {
             ];
         welcomeTip.textContent = tips[Math.floor(Math.random() * tips.length)];
       }
-      _setWelcomeFirstRun(true, !!window._isAdmin);
+      _setWelcomeFirstRun(hasUsable, !!window._isAdmin);
     }
   } catch (e) {
     console.error(e);

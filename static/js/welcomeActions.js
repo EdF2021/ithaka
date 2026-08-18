@@ -7,29 +7,47 @@
 // Regression test: tests/test_welcome_actions_js.py
 
 /**
- * Show/hide the #welcome-actions row based on whether any model endpoints
- * are configured yet (first-run signal) and whether the current user is an
- * admin. Only admins can add endpoints, so only admins get the
- * Connect-a-model / Take-the-tour buttons; non-admins in a first-run state
- * see just the (always-present) Help button.
+ * Pure: does this /api/models item list contain at least one usable chat
+ * model (online endpoint with at least one curated or extra model)? Mirrors
+ * _hasUsableChatModel()'s items.some(...) branch in app.js (~line 271)
+ * field-for-field — models.js and helpPanel.js both call this so the
+ * "is there a model to talk to" question is answered identically everywhere.
  *
- * @param {boolean} hasEndpoints - true when _cachedItems has entries.
+ * @param {Array<object>} items - /api/models items (or _cachedItems).
+ */
+export function hasUsableModel(items) {
+  return (items || []).some(
+    (item) => !item.offline && ((item.models || []).length || (item.models_extra || []).length)
+  );
+}
+
+/**
+ * Show/hide the individual buttons in the (always-visible) #welcome-actions
+ * row based on whether there's a usable model yet and whether the current
+ * user is an admin.
+ *
+ * The row itself is always `display:flex` — the welcome screen as a whole
+ * (not this row) controls whether the first-run area is shown at all. Within
+ * the row:
+ *  - Connect a model: only admins can add endpoints, and only when there's
+ *    nothing usable yet — it's the primary CTA out of a dead-end first run.
+ *  - Take the tour: needs a model to actually run (the tour drives real
+ *    chat turns), so it only appears once one is usable — gating it on
+ *    hasUsableModel instead of admin-only avoids leaving non-admins on a
+ *    first-run screen with nothing but Help.
+ *  - Help: always visible (not managed by this row; see helpPanel.js).
+ *
+ * @param {boolean} hasUsableModel - see hasUsableModel() above.
  * @param {boolean} isAdmin - window._isAdmin.
  */
-export function _setWelcomeFirstRun(hasEndpoints, isAdmin) {
+export function _setWelcomeFirstRun(hasUsableModel, isAdmin) {
   const actions = document.getElementById('welcome-actions');
   if (!actions) return;
-  if (hasEndpoints) {
-    // Configured installs should feel ready, not stuck in onboarding —
-    // Help remains permanently reachable from the sidebar (see helpPanel.js).
-    actions.style.display = 'none';
-    return;
-  }
   actions.style.display = 'flex';
   const connectBtn = document.getElementById('welcome-connect-btn');
   const tourBtn = document.getElementById('welcome-tour-btn');
-  if (connectBtn) connectBtn.style.display = isAdmin ? '' : 'none';
-  if (tourBtn) tourBtn.style.display = isAdmin ? '' : 'none';
+  if (connectBtn) connectBtn.style.display = (!hasUsableModel && isAdmin) ? '' : 'none';
+  if (tourBtn) tourBtn.style.display = hasUsableModel ? '' : 'none';
 }
 
-export default { _setWelcomeFirstRun };
+export default { _setWelcomeFirstRun, hasUsableModel };

@@ -13,10 +13,18 @@
 // `<script type="module" src=".../helpPanel.js">` tag in index.html is
 // enough to wire everything up.
 //
+// The mobile/desktop split for the Tours section is pure CSS (style.css:
+// #help-tours-section / #help-tours-mobile-note under @media (max-width:768px))
+// so it's reactive to resize without any JS involvement here.
+//
 // Regression test: tests/test_help_panel_js.py
 
-// Tour key -> slash command. Mirrors TOUR_FOR_MODAL in tourAutoplay.js (the
-// 7 per-feature tours) plus the general `/tour` walkthrough.
+import { hasUsableModel } from './welcomeActions.js';
+
+// Tour key -> slash command. Mirrors TOUR_FOR_MODAL in tourAutoplay.js and
+// the `tour-*` registry in slashCommands.js (the 10 per-feature tours) plus
+// the general `/tour` walkthrough. Kept in sync with the registry by
+// test_help_panel_js.py's drift-guard test.
 export const TOURS = [
   { key: 'general', label: 'General tour', cmd: '/tour' },
   { key: 'library', label: 'Library', cmd: '/tour-library' },
@@ -26,28 +34,25 @@ export const TOURS = [
   { key: 'theme', label: 'Theme', cmd: '/tour-theme' },
   { key: 'settings', label: 'Settings', cmd: '/tour-settings' },
   { key: 'gallery', label: 'Gallery', cmd: '/tour-gallery' },
+  { key: 'brain', label: 'Brain', cmd: '/tour-brain' },
+  { key: 'task1', label: 'Tasks: built-ins', cmd: '/tour-task-1' },
+  { key: 'task2', label: 'Tasks: add & manage', cmd: '/tour-task-2' },
 ];
 
 // Key slash commands surfaced as fill-only chips (user completes them).
+// Descriptions mirror the `help` strings in slashCommands.js's registry.
 export const COMMANDS = [
-  { cmd: '/setup', desc: 'Connect a model or provider' },
-  { cmd: '/tour', desc: 'Guided tour of the app' },
-  { cmd: '/theme', desc: 'Change the look and feel' },
-  { cmd: '/research', desc: 'Start a deep research task' },
-  { cmd: '/compare', desc: 'Compare responses across models' },
+  { cmd: '/setup', desc: 'Add local or API model endpoints' },
+  { cmd: '/tour', desc: 'Full guided product tour' },
+  { cmd: '/theme', desc: 'Change color theme' },
+  { cmd: '/research', desc: 'Open Deep Research' },
+  { cmd: '/compare', desc: 'Open Compare' },
 ];
-
-const MOBILE_BREAKPOINT = 768;
 
 /** Pure: tour key -> its slash command, or null if unknown. */
 export function _tourCommandFor(key) {
   const t = TOURS.find((x) => x.key === key);
   return t ? t.cmd : null;
-}
-
-/** Pure: is this viewport width the mobile layout (tours are desktop-only)? */
-export function _isMobileWidth(width) {
-  return width <= MOBILE_BREAKPOINT;
 }
 
 function _fillMessage(cmd) {
@@ -62,6 +67,15 @@ function _fillMessage(cmd) {
 // slashCommands.js: fill #message, then submit #chat-form.
 function _fillAndSubmit(cmd) {
   _fillMessage(cmd);
+  // Don't auto-submit into an in-flight stream: chat.js's #chat-form submit
+  // handler treats a submit while streaming as "stop", so dispatching it
+  // here would abort the user's active stream instead of sending `cmd`.
+  // Leave the filled input for them to send once it's done.
+  // hasActiveStream() is keyed by session id (chat.js), so the current
+  // session id has to be passed through explicitly — calling it bare would
+  // always read as "no active stream".
+  const sid = window.sessionModule?.getCurrentSessionId?.();
+  if (window.chatModule?.hasActiveStream?.(sid)) return;
   const chatForm = document.getElementById('chat-form');
   if (chatForm) {
     chatForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
@@ -100,8 +114,9 @@ function _buildCommandChips() {
     chip.className = 'help-command-chip';
     chip.textContent = c.cmd;
     chip.title = c.desc;
-    // Fill only — the user completes the command themselves.
-    chip.addEventListener('click', () => _fillMessage(c.cmd));
+    // Fill only (the user completes the command themselves) — but close the
+    // panel first so the filled input is actually visible to type into.
+    chip.addEventListener('click', () => { close(); _fillMessage(c.cmd); });
     const desc = document.createElement('span');
     desc.className = 'help-command-desc';
     desc.textContent = c.desc;
@@ -111,24 +126,18 @@ function _buildCommandChips() {
   });
 }
 
-// Tours are desktop-only (see tourAutoplay.js header comment): hide the
-// section entirely on mobile and show a plain-text note instead.
-function _renderResponsiveState() {
-  const toursSection = document.getElementById('help-tours-section');
-  const mobileNote = document.getElementById('help-tours-mobile-note');
-  const mobile = _isMobileWidth(window.innerWidth || 0);
-  if (toursSection) toursSection.style.display = mobile ? 'none' : '';
-  if (mobileNote) mobileNote.style.display = mobile ? '' : 'none';
-}
-
 export function open() {
   const panel = document.getElementById('help-panel');
   if (!panel) return;
-  _renderResponsiveState();
   // Evaluated per-open: window._isAdmin is set asynchronously after auth,
-  // so an init-time check would race it.
+  // and the model list can change between opens, so an init-time check
+  // would race both.
   const modelSection = document.getElementById('help-model-section');
-  if (modelSection) modelSection.style.display = window._isAdmin ? '' : 'none';
+  if (modelSection) {
+    const items = window.modelsModule?.getCachedItems?.() || [];
+    const showModelSection = !!window._isAdmin && !hasUsableModel(items);
+    modelSection.style.display = showModelSection ? '' : 'none';
+  }
   panel.classList.remove('hidden');
 }
 
@@ -172,5 +181,5 @@ if (typeof window !== 'undefined') {
   }
 }
 
-const helpPanelModule = { open, close, init, TOURS, COMMANDS, _tourCommandFor, _isMobileWidth };
+const helpPanelModule = { open, close, init, TOURS, COMMANDS, _tourCommandFor };
 export default helpPanelModule;
