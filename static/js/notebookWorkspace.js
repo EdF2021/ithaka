@@ -204,7 +204,15 @@ export function closeNotebookWorkspace() {
     'nbws-studio-collapsed'
   );
   const root = _root();
-  if (root) root.setAttribute('aria-hidden', 'true');
+  if (root) {
+    // A collapse/back button inside #nbws-root can still hold focus at this
+    // point (e.g. the button that was just clicked to trigger this close) —
+    // setting aria-hidden on an ancestor of the focused element is invalid
+    // (browsers log a warning and refuse to apply it), so drop focus out of
+    // the subtree first.
+    if (root.contains(document.activeElement)) document.activeElement.blur();
+    root.setAttribute('aria-hidden', 'true');
+  }
   document.getElementById('nbws-sources')?.classList.remove('nbws-collapsed');
   document.getElementById('nbws-studio')?.classList.remove('nbws-collapsed');
 

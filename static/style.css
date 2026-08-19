@@ -41374,9 +41374,18 @@ body.notebook-workspace-open #nbws-root { display: flex; }
 }
 .nbws-tab.nbws-tab-active { color: var(--fg); border-color: var(--fg); }
 
-/* The workspace hides the wide sidebar and reflows the (untouched, never
-   reparented) chat between the two fixed panels instead. */
-body.notebook-workspace-open .sidebar { display: none; }
+/* The workspace hides whichever of .sidebar / .icon-rail is currently the
+   left nav (they're mutually exclusive — see the .icon-rail comment,
+   sidebar-layout.js:57) and reflows the (untouched, never reparented) chat
+   between the two fixed panels instead. Hiding .icon-rail matters beyond
+   looks: body is `display:flex` (style.css:106) with #chat-container as a
+   `flex:1` sibling, so a still-in-flow 48px rail would shift the chat's real
+   left edge 48px past #nbws-sources's right edge (280px), opening a dead
+   strip of bare body background between them. It also stops the rail's own
+   buttons from being clickable (and popping modals at z-index ~1000, well
+   under #nbws-root's 10005) once the sources panel is collapsed. */
+body.notebook-workspace-open .sidebar,
+body.notebook-workspace-open .icon-rail { display: none; }
 body.notebook-workspace-open #chat-container {
   margin-left: 280px;
   margin-right: 320px;
