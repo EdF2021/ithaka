@@ -761,14 +761,55 @@ async function _resolveChatConfig() {
 }
 
 /**
+ * Create (never reuse) a chat session bound to notebook `nb`, via
+ * _resolveChatConfig's endpoint/model resolution, and select it. Split out
+ * of openOrCreateSessionForNotebook below so notebookWorkspace.js's "New
+ * chat" session-dropdown option can invoke the create-only half directly —
+ * that action means "start a fresh conversation", so it must never resolve
+ * to an existing session the way the find-or-create flow does. Throws on
+ * failure; callers own their own error UI (this function touches none).
+ */
+async function _createSessionForNotebook(nb) {
+  const sm = window.sessionModule;
+  const cfg = await _resolveChatConfig();
+  const fd = new FormData();
+  fd.append('name', nb.name || 'Notebook');
+  fd.append('notebook_id', nb.id);
+  // Mandatory: without it the backend 400s on a missing endpoint_url, and it
+  // also lets a bare (model-less) session through when nothing resolved.
+  fd.append('skip_validation', 'true');
+  if (cfg) {
+    fd.append('endpoint_url', cfg.endpoint_url || '');
+    fd.append('model', cfg.model || '');
+    if (cfg.endpoint_id) fd.append('endpoint_id', cfg.endpoint_id);
+  }
+
+  const payload = await _fetchJson(`${API_BASE}/api/session`, { method: 'POST', body: fd });
+
+  // Reuse app.js's live sessions instance (published on window), exactly as
+  // dashboard.js does — one obvious instance, and no risk of a duplicate
+  // module record if app.js's import specifier ever grows a ?v= query again.
+  if (sm?.loadSessions && sm?.selectSession) {
+    // The new session must be in the module's list before selectSession can
+    // resolve it — load first, then select.
+    await sm.loadSessions();
+    await sm.selectSession(payload.id);
+  } else {
+    window.location.hash = '#' + payload.id;
+    window.location.reload();
+  }
+  return payload;
+}
+
+/**
  * Find-or-create + select the chat session bound to notebook `nb`: resume the
  * most recently active session with a matching notebook_id, or create one
- * (via _resolveChatConfig's endpoint/model resolution) when none exists yet.
- * Extracted out of _openChat (below) so notebookWorkspace.js's
- * openNotebookWorkspace() can drive the exact same flow when opening the
- * workspace straight from a notebook-grid click — bypassing the detail view
- * entirely — via a dynamic import of this module. Throws on failure; callers
- * own their own error UI (this function touches none).
+ * (via _createSessionForNotebook above) when none exists yet. Extracted out
+ * of _openChat (below) so notebookWorkspace.js's openNotebookWorkspace() can
+ * drive the exact same flow when opening the workspace straight from a
+ * notebook-grid click — bypassing the detail view entirely — via a dynamic
+ * import of this module. Throws on failure; callers own their own error UI
+ * (this function touches none).
  */
 export async function openOrCreateSessionForNotebook(nb) {
   // Resume an existing session bound to this notebook rather than spawning a
@@ -803,34 +844,18 @@ export async function openOrCreateSessionForNotebook(nb) {
     return;
   }
 
-  const cfg = await _resolveChatConfig();
-  const fd = new FormData();
-  fd.append('name', nb.name || 'Notebook');
-  fd.append('notebook_id', nb.id);
-  // Mandatory: without it the backend 400s on a missing endpoint_url, and it
-  // also lets a bare (model-less) session through when nothing resolved.
-  fd.append('skip_validation', 'true');
-  if (cfg) {
-    fd.append('endpoint_url', cfg.endpoint_url || '');
-    fd.append('model', cfg.model || '');
-    if (cfg.endpoint_id) fd.append('endpoint_id', cfg.endpoint_id);
-  }
+  await _createSessionForNotebook(nb);
+}
 
-  const payload = await _fetchJson(`${API_BASE}/api/session`, { method: 'POST', body: fd });
-
-  // Reuse app.js's live sessions instance (published on window), exactly as
-  // dashboard.js does — one obvious instance, and no risk of a duplicate
-  // module record if app.js's import specifier ever grows a ?v= query again.
-  // (`sm` was already resolved above, for the existing-session lookup.)
-  if (sm?.loadSessions && sm?.selectSession) {
-    // The new session must be in the module's list before selectSession can
-    // resolve it — load first, then select.
-    await sm.loadSessions();
-    await sm.selectSession(payload.id);
-  } else {
-    window.location.hash = '#' + payload.id;
-    window.location.reload();
-  }
+/**
+ * Always create a fresh session for notebook `nb` — the "New chat" option in
+ * notebookWorkspace.js's session dropdown, as opposed to
+ * openOrCreateSessionForNotebook's resume-if-possible default. Thin export
+ * wrapper so the workspace never needs to reach into this module's private
+ * helper directly.
+ */
+export async function createSessionForNotebook(nb) {
+  return _createSessionForNotebook(nb);
 }
 
 async function _openChat() {
@@ -963,4 +988,4 @@ export function closeNotebooks() {
 
 export function isNotebooksOpen() { return _open; }
 
-export default { openNotebooks, closeNotebooks, isNotebooksOpen, openOrCreateSessionForNotebook, showListError };
+export default { openNotebooks, closeNotebooks, isNotebooksOpen, openOrCreateSessionForNotebook, createSessionForNotebook, showListError };

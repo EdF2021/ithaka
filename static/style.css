@@ -41441,6 +41441,47 @@ body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-righ
 }
 .nbws-source-badge[hidden] { display: none; }
 
+/* Follow-up chips (Task 5) — a fixed strip floating just above the
+   chat-input-bar, inside #nbws-root (position:fixed inset:0,
+   pointer-events:none) so it overlays the untouched #chat-container instead
+   of living inside it. left/right mirror #chat-container's own
+   margin-left/margin-right (and their collapsed-panel variants) above so the
+   strip always spans exactly the visible chat column. The 92px bottom offset
+   is an approximation of the input bar's typical height + gap — not
+   dynamically measured, same trade-off the badge/topbar chrome above makes. */
+#nbws-chips {
+  position: absolute;
+  left: 280px;
+  right: 320px;
+  bottom: 92px;
+  z-index: 10006;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px;
+  pointer-events: none;
+  transition: left 0.18s ease, right 0.18s ease;
+}
+#nbws-chips:empty { display: none; }
+body.notebook-workspace-open.nbws-sources-collapsed #nbws-chips { left: 32px; }
+body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
+.nbws-chip {
+  pointer-events: auto;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nbws-chip:hover { background: var(--border); }
+
 /* Later notebooks-workspace CSS (Task 6 studio styling, Task 7's <=700px
    media query) belongs ABOVE this line — the marker comment right below is
    the end-of-block anchor Task 7's static test scans up to, so anything

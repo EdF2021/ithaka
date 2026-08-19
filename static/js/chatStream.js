@@ -266,6 +266,22 @@ export function insertStreamDoneToast(sessionId, query) {
 }
 
 /**
+ * Fire when a chat stream's finally-block reaches its existing end-of-stream
+ * point (chat.js's handleChatSubmit finally, unconditionally — success,
+ * error, foreground or backgrounded). A plain CustomEvent dispatch only, no
+ * other side effect, so the regular (non-notebook) chat behaves identically
+ * whether or not anything is listening. notebookWorkspace.js's follow-up
+ * chips (Task 5) is the first consumer: it listens on `document` and only
+ * acts when the workspace is open and `detail.sessionId` matches the active
+ * session — this hook itself stays notebook-agnostic.
+ */
+export function notifyChatStreamDone(sessionId) {
+  try {
+    document.dispatchEvent(new CustomEvent('ithaka:chat-stream-done', { detail: { sessionId } }));
+  } catch (_) {}
+}
+
+/**
  * Notify when research completes (browser notification).
  */
 export function notifyResearchComplete(sessionId, query) {
@@ -292,6 +308,7 @@ const chatStream = {
   handleUIControl,
   notifyStreamComplete,
   insertStreamDoneToast,
+  notifyChatStreamDone,
   notifyResearchComplete,
 };
 

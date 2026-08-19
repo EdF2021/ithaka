@@ -1015,6 +1015,12 @@
       </div>
       <div id="nbws-studio-body"></div>
     </aside>
+    <!-- Follow-up chips (Task 5) — populated after each grounded answer via
+         POST .../suggest_questions, positioned above the chat-input-bar by
+         style.css. Lives here (inside the fixed #nbws-root chrome, never
+         inside #chat-container) so notebookWorkspace.js can render into it
+         without ever touching the chat DOM itself. -->
+    <div id="nbws-chips" class="nbws-chips"></div>
   </div>
 
   <main class="chat-container welcome-active" id="chat-container" aria-label="Chat area" aria-busy="false">

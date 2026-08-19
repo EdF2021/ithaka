@@ -3441,6 +3441,12 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       clearResponseTimeout();
       clearProcessingProbe();
       clearFirstTokenWaitTimers();
+      // Unconditional end-of-stream hook (success, error, foreground or
+      // backgrounded) — a plain CustomEvent dispatch with no other behavior
+      // change, so the regular (non-notebook) chat is unaffected whether or
+      // not anything is listening. notebookWorkspace.js's follow-up chips
+      // (Task 5) is the only current consumer.
+      chatStream.notifyChatStreamDone(streamSessionId);
       // Streaming done — let screen readers announce the settled response.
       const _chatLogDone = document.getElementById('chat-history');
       if (_chatLogDone) _chatLogDone.setAttribute('aria-busy', 'false');

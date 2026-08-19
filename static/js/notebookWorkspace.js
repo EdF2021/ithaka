@@ -508,6 +508,176 @@ function _wireSourcesPanel() {
   });
 }
 
+// ---- Session dropdown + follow-up chips (Task 5) ---------------------------
+
+const _NEW_CHAT_VALUE = '__new__';
+
+// notebooks.js's own timestamp-fallback ordering (`last_message_at` ||
+// `updated_at` || `created_at`), mirrored here rather than imported since
+// that helper is private to notebooks.js — sort newest-first so the
+// dropdown's top option is the session the user was most recently in,
+// matching openOrCreateSessionForNotebook's own resume choice.
+function _sessionTs(s) {
+  const raw = s && (s.last_message_at || s.updated_at || s.created_at);
+  const t = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(t) ? t : 0;
+}
+
+/** Rebuild `#nbws-session-select` from this notebook's own sessions only
+ *  (never an unrelated session — see the Task 4 review handoff note this
+ *  guards against) plus a trailing "New chat" option. */
+function _populateSessionSelect() {
+  const sel = document.getElementById('nbws-session-select');
+  if (!sel || !_state.notebook) return;
+  const sm = window.sessionModule;
+  const nbId = _state.notebook.id;
+  const sessions = (sm?.getSessions?.() || [])
+    .filter(s => s.notebook_id === nbId)
+    .sort((a, b) => _sessionTs(b) - _sessionTs(a));
+  const activeId = sm?.getCurrentSessionId?.();
+  const options = sessions.map(s =>
+    `<option value="${_esc(s.id)}"${s.id === activeId ? ' selected' : ''}>${_esc(s.name || 'Untitled chat')}</option>`);
+  options.push(`<option value="${_NEW_CHAT_VALUE}">New chat</option>`);
+  sel.innerHTML = options.join('');
+}
+
+async function _onSessionSelectChange(e) {
+  const val = e.target.value;
+  const nb = _state.notebook;
+  if (!nb) return;
+  if (val === _NEW_CHAT_VALUE) {
+    try {
+      const notebooksMod = await _importNotebooks();
+      await notebooksMod.createSessionForNotebook(nb);
+    } catch (err) {
+      uiModule.showToast?.(`Could not start a new chat (${err.message})`);
+    }
+  } else if (val) {
+    try { await window.sessionModule?.selectSession?.(val); } catch (_) {}
+  }
+  _clearChips();
+  _populateSessionSelect();
+}
+
+// Wired once (dataset-flag guard) — #nbws-session-select is static chrome in
+// index.html that persists across opens/closes.
+function _wireSessionSelect() {
+  const sel = document.getElementById('nbws-session-select');
+  if (!sel || sel.dataset.nbwsWired === '1') return;
+  sel.dataset.nbwsWired = '1';
+  sel.addEventListener('change', _onSessionSelectChange);
+}
+
+const _CHIP_MAX = 3;
+
+function _clearChips() {
+  const box = document.getElementById('nbws-chips');
+  if (box) box.innerHTML = '';
+}
+
+/** Render up to 3 follow-up chips; click fills the composer and focuses it —
+ *  deliberately no auto-send, the user reviews/edits before sending. */
+function _renderChips(questions) {
+  const box = document.getElementById('nbws-chips');
+  if (!box) return;
+  const list = (Array.isArray(questions) ? questions : [])
+    .filter(q => typeof q === 'string' && q.trim())
+    .slice(0, _CHIP_MAX);
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = list.map(q => `<button type="button" class="nbws-chip">${_esc(q)}</button>`).join('');
+  box.querySelectorAll('.nbws-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const msgInput = document.getElementById('message');
+      if (!msgInput) return;
+      msgInput.value = btn.textContent || '';
+      msgInput.focus();
+    });
+  });
+}
+
+/** Plain text of a message bubble's `.body`, with any collapsible
+ *  reasoning-model `.thinking-section` (chat.js/markdown.js's "View thinking
+ *  process" block) stripped out first — live-verified against a real
+ *  reasoning model (deepseek-r1) that the raw textContent otherwise pulls in
+ *  the whole scratch-thinking trace ahead of the actual answer, which is
+ *  exactly the noise suggest_questions shouldn't be asked to summarize. */
+function _bodyText(msgNode) {
+  const body = msgNode?.querySelector('.body');
+  if (!body) return '';
+  const clone = body.cloneNode(true);
+  clone.querySelectorAll('.thinking-section').forEach(el => el.remove());
+  return (clone.textContent || '').trim();
+}
+
+/** Plain-text {question, answer} of the most recently finished exchange,
+ *  read straight from the last two `.msg-user`/`.msg-ai` bubbles in
+ *  #chat-history — the same DOM chat.js itself renders into, so there is no
+ *  separate state to keep in sync. Returns null when the tail isn't a clean
+ *  user->assistant pair (e.g. still streaming, or an error bubble). */
+function _lastQAPair() {
+  const box = document.getElementById('chat-history');
+  if (!box) return null;
+  const nodes = [...box.querySelectorAll('.msg-user, .msg-ai')];
+  if (!nodes.length) return null;
+  const last = nodes[nodes.length - 1];
+  if (!last.classList.contains('msg-ai')) return null;
+  let userNode = null;
+  for (let i = nodes.length - 2; i >= 0; i--) {
+    if (nodes[i].classList.contains('msg-user')) { userNode = nodes[i]; break; }
+  }
+  if (!userNode) return null;
+  const answer = _bodyText(last);
+  const question = _bodyText(userNode);
+  if (!answer || !question) return null;
+  return { question, answer };
+}
+
+/**
+ * Listens for chatStream.js's unconditional end-of-stream event (fires for
+ * every chat, notebook or not). Only reacts when the workspace is open AND
+ * the finished stream belongs to the currently active session — inert for
+ * the regular chat and for any background/other-session stream. Fetch
+ * failures are swallowed: a missing suggestion strip must never surface as a
+ * chat error.
+ */
+async function _onChatStreamDone(e) {
+  if (!_open || !_state.notebook) return;
+  const sm = window.sessionModule;
+  const sessionId = e?.detail?.sessionId;
+  if (!sessionId || sessionId !== sm?.getCurrentSessionId?.()) return;
+  const pair = _lastQAPair();
+  if (!pair) return;
+  const nbId = _state.notebook.id;
+  try {
+    const data = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(nbId)}/suggest_questions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: pair.question, answer: pair.answer }),
+      });
+    // Stale by the time the fetch resolved (workspace closed, or the user
+    // moved to a different notebook/session) — drop it silently.
+    if (!_open || !_state.notebook || _state.notebook.id !== nbId ||
+        sessionId !== sm?.getCurrentSessionId?.()) return;
+    _renderChips(data.questions);
+  } catch (_) {
+    // Never surface as a chat error — see the doc comment above.
+  }
+}
+document.addEventListener('ithaka:chat-stream-done', _onChatStreamDone);
+
+/**
+ * Clears stale chips the instant a new question is sent — reuses chat.js's
+ * existing `ithaka:chat-busy-change` event (dispatched at the start of every
+ * foreground send) instead of inventing a second "send started" signal.
+ */
+function _onChatBusyChange(e) {
+  if (!_open || !e?.detail?.active) return;
+  _clearChips();
+}
+window.addEventListener('ithaka:chat-busy-change', _onChatBusyChange);
+
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks
 // click handler) and publishes no window singleton — it's always reached via
 // dynamic import, including from its own grid-card click handler that calls
@@ -573,6 +743,10 @@ async function _openImpl(nb) {
   const nameEl = document.getElementById('nbws-notebook-name');
   if (nameEl) nameEl.textContent = nb.name || '(untitled)';
 
+  _clearChips();
+  _wireSessionSelect();
+  _populateSessionSelect();
+
   _wireChrome();
   _open = true;
   document.body.classList.add('notebook-workspace-open');
@@ -624,6 +798,10 @@ export function closeNotebookWorkspace() {
   // static topbar chrome that outlives this close, unlike #nbws-sources-body.
   const badge = document.getElementById('nbws-source-badge');
   if (badge) { badge.hidden = true; badge.textContent = ''; }
+
+  // Same reasoning for the follow-up chips — #nbws-chips is static chrome
+  // that outlives this close too.
+  _clearChips();
 
   _unbindEscape();
 

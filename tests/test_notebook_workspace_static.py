@@ -54,3 +54,25 @@ def test_empty_selection_blocks_send():
 
 def test_selection_persisted_per_notebook():
     assert "notebook_source_sel_" in _WS
+
+
+# ── Task 5: session dropdown + follow-up chips ───────────────────────────────
+
+def test_stream_done_event_exists():
+    stream = (_REPO / "static" / "js" / "chatStream.js").read_text(encoding="utf-8")
+    assert "ithaka:chat-stream-done" in stream or "chatStreamDone" in stream
+
+
+def test_chips_fetch_suggest_endpoint_and_fail_silently():
+    assert "/suggest_questions" in _WS
+    assert "catch" in _WS  # fetch-fout mag nooit een chatfout tonen
+
+
+def test_session_select_scoped_to_notebook():
+    assert "nbws-session-select" in _WS
+    assert "notebook_id" in _WS
+
+
+def test_chip_click_fills_composer_without_autosend():
+    assert "nbws-chip" in _WS
+    assert "getElementById('message')" in _WS or 'getElementById("message")' in _WS
