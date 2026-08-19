@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 import src.notebook_audio as notebook_audio
 from core.database import Document, SessionLocal, Notebook, NotebookArtifact, NotebookSource
@@ -23,6 +23,7 @@ from src.notebook_audio import (
     start_podcast_job,
 )
 from src.notebook_ingest import ingest_notebook_file
+from src.notebook_report import generate_notebook_artifact_report
 from src.notebook_suggest import suggest_questions
 from src.settings import load_settings
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES, format_byte_limit
@@ -385,6 +386,40 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 pass
             _unlink_podcast_audio(audio_path)
             return {"success": True}
+        finally:
+            db_session.close()
+
+    # ---- GET /api/notebooks/{id}/artifacts/{artifact_id}/report ----
+    @router.get("/api/notebooks/{notebook_id}/artifacts/{artifact_id}/report")
+    async def get_artifact_report(request: Request, notebook_id: str, artifact_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            # Inner join: an artifact whose Document has been hard-deleted
+            # (data inconsistency, see test_list_artifacts_title_none_safe_
+            # when_document_missing) has nothing to render, so it 404s the
+            # same as an unknown artifact id rather than 500ing.
+            row = (
+                db_session.query(NotebookArtifact, Document)
+                .join(Document, Document.id == NotebookArtifact.document_id)
+                .filter(NotebookArtifact.id == artifact_id, NotebookArtifact.notebook_id == nb.id)
+                .first()
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            artifact, document = row
+            # Podcasts have no markdown (audio_path, not current_content) —
+            # nothing for the visual-report template to render.
+            if artifact.kind == "podcast":
+                raise HTTPException(status_code=404, detail="No visual report for podcast artifacts")
+            html_content = generate_notebook_artifact_report(
+                notebook_name=nb.name,
+                kind=artifact.kind,
+                document_title=document.title,
+                document_content=document.current_content,
+            )
+            return HTMLResponse(content=html_content)
         finally:
             db_session.close()
 

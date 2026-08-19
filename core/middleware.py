@@ -73,6 +73,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         is_document_pdf_preview = path.startswith("/api/document/") and path.endswith("/render-pdf")
         # Visual report pages are self-contained HTML — need inline scripts + external images
         is_report = path.startswith("/api/research/report/")
+        # Notebook artifact visual reports reuse the same self-contained
+        # template (src/notebook_report.py -> src/visual_report.py), so they
+        # need the same relaxed CSP. Scoped to the one route it serves
+        # (/api/notebooks/{id}/artifacts/{id}/report) rather than the whole
+        # /api/notebooks/ prefix, which also covers source upload etc.
+        is_notebook_report = (
+            path.startswith("/api/notebooks/")
+            and "/artifacts/" in path
+            and path.endswith("/report")
+        )
+        is_report = is_report or is_notebook_report
 
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"

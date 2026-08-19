@@ -41055,21 +41055,6 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .notebook-archived-toggle { margin-bottom: 8px; width: fit-content; }
 
 /* Detail view */
-.notebook-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.notebook-open-chat-btn { border-color: var(--fg); }
-.notebook-detail-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: bold;
-  margin-bottom: 4px;
-}
-.notebook-detail-desc { max-width: 100%; margin-bottom: 8px; }
 .notebook-upload-zone {
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -41110,13 +41095,14 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
    kind pill and item rows. Buttons reuse .dashboard-action-btn, delete reuses
    .notebook-src-del/.notebook-confirm-armed, rows reuse .list-item; only the
    layout/pill/hint bits below have no existing equivalent. */
-.notebook-artifact-head {
-  font-weight: bold;
-  margin: 2px 0 6px;
-}
+/* Two-column grid (not flex-wrap) so the 6 Generate buttons (Task B) line up
+   tidily in a 320px-wide panel instead of ragged-wrapping by label length —
+   consolidated here (single declaration) rather than left as a second,
+   non-adjacent override further down that only won on `display` via cascade
+   order. */
 .notebook-artifact-btns {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
   margin-bottom: 8px;
 }
@@ -41499,6 +41485,45 @@ body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
    (now fully removed) detail view; the shared #nbws-studio-body padding
    rule earlier in this block covers layout, so nothing studio-specific is
    new here. */
+
+/* Studio panel redesign (Task B, notebooks-studio-design) — the flat button
+   row directly above the artifact list read as one undifferentiated group
+   (user feedback: unclear which elements generate something vs. which ARE
+   generated files). Fixed with two headed sections instead of relying on
+   button-vs-row styling alone. */
+.nbws-studio-section + .nbws-studio-section { margin-top: 14px; }
+.nbws-studio-section-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.notebook-artifact-gen-btn,
+.notebook-podcast-gen-btn { justify-content: flex-start; }
+.notebook-artifact-gen-btn svg,
+.notebook-podcast-gen-btn svg { flex-shrink: 0; color: var(--red); }
+/* File icon on each Files row — muted so it reads as metadata, not another
+   action, and never eats space from the truncating title next to it. */
+.notebook-artifact-file-icon { flex-shrink: 0; color: var(--color-muted); }
+/* Secondary "open source document" icon button — same shape/tokens as
+   .notebook-src-del (delete) but non-destructive, so it hovers to --fg
+   instead of --red, matching .notebook-archive-btn's convention above. */
+.notebook-artifact-opendoc {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 4px;
+  color: var(--color-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.notebook-artifact-opendoc:hover { color: var(--fg); border-color: var(--border); }
 
 /* _openArtifact (notebookWorkspace.js) opens the document viewer WITHOUT
    closing the workspace, so .doc-editor-pane (base z-index: 1, style.css
