@@ -41055,21 +41055,6 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .notebook-archived-toggle { margin-bottom: 8px; width: fit-content; }
 
 /* Detail view */
-.notebook-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.notebook-open-chat-btn { border-color: var(--fg); }
-.notebook-detail-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: bold;
-  margin-bottom: 4px;
-}
-.notebook-detail-desc { max-width: 100%; margin-bottom: 8px; }
 .notebook-upload-zone {
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -41110,10 +41095,6 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
    kind pill and item rows. Buttons reuse .dashboard-action-btn, delete reuses
    .notebook-src-del/.notebook-confirm-armed, rows reuse .list-item; only the
    layout/pill/hint bits below have no existing equivalent. */
-.notebook-artifact-head {
-  font-weight: bold;
-  margin: 2px 0 6px;
-}
 .notebook-artifact-btns {
   display: flex;
   flex-wrap: wrap;

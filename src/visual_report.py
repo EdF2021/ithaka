@@ -1824,6 +1824,9 @@ def generate_visual_report(
     # research) so a notebook-artifact caller (src/notebook_report.py) can
     # reuse this same bar without a template fork; research callers never
     # populate those keys, so this is additive and doesn't change their output.
+    # Collision risk: if research's stats dict ever wants a "Notebook"/"Type"/
+    # "Generated" key of its own, it will silently render under the notebook
+    # label above — these are exact-string matches, not namespaced.
     stat_items = []
     for key, label in [
         ("Duration", "Duration"), ("Rounds", "Rounds"), ("Queries", "Queries"),
