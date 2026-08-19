@@ -38,10 +38,13 @@ class RAGManager:
         k: int = 5,
         owner: Optional[str] = None,
         notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search for documents - delegates to VectorRAG."""
         if notebook_id is not None:
-            return self.vector_rag.search(query, k, owner=owner, notebook_id=notebook_id)
+            return self.vector_rag.search(
+                query, k, owner=owner, notebook_id=notebook_id, source_ids=source_ids,
+            )
         return self.vector_rag.search(query, k, owner=owner)
     
     def index_personal_documents(

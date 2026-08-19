@@ -41261,3 +41261,348 @@ body.notebook-session #rag-indicator-btn {
 .notebook-podcast-links a {
   color: var(--fg);
 }
+
+/* ── Notebooks workspace (Task 3) — NotebookLM-style 3-panel fullscreen shell
+   around the existing chat. CSS-primary: #chat-container itself is never
+   moved or reparented (see static/index.html and notebookWorkspace.js) — all
+   of this only lays fixed chrome around it, driven by one body class. */
+body.notebook-workspace-open #nbws-root { display: flex; }
+#nbws-root {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10005;
+  pointer-events: none;
+  --nbws-topbar-h: 44px;
+}
+#nbws-root .nbws-panel { pointer-events: auto; background: var(--panel); border-color: var(--border); }
+#nbws-topbar {
+  pointer-events: auto;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: var(--nbws-topbar-h);
+  /* Without an explicit z-index here, #nbws-sources/#nbws-studio (both also
+     position:absolute, top:0, z-index:auto) paint OVER the topbar's left/
+     right ends in DOM-order — auto-z-index positioned siblings stack by tree
+     order, so the later-in-DOM side panels covered #nbws-back-btn entirely
+     (unclickable behind #nbws-sources) even though it read fine in an a11y
+     snapshot. Any explicit positive z-index moves an element to its own
+     later paint step ahead of the z-index:auto siblings, which is all this
+     needs — found live while smoke-testing Task 6's studio panel (close
+     button, unrelated to that task's own work, but real regardless). */
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+#nbws-sources {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 280px;
+  border-right: 1px solid var(--border);
+  padding-top: var(--nbws-topbar-h);
+  overflow-y: auto;
+  transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
+}
+#nbws-studio {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 320px;
+  border-left: 1px solid var(--border);
+  padding-top: var(--nbws-topbar-h);
+  overflow-y: auto;
+  transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
+}
+/* Collapse toggle (per-panel button in .nbws-panel-head) — narrows to a slim
+   strip that still shows the collapse/expand button, rather than width:0.
+   The button lives inside the very <aside> it collapses, so zeroing the
+   whole panel (an earlier version of this rule did) would clip the button
+   itself away with it, leaving no way to re-expand on desktop (the mobile
+   tabbar that could otherwise reach it is display:none there). */
+#nbws-sources.nbws-collapsed,
+#nbws-studio.nbws-collapsed {
+  width: 32px;
+  overflow: hidden;
+}
+#nbws-sources.nbws-collapsed .nbws-panel-title,
+#nbws-studio.nbws-collapsed .nbws-panel-title,
+#nbws-sources.nbws-collapsed #nbws-sources-body,
+#nbws-studio.nbws-collapsed #nbws-studio-body {
+  display: none;
+}
+#nbws-sources.nbws-collapsed .nbws-panel-head,
+#nbws-studio.nbws-collapsed .nbws-panel-head {
+  justify-content: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.nbws-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.nbws-panel-title { font-weight: 600; }
+#nbws-sources-body,
+#nbws-studio-body { padding: 12px; }
+.nbws-back-btn,
+.nbws-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.nbws-back-btn:hover,
+.nbws-collapse-btn:hover { background: var(--border); }
+.nbws-notebook-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40vw;
+}
+.nbws-session-select {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  max-width: 200px;
+}
+/* Mobile tabbar (Task 7 wires the switching behaviour + media query below
+   700px) — hidden on desktop by default. */
+.nbws-tabbar { display: none; gap: 4px; }
+.nbws-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.nbws-tab.nbws-tab-active { color: var(--fg); border-color: var(--fg); }
+
+/* The workspace hides whichever of .sidebar / .icon-rail is currently the
+   left nav (they're mutually exclusive — see the .icon-rail comment,
+   sidebar-layout.js:57) and reflows the (untouched, never reparented) chat
+   between the two fixed panels instead. Hiding .icon-rail matters beyond
+   looks: body is `display:flex` (style.css:106) with #chat-container as a
+   `flex:1` sibling, so a still-in-flow 48px rail would shift the chat's real
+   left edge 48px past #nbws-sources's right edge (280px), opening a dead
+   strip of bare body background between them. It also stops the rail's own
+   buttons from being clickable (and popping modals at z-index ~1000, well
+   under #nbws-root's 10005) once the sources panel is collapsed. */
+body.notebook-workspace-open .sidebar,
+body.notebook-workspace-open .icon-rail { display: none; }
+body.notebook-workspace-open #chat-container {
+  margin-left: 280px;
+  margin-right: 320px;
+  padding-top: var(--nbws-topbar-h, 44px);
+  transition: margin 0.18s ease;
+}
+/* 32px matches #nbws-sources.nbws-collapsed/#nbws-studio.nbws-collapsed's
+   collapsed width above — the two must be kept in sync by hand (same
+   sibling-vs-descendant reasoning as --nbws-topbar-h's fallback usage). */
+body.notebook-workspace-open.nbws-sources-collapsed #chat-container { margin-left: 32px; }
+body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-right: 32px; }
+
+/* Sources panel (Task 4) — rows/upload-zone/error line reuse the exact
+   .notebook-source-row/.notebook-status/.notebook-upload-zone/.notebook-error/
+   .notebook-src-del/.notebook-confirm-armed shapes already defined above for
+   notebooks.js's (now-dead) detail view; per-row checkboxes reuse the app's
+   existing .memory-select-cb dot styling. Only the select-all row and the two
+   n/m counters (panel header + topbar badge) have no existing equivalent. */
+.nbws-select-all-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+.nbws-source-count {
+  color: var(--color-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+/* Topbar badge — same pill shape as .notebook-status, sized for the fixed
+   chrome bar rather than a list row. */
+.nbws-source-badge {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.nbws-source-badge[hidden] { display: none; }
+
+/* Follow-up chips (Task 5) — a fixed strip floating just above the
+   chat-input-bar, inside #nbws-root (position:fixed inset:0,
+   pointer-events:none) so it overlays the untouched #chat-container instead
+   of living inside it. left/right mirror #chat-container's own
+   margin-left/margin-right (and their collapsed-panel variants) above so the
+   strip always spans exactly the visible chat column. The 92px bottom offset
+   is an approximation of the input bar's typical height + gap — not
+   dynamically measured, same trade-off the badge/topbar chrome above makes. */
+#nbws-chips {
+  position: absolute;
+  left: 280px;
+  right: 320px;
+  bottom: 92px;
+  z-index: 10006;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px;
+  pointer-events: none;
+  transition: left 0.18s ease, right 0.18s ease;
+}
+#nbws-chips:empty { display: none; }
+body.notebook-workspace-open.nbws-sources-collapsed #nbws-chips { left: 32px; }
+body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
+.nbws-chip {
+  pointer-events: auto;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nbws-chip:hover { background: var(--border); }
+
+/* Studio panel (Task 6) — generate-button row, artifact list and podcast
+   player all reuse the exact .notebook-artifact-(kind|title|item)
+   .notebook-podcast-(panel|links), .notebook-error, .notebook-src-del and
+   .notebook-confirm-armed shapes already defined above for notebooks.js's
+   (now fully removed) detail view; the shared #nbws-studio-body padding
+   rule earlier in this block covers layout, so nothing studio-specific is
+   new here. */
+
+/* _openArtifact (notebookWorkspace.js) opens the document viewer WITHOUT
+   closing the workspace, so .doc-editor-pane (base z-index: 1, style.css
+   ~12251) must render above #nbws-root (z-index 10005, above in this same
+   block). The <=768px media query already boosts body.doc-view
+   .doc-editor-pane to the same 10010 for its own (email-front) stacking
+   case — this mirrors that value for the workspace case, at every viewport
+   width, so the class-combo specificity (3 classes) clears #nbws-root's
+   10005 without needing !important. */
+body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
+
+/* ── Mobile tabs (Task 7, <=700px) — replaces the side-by-side
+   sources/chat/studio columns with ONE full-width "page" at a time, switched
+   by #nbws-tabbar's three buttons (wired in notebookWorkspace.js's
+   _setActiveTab, which toggles .nbws-tab-active on the active tab button AND
+   on the matching panel — reusing the same class .nbws-tab already defines
+   for the button's own active look, per the task brief). Desktop rules above
+   are untouched outside this query. */
+@media (max-width: 700px) {
+  .nbws-tabbar { display: flex; }
+
+  /* Collapse is a desktop-only affordance — tabs already give every panel
+     the full screen when active, so the collapse button (and the narrow
+     32px strip it produces) has no useful meaning here. Hiding the button
+     stops it from ever being tapped on mobile; _onMobileBreakpointChange in
+     notebookWorkspace.js additionally clears any .nbws-collapsed state left
+     over from a desktop session the moment the viewport crosses this
+     breakpoint, so a panel collapsed on desktop still shows its full content
+     the instant its tab becomes active on mobile (rather than rendering the
+     collapsed 32px strip's hidden-title/hidden-body state at 100% width). */
+  .nbws-collapse-btn { display: none; }
+
+  /* Topbar wrap (fix wave finding 3): at a genuine 360px viewport the
+     single-row topbar (back-btn + name + session-select + 3-tab tabbar)
+     doesn't fit — the tabbar's rect measured left:250,right:450 in a 360px
+     viewport and the Studio tab was unreachable (overflow-x: visible, no
+     wrap, no scroll). Wrap the tabbar onto its own full-width second row and
+     grow --nbws-topbar-h to match, so every offset that already reads that
+     var (topbar's own height, plus #nbws-sources/#nbws-studio's inset and
+     padding-top just below — both descendants of #nbws-root and so already
+     inheriting the new value) grows with it automatically. #chat-container
+     is declared OUTSIDE #nbws-root's subtree (see the "32px ... kept in sync
+     by hand" comment above) so its padding-top can't see this var override
+     and needs its own matching value here. */
+  #nbws-root { --nbws-topbar-h: 84px; }
+  #nbws-topbar {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 6px;
+    padding: 6px 12px;
+  }
+  .nbws-tabbar {
+    flex: 0 0 100%;
+    width: 100%;
+  }
+  .nbws-tab { flex: 1; text-align: center; }
+  body.notebook-workspace-open #chat-container { padding-top: 84px; }
+
+  #nbws-sources,
+  #nbws-studio {
+    display: none;
+    position: fixed;
+    inset: var(--nbws-topbar-h) 0 0 0;
+    width: 100% !important;
+    border: none;
+  }
+  #nbws-sources.nbws-tab-active,
+  #nbws-studio.nbws-tab-active { display: block; }
+
+  /* Chat fills the screen behind the (now display:none-by-default) panels
+     when its own tab is active — margins collapse to 0 (no side panels to
+     leave room for) and it's hidden outright while a side panel's tab owns
+     the screen, so no focusable/scrollable chat content sits underneath a
+     full-width panel. */
+  body.notebook-workspace-open #chat-container {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  body.notebook-workspace-open.nbws-mobile-tab-sources #chat-container,
+  body.notebook-workspace-open.nbws-mobile-tab-studio #chat-container {
+    display: none;
+  }
+
+  /* Follow-up chips (Task 5) float above the chat composer — full width to
+     match the now-marginless chat column, and hidden along with chat itself
+     on the sources/studio tabs (see #chat-container above). */
+  #nbws-chips {
+    left: 0;
+    right: 0;
+  }
+  body.notebook-workspace-open.nbws-mobile-tab-sources #nbws-chips,
+  body.notebook-workspace-open.nbws-mobile-tab-studio #nbws-chips {
+    display: none;
+  }
+
+  /* The topbar (back-btn + name + badge + session-select + tabbar) is tight
+     at 360px — trim the notebook-name and session-select ceilings the
+     desktop values above set so the tabbar itself never gets pushed off
+     the right edge. */
+  .nbws-notebook-name { max-width: 22vw; }
+  .nbws-session-select { max-width: 84px; }
+}
+
+/* Later notebooks-workspace CSS belongs ABOVE this line — the marker comment
+   right below is the end-of-block anchor the static test scans up to, so
+   anything appended after it falls outside that scan. */
+/* nbws-end */

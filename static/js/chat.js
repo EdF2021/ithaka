@@ -827,6 +827,24 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       }
     }
 
+    // Notebook workspace source filter — block sends with zero sources
+    // selected, before anything renders (user bubble, input clear) or any
+    // session work starts. getSourceIdsForChat() contract (notebookWorkspace.js):
+    // null = no filter (workspace closed, or every source is checked),
+    // string[] = a checked subset, [] = nothing checked (must not send).
+    // Computed once here and reused unchanged at the fd.append site below —
+    // not recomputed, so a mid-send checkbox change can't desync the guard
+    // from what actually gets sent.
+    let _nbwsSourceIds = null;
+    if (window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen()) {
+      _nbwsSourceIds = window.notebookWorkspace.getSourceIdsForChat ? window.notebookWorkspace.getSourceIdsForChat() : null;
+      if (Array.isArray(_nbwsSourceIds) && _nbwsSourceIds.length === 0) {
+        uiModule.showError(window.notebookWorkspace.EMPTY_SELECTION_MESSAGE || 'Select at least one source');
+        _releaseSendFlag();
+        return;
+      }
+    }
+
     // Materialize pending session (deferred from model click) on first message
     if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {
       _sendPerf.mark('pending_session_begin');
@@ -1194,6 +1212,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       fd.append('message', _finalMsgWithInject);
       fd.append('session', streamSessionId);
       if (ids.length) fd.append('attachments', JSON.stringify(ids));
+      // Notebook workspace source filter — same JSON-string-in-a-form-field
+      // shape as `attachments` above, since this whole request is FormData,
+      // not a JSON body. `_nbwsSourceIds` was computed once at the top of
+      // this handler (see the send guard there); null means no filter.
+      if (Array.isArray(_nbwsSourceIds)) fd.append('source_ids', JSON.stringify(_nbwsSourceIds));
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && activeDocIdForSend) {
         try {
@@ -3410,6 +3433,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                 errMsg += '\n\nThis model may not support tools — try switching to Chat mode.';
               }
               typewriterInto(errorHolder, errMsg);
+              // Semantic marker (inert — no styling/behavior attached) so
+              // consumers like notebookWorkspace.js's follow-up chips can
+              // reliably tell "this bubble is a failed exchange" apart from
+              // a normal answer, instead of sniffing inline color/text.
+              errorHolder.closest('.msg-ai')?.classList.add('chat-error');
             }
           }
         }
@@ -3418,6 +3446,12 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       clearResponseTimeout();
       clearProcessingProbe();
       clearFirstTokenWaitTimers();
+      // Unconditional end-of-stream hook (success, error, foreground or
+      // backgrounded) — a plain CustomEvent dispatch with no other behavior
+      // change, so the regular (non-notebook) chat is unaffected whether or
+      // not anything is listening. notebookWorkspace.js's follow-up chips
+      // (Task 5) is the only current consumer.
+      chatStream.notifyChatStreamDone(streamSessionId);
       // Streaming done — let screen readers announce the settled response.
       const _chatLogDone = document.getElementById('chat-history');
       if (_chatLogDone) _chatLogDone.setAttribute('aria-busy', 'false');
@@ -3488,7 +3522,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
             var _box = document.getElementById('chat-history');
             if (_box && sessionModule.getCurrentSessionId() === _timeoutSessionId) {
               var _timeoutMsg = document.createElement('div');
-              _timeoutMsg.className = 'msg msg-ai';
+              // chat-error: same inert semantic marker as the other two
+              // error/timeout render sites (see the comment at the
+              // typewriterInto call above) — no styling/behavior attached.
+              _timeoutMsg.className = 'msg msg-ai chat-error';
               _timeoutMsg.innerHTML = '<div class="role">Ithaka</div><div class="body" style="opacity:0.6;font-style:italic;">Research clarification timed out. Toggle research again to start over.</div>';
               _box.appendChild(_timeoutMsg);
               uiModule.scrollHistory();
@@ -3948,7 +3985,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       var box = document.getElementById('chat-history');
       if (box) {
         var errHolder = document.createElement('div');
-        errHolder.className = 'msg msg-ai';
+        // chat-error: same inert semantic marker as the other two
+        // error/timeout render sites — no styling/behavior attached.
+        errHolder.className = 'msg msg-ai chat-error';
         errHolder.innerHTML = '<div class="body"><i style="color: var(--color-error);">[Background stream encountered an error]</i></div>';
         box.appendChild(errHolder);
       }

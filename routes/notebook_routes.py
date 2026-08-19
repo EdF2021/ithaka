@@ -23,6 +23,7 @@ from src.notebook_audio import (
     start_podcast_job,
 )
 from src.notebook_ingest import ingest_notebook_file
+from src.notebook_suggest import suggest_questions
 from src.settings import load_settings
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES, format_byte_limit
 
@@ -386,6 +387,32 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             return {"success": True}
         finally:
             db_session.close()
+
+    # ---- POST /api/notebooks/{id}/suggest_questions ----
+    @router.post("/api/notebooks/{notebook_id}/suggest_questions")
+    async def suggest_notebook_questions(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        question = body.get("question") if isinstance(body, dict) else None
+        answer = body.get("answer") if isinstance(body, dict) else None
+        if not question or not answer:
+            raise HTTPException(status_code=400, detail="question en answer zijn verplicht")
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+        try:
+            questions = await suggest_questions(question, answer, user)
+        except Exception:
+            # Best-effort: suggesties zijn nice-to-have, nooit een 5xx
+            # richting de chat-flow.
+            logger.info("suggest_questions failed for notebook %s", notebook_id, exc_info=True)
+            questions = []
+        return {"questions": questions}
 
     # ---- POST /api/notebooks/{id}/podcast ----
     @router.post("/api/notebooks/{notebook_id}/podcast")
