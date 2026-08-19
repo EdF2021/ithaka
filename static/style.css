@@ -41531,6 +41531,32 @@ body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
      collapsed 32px strip's hidden-title/hidden-body state at 100% width). */
   .nbws-collapse-btn { display: none; }
 
+  /* Topbar wrap (fix wave finding 3): at a genuine 360px viewport the
+     single-row topbar (back-btn + name + session-select + 3-tab tabbar)
+     doesn't fit — the tabbar's rect measured left:250,right:450 in a 360px
+     viewport and the Studio tab was unreachable (overflow-x: visible, no
+     wrap, no scroll). Wrap the tabbar onto its own full-width second row and
+     grow --nbws-topbar-h to match, so every offset that already reads that
+     var (topbar's own height, plus #nbws-sources/#nbws-studio's inset and
+     padding-top just below — both descendants of #nbws-root and so already
+     inheriting the new value) grows with it automatically. #chat-container
+     is declared OUTSIDE #nbws-root's subtree (see the "32px ... kept in sync
+     by hand" comment above) so its padding-top can't see this var override
+     and needs its own matching value here. */
+  #nbws-root { --nbws-topbar-h: 84px; }
+  #nbws-topbar {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 6px;
+    padding: 6px 12px;
+  }
+  .nbws-tabbar {
+    flex: 0 0 100%;
+    width: 100%;
+  }
+  .nbws-tab { flex: 1; text-align: center; }
+  body.notebook-workspace-open #chat-container { padding-top: 84px; }
+
   #nbws-sources,
   #nbws-studio {
     display: none;

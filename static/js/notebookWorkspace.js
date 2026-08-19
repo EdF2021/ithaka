@@ -109,11 +109,34 @@ function _isModalOpen() {
     !m.classList.contains('hidden') && getComputedStyle(m).display !== 'none');
 }
 
+// Whether the document viewer opened from the studio panel is showing. It's
+// kept ABOVE the workspace by design (`body.doc-view` + `.doc-editor-pane`)
+// but isn't a `.modal`, so `_isModalOpen` above doesn't see it and has no
+// Escape-close of its own — without this check Escape would silently close
+// the workspace underneath the open artifact.
+function _isDocViewerOpen() {
+  return document.body.classList.contains('doc-view');
+}
+
+// Mirrors ui.js's global Escape arbiter's target-tag guard: that arbiter
+// exempts INPUT/TEXTAREA/select/contentEditable targets from closing modals,
+// but doesn't stop propagation, so without this check the workspace's own
+// handler would still fire and tear the workspace down while the user is
+// typing in the composer.
+function _isTypingTarget(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return !!target.isContentEditable;
+}
+
 function _bindEscape() {
   if (_escHandler) return;
   _escHandler = (e) => {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
     if (_isModalOpen()) return;
+    if (_isDocViewerOpen()) return;
+    if (_isTypingTarget(e.target)) return;
     closeNotebookWorkspace();
   };
   document.addEventListener('keydown', _escHandler);
