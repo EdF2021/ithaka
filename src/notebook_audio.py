@@ -767,6 +767,7 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
             notebook_id=notebook.id,
             document_id=document_id,
             kind="podcast",
+            title=f"{notebook.name} — Podcast",
             audio_path=filename,
         )
         session.add(artifact)
