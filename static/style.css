@@ -41281,6 +41281,16 @@ body.notebook-workspace-open #nbws-root { display: flex; }
   position: absolute;
   top: 0; left: 0; right: 0;
   height: var(--nbws-topbar-h);
+  /* Without an explicit z-index here, #nbws-sources/#nbws-studio (both also
+     position:absolute, top:0, z-index:auto) paint OVER the topbar's left/
+     right ends in DOM-order — auto-z-index positioned siblings stack by tree
+     order, so the later-in-DOM side panels covered #nbws-back-btn entirely
+     (unclickable behind #nbws-sources) even though it read fine in an a11y
+     snapshot. Any explicit positive z-index moves an element to its own
+     later paint step ahead of the z-index:auto siblings, which is all this
+     needs — found live while smoke-testing Task 6's studio panel (close
+     button, unrelated to that task's own work, but real regardless). */
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -41482,8 +41492,26 @@ body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
 }
 .nbws-chip:hover { background: var(--border); }
 
-/* Later notebooks-workspace CSS (Task 6 studio styling, Task 7's <=700px
-   media query) belongs ABOVE this line — the marker comment right below is
-   the end-of-block anchor Task 7's static test scans up to, so anything
-   appended after it falls outside that scan. */
+/* Studio panel (Task 6) — generate-button row, artifact list and podcast
+   player all reuse the exact .notebook-artifact-(kind|title|item)
+   .notebook-podcast-(panel|links), .notebook-error, .notebook-src-del and
+   .notebook-confirm-armed shapes already defined above for notebooks.js's
+   (now fully removed) detail view; the shared #nbws-studio-body padding
+   rule earlier in this block covers layout, so nothing studio-specific is
+   new here. */
+
+/* _openArtifact (notebookWorkspace.js) opens the document viewer WITHOUT
+   closing the workspace, so .doc-editor-pane (base z-index: 1, style.css
+   ~12251) must render above #nbws-root (z-index 10005, above in this same
+   block). The <=768px media query already boosts body.doc-view
+   .doc-editor-pane to the same 10010 for its own (email-front) stacking
+   case — this mirrors that value for the workspace case, at every viewport
+   width, so the class-combo specificity (3 classes) clears #nbws-root's
+   10005 without needing !important. */
+body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
+
+/* Later notebooks-workspace CSS (Task 7's <=700px media query) belongs
+   ABOVE this line — the marker comment right below is the end-of-block
+   anchor Task 7's static test scans up to, so anything appended after it
+   falls outside that scan. */
 /* nbws-end */

@@ -76,3 +76,23 @@ def test_session_select_scoped_to_notebook():
 def test_chip_click_fills_composer_without_autosend():
     assert "nbws-chip" in _WS
     assert "getElementById('message')" in _WS or 'getElementById("message")' in _WS
+
+
+# ── Task 6: studio panel (artifacts + podcast) ───────────────────────────────
+
+def _between(src: str, start: str, end: str) -> str:
+    start_idx = src.index(start)
+    end_idx = src.index(end, start_idx)
+    return src[start_idx:end_idx]
+
+
+def test_detail_view_is_gone_from_notebooks_modal():
+    assert "_showDetail" not in _NB
+
+
+def test_workspace_keeps_running_when_artifact_opens():
+    assert "closeNotebookWorkspace" not in _between(_WS, "function _openArtifact", "\n}\n")
+
+
+def test_podcast_poll_stops_on_workspace_close():
+    assert "_stopPodcastPoll" in _WS

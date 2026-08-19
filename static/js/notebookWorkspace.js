@@ -227,6 +227,24 @@ const _CLOSE_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"
 
 const _ZONE_IDLE = 'Add sources — drop files here or click to upload';
 
+// notebooks.js's own timestamp helpers (naive ISO strings are stored UTC by
+// the backend — utcnow_naive — so read them as UTC, not local), copied
+// rather than imported since they're private to that module too. Used by the
+// studio panel's artifact-date column (Task 6).
+function _parseTs(iso) {
+  if (!iso) return NaN;
+  let s = String(iso);
+  if (!/Z$|[+-]\d\d:?\d\d$/.test(s)) s += 'Z';
+  return new Date(s).getTime();
+}
+
+/** Short date for an artifact row ("14 Aug"). Empty string when unparseable. */
+function _shortDate(iso) {
+  const t = _parseTs(iso);
+  if (!Number.isFinite(t)) return '';
+  return new Date(t).toLocaleDateString([], { day: 'numeric', month: 'short' });
+}
+
 function _selStorageKey(notebookId) {
   return `notebook_source_sel_${notebookId}`;
 }
@@ -698,6 +716,351 @@ function _onChatBusyChange(e) {
 }
 window.addEventListener('ithaka:chat-busy-change', _onChatBusyChange);
 
+// ---- Studio panel: artifacts + podcast (Task 6) ----------------------------
+//
+// Moved here from notebooks.js's now-deleted in-modal detail view (see that
+// module's file header) — same fetch/render/poll shapes, adapted to
+// #nbws-studio-body's DOM ids and to `_state.notebook` in place of that
+// view's private `_detail`. Two differences from the original, both required
+// by this task's controller ruling: `_openArtifact` never closes anything
+// (the workspace stays open behind the document viewer — see the CSS z-index
+// fix below), and the podcast poll's lifecycle is tied to the workspace via
+// `registerCloseHook(_stopPodcastPoll)` instead of notebooks.js's old
+// modal-close/leave-detail-view hooks.
+
+// Fixed generate-button order and Dutch labels per the design spec — the
+// backend only accepts these five `kind` values via POST /artifacts.
+// `podcast` is a sixth artifact kind, but it is generated through its own
+// endpoint/job flow (see _generatePodcast) — it stays out of ARTIFACT_KINDS
+// and only shares KIND_LABELS (for the pill text on its row).
+const ARTIFACT_KINDS = ['study_guide', 'briefing', 'faq', 'quiz', 'mindmap'];
+const KIND_LABELS = {
+  study_guide: 'Studiegids',
+  briefing: 'Briefing',
+  faq: 'FAQ',
+  quiz: 'Quiz',
+  mindmap: 'Mindmap',
+  podcast: 'Podcast',
+};
+
+function _artifactRow(a) {
+  const label = KIND_LABELS[a.kind] || a.kind;
+  const title = a.title || label;
+  const isPodcast = a.kind === 'podcast';
+  // A sibling span, not text inside .notebook-artifact-title: that span is
+  // nowrap+ellipsis, so text appended inside it would be the first thing
+  // clipped on a narrow viewport — and this hint is required, per spec.
+  const hint = a.kind === 'mindmap'
+    ? '<span class="notebook-artifact-hint">(Preview voor de mindmap)</span>' : '';
+  const row = `
+    <div class="list-item notebook-artifact-item${isPodcast ? ' notebook-podcast-item' : ''}"
+         data-art-id="${_esc(a.id)}" data-doc-id="${_esc(a.document_id)}" data-kind="${_esc(a.kind)}">
+      <span class="notebook-artifact-kind">${_esc(label)}</span>
+      <span class="grow notebook-artifact-title">${_esc(title)}</span>
+      ${hint}
+      <span class="dashboard-row-sub notebook-artifact-date">${_esc(_shortDate(a.created_at))}</span>
+      <button type="button" class="notebook-src-del notebook-artifact-del" data-art-id="${_esc(a.id)}"
+              title="Delete artifact">${_CLOSE_ICON}</button>
+    </div>`;
+  if (!isPodcast) return row;
+  // Podcast rows get a sibling panel (not nested — the row's own click
+  // handler toggles it) with the player, a transcript link that reuses the
+  // exact same _openArtifact path as every other artifact kind, and a plain
+  // download link.
+  const audioUrl = `/api/notebook-audio/${encodeURIComponent(a.audio_path || '')}`;
+  return `${row}
+    <div class="notebook-podcast-panel" id="nbws-podcast-panel-${_esc(a.id)}" hidden>
+      <audio controls preload="none" src="${audioUrl}"></audio>
+      <div class="notebook-podcast-links">
+        <a href="#" class="notebook-podcast-transcript" data-art-id="${_esc(a.id)}">Open transcript</a>
+        <a href="${audioUrl}" download="${_esc(title)}.wav">Download</a>
+      </div>
+    </div>`;
+}
+
+function _showArtifactError(msg) {
+  const el = document.getElementById('nbws-artifact-error');
+  if (el) el.textContent = msg || '';
+}
+
+/** Fetch and (re)render this notebook's artifact list. Guarded by
+ *  `_openEpoch` so a slow fetch outlived by a close can't paint over
+ *  whatever the workspace shows now — same reasoning as `_loadSources`. */
+async function _loadArtifacts() {
+  if (!_state.notebook) return;
+  const epoch = _openEpoch;
+  const nbId = _state.notebook.id;
+  const box = document.getElementById('nbws-artifacts');
+  let data;
+  try {
+    data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(nbId)}/artifacts`);
+  } catch (e) {
+    if (epoch !== _openEpoch) return;
+    if (box) box.innerHTML = '';
+    _showArtifactError(`Could not load artifacts (${e.message})`);
+    return;
+  }
+  if (epoch !== _openEpoch || !box) return;
+  const artifacts = data.artifacts || [];
+  if (!artifacts.length) {
+    box.innerHTML = '<div class="dashboard-empty">No artifacts yet — generate one above</div>';
+    return;
+  }
+  box.innerHTML = artifacts.map(_artifactRow).join('');
+  box.querySelectorAll('.notebook-artifact-item').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.notebook-artifact-del')) return;
+      if (row.dataset.kind === 'podcast') { _togglePodcastPanel(row); return; }
+      _openArtifact(row);
+    });
+  });
+  box.querySelectorAll('.notebook-artifact-del').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _armConfirm(btn, () => _deleteArtifact(btn.dataset.artId));
+    });
+  });
+  // "Open transcript" reuses _openArtifact on the row it belongs to (found
+  // by artifact id, since the panel is a sibling of the row, not a
+  // descendant — the row already carries data-doc-id).
+  box.querySelectorAll('.notebook-podcast-transcript').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const row = box.querySelector(`.notebook-artifact-item[data-art-id="${CSS.escape(link.dataset.artId)}"]`);
+      if (row) _openArtifact(row);
+    });
+  });
+}
+
+/** Toggle a podcast row's player/links panel (its sibling, not a descendant —
+ *  so this never routes through the shared _openArtifact document-viewer path). */
+function _togglePodcastPanel(row) {
+  const panel = document.getElementById(`nbws-podcast-panel-${row.dataset.artId}`);
+  if (panel) panel.hidden = !panel.hidden;
+}
+
+async function _deleteArtifact(artifactId) {
+  if (!_state.notebook) return;
+  try {
+    await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { method: 'DELETE' });
+    _showArtifactError('');
+  } catch (e) {
+    _showArtifactError(`Delete failed (${e.message})`);
+    return;
+  }
+  _loadArtifacts();
+}
+
+async function _generateArtifact(kind, btn) {
+  if (!_state.notebook) return;
+  const label = btn?.querySelector('span');
+  const original = label ? label.textContent : null;
+  if (btn) btn.disabled = true;
+  if (label) label.textContent = 'Genereren…';
+  _showArtifactError('');
+  try {
+    await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    await _loadArtifacts();
+  } catch (e) {
+    _showArtifactError(`Could not generate (${e.message})`);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (label && original != null) label.textContent = original;
+  }
+}
+
+// ---- Podcast: separate job/polling flow (own endpoint, not /artifacts) ----
+
+// { notebookId, jobId, timer, btn } while a job is running/polling; null
+// otherwise. Module-scope (not per-row) because only one podcast job can run
+// per open notebook at a time — the button is disabled for the duration.
+let _podcastPoll = null;
+
+function _podcastPendingRowHtml(text) {
+  return `
+    <div class="list-item notebook-artifact-item notebook-podcast-pending" id="nbws-podcast-pending">
+      <span class="notebook-artifact-kind">${_esc(KIND_LABELS.podcast)}</span>
+      <span class="grow notebook-artifact-title">${_esc(text)}</span>
+    </div>`;
+}
+
+function _podcastPhaseText(status) {
+  if (status.phase === 'script') return 'Script schrijven…';
+  if (status.phase === 'tts') {
+    const seg = status.segment != null ? status.segment : '?';
+    const total = status.total != null ? status.total : '?';
+    return `Audio genereren… ${seg}/${total}`;
+  }
+  if (status.phase === 'concat') return 'Samenvoegen…';
+  return 'Bezig…';
+}
+
+/** Insert (or update, if already present) the pending row at the top of the
+ *  artifact list — before any fetched artifacts, and before/instead of the
+ *  "no artifacts yet" empty state. */
+function _insertPodcastPending(text) {
+  const box = document.getElementById('nbws-artifacts');
+  if (!box) return;
+  const existing = document.getElementById('nbws-podcast-pending');
+  if (existing) {
+    const titleEl = existing.querySelector('.notebook-artifact-title');
+    if (titleEl) titleEl.textContent = text;
+    return;
+  }
+  if (box.querySelector('.dashboard-empty')) box.innerHTML = '';
+  box.insertAdjacentHTML('afterbegin', _podcastPendingRowHtml(text));
+}
+
+/** Stop the setTimeout polling loop and restore the generate button — safe
+ *  to call whenever (no-op if nothing is running). Called on done/error/404,
+ *  and registered below as a workspace close hook so a stale loop never polls
+ *  a notebook/job that is no longer on screen. */
+function _stopPodcastPoll() {
+  if (!_podcastPoll) return;
+  clearTimeout(_podcastPoll.timer);
+  if (_podcastPoll.btn) _podcastPoll.btn.disabled = false;
+  _podcastPoll = null;
+}
+
+async function _pollPodcast() {
+  if (!_podcastPoll) return;
+  const { notebookId, jobId } = _podcastPoll;
+  let status;
+  try {
+    status = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/podcast/${encodeURIComponent(jobId)}`);
+  } catch (e) {
+    // Cancelled (workspace closed / notebook switched) or superseded while
+    // the fetch was in flight — a stale reject must not paint over whatever
+    // is on screen now (a fresh studio panel, or a newer job).
+    if (!_podcastPoll || _podcastPoll.jobId !== jobId) return;
+    _stopPodcastPoll();
+    const msg = /^HTTP 404/.test(e.message)
+      ? 'Generatie afgebroken (server herstart)'
+      : `Podcast mislukt (${e.message})`;
+    // _loadArtifacts() replaces #nbws-artifacts wholesale, which both removes
+    // the pending row and restores the empty-state if this was the
+    // notebook's only artifact — plain removal would leave the box empty.
+    await _loadArtifacts();
+    _showArtifactError(msg);
+    return;
+  }
+  if (!_podcastPoll || _podcastPoll.jobId !== jobId) return;
+
+  if (status.status === 'done') {
+    _stopPodcastPoll();
+    await _loadArtifacts();
+    return;
+  }
+  if (status.status === 'error') {
+    _stopPodcastPoll();
+    await _loadArtifacts();
+    _showArtifactError(`Podcast mislukt${status.error ? `: ${status.error}` : ''}`);
+    return;
+  }
+
+  _insertPodcastPending(_podcastPhaseText(status));
+  _podcastPoll.timer = setTimeout(_pollPodcast, 2000);
+}
+
+async function _generatePodcast(btn) {
+  if (!_state.notebook || _podcastPoll) return;
+  _showArtifactError('');
+  if (btn) btn.disabled = true;
+
+  let jobId;
+  try {
+    const data = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/podcast`, { method: 'POST' });
+    jobId = data.job_id;
+  } catch (e) {
+    _showArtifactError(`Could not generate (${e.message})`);
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  _insertPodcastPending(_podcastPhaseText({ phase: 'script' }));
+  _podcastPoll = { notebookId: _state.notebook.id, jobId, timer: null, btn };
+  _pollPodcast();
+}
+
+// The podcast poll must stop whenever the workspace closes — a stale
+// setTimeout loop must never keep firing against a torn-down studio panel.
+// Registered once at module load (this module is a persistent singleton, not
+// re-instantiated per open), so no matching unregister call is needed.
+registerCloseHook(_stopPodcastPoll);
+
+/**
+ * Open a generated artifact in the document viewer, as an overlay ABOVE the
+ * still-open workspace (style.css gives `body.notebook-workspace-open.doc-view
+ * .doc-editor-pane` a z-index above #nbws-root's 10005 — see that rule for
+ * why). Unlike notebooks.js's old in-modal version, this never closes
+ * anything: the workspace (chat, sources, session, any running podcast poll)
+ * stays exactly as it was — the controller ruling for this task is that
+ * closing on artifact-open would be a silent context loss the user never
+ * asked for. Mirrors the same window.documentModule-singleton-or-dynamic-
+ * import handoff document.js's other callers use.
+ */
+async function _openArtifact(row) {
+  if (!_state.notebook || row.dataset.opening === '1') return;
+  const docId = row.dataset.docId;
+  if (!docId) return;
+  row.dataset.opening = '1';
+  row.classList.add('notebook-artifact-opening');
+  _showArtifactError('');
+
+  try {
+    let dm = window.documentModule;
+    if (!dm || !dm.loadDocument) {
+      const mod = await import('./document.js');
+      dm = (mod && mod.default) || mod;
+    }
+    if (!dm || !dm.loadDocument) throw new Error('Document module unavailable');
+    await dm.loadDocument(docId);
+  } catch (e) {
+    _showArtifactError(`Could not open artifact (${e.message})`);
+  } finally {
+    row.dataset.opening = '0';
+    row.classList.remove('notebook-artifact-opening');
+  }
+}
+
+function _studioPanelSkeleton() {
+  return `
+    <div class="notebook-artifact-btns" id="nbws-artifact-btns">
+      ${ARTIFACT_KINDS.map(kind => `<button type="button" class="dashboard-action-btn notebook-artifact-gen-btn"
+              data-kind="${_esc(kind)}"><span>${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
+      <button type="button" class="dashboard-action-btn notebook-podcast-gen-btn" id="nbws-podcast-btn"
+              data-kind="podcast"><span>${_esc(KIND_LABELS.podcast)}</span></button>
+    </div>
+    <div class="notebook-error" id="nbws-artifact-error"></div>
+    <div class="notebook-artifacts" id="nbws-artifacts">
+      <div class="dashboard-empty">Loading&hellip;</div>
+    </div>`;
+}
+
+// Wired once (dataset-flag guard) — #nbws-studio-body is static chrome that
+// persists across opens/closes; only `_loadArtifacts` (data, not listeners)
+// runs again on every open.
+function _wireStudioPanel() {
+  const body = document.getElementById('nbws-studio-body');
+  if (!body || body.dataset.nbwsWired === '1') return;
+  body.dataset.nbwsWired = '1';
+  body.innerHTML = _studioPanelSkeleton();
+
+  body.querySelectorAll('.notebook-artifact-gen-btn').forEach(btn => {
+    btn.addEventListener('click', () => _generateArtifact(btn.dataset.kind, btn));
+  });
+  document.getElementById('nbws-podcast-btn')?.addEventListener('click', (e) => _generatePodcast(e.currentTarget));
+}
+
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks
 // click handler) and publishes no window singleton — it's always reached via
 // dynamic import, including from its own grid-card click handler that calls
@@ -775,6 +1138,9 @@ async function _openImpl(nb) {
 
   _wireSourcesPanel();
   _loadSources();
+
+  _wireStudioPanel();
+  _loadArtifacts();
 
   if (notebooksMod?.isNotebooksOpen?.()) notebooksMod.closeNotebooks();
 }
