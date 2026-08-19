@@ -41130,6 +41130,9 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Keep the title readable: below this the trailing controls wrap to the
+     next line (the row is flex-wrap) instead of squeezing the title away. */
+  min-width: 96px;
 }
 .notebook-artifact-hint { color: var(--color-muted); }
 .notebook-artifact-date { flex-shrink: 0; }
