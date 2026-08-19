@@ -189,6 +189,24 @@ function _loadCounts(notebooks) {
   }));
 }
 
+/**
+ * Grid-card click → the full-screen 3-panel workspace (NotebookLM-style),
+ * not the in-modal detail view. Dynamic import, same handoff shape as
+ * _openArtifact's load of document.js: notebookWorkspace.js carries its own
+ * <script> tag (so window.notebookWorkspace is usually already the live
+ * singleton by the time this runs) with a dynamic-import fallback for the
+ * rare case it isn't loaded yet.
+ */
+async function _openWorkspace(nb) {
+  let ws = window.notebookWorkspace;
+  if (!ws || typeof ws.openNotebookWorkspace !== 'function') {
+    const mod = await import('./notebookWorkspace.js');
+    ws = (mod && mod.default) || mod;
+  }
+  if (!ws || typeof ws.openNotebookWorkspace !== 'function') return;
+  await ws.openNotebookWorkspace(nb);
+}
+
 async function _renderNotebookGrid() {
   const grid = document.getElementById('notebook-grid');
   if (!grid) return;
@@ -217,7 +235,7 @@ async function _renderNotebookGrid() {
   grid.querySelectorAll('.notebook-card').forEach(card => {
     card.addEventListener('click', () => {
       const nb = notebooks.find(n => n.id === card.dataset.nbId);
-      if (nb) _showDetail(nb);
+      if (nb) _openWorkspace(nb);
     });
   });
   grid.querySelectorAll('.notebook-del-btn').forEach(btn => {
@@ -760,6 +778,79 @@ async function _resolveChatConfig() {
   return null;
 }
 
+/**
+ * Find-or-create + select the chat session bound to notebook `nb`: resume the
+ * most recently active session with a matching notebook_id, or create one
+ * (via _resolveChatConfig's endpoint/model resolution) when none exists yet.
+ * Extracted out of _openChat (below) so notebookWorkspace.js's
+ * openNotebookWorkspace() can drive the exact same flow when opening the
+ * workspace straight from a notebook-grid click — bypassing the detail view
+ * entirely — via a dynamic import of this module. Throws on failure; callers
+ * own their own error UI (this function touches none).
+ */
+export async function openOrCreateSessionForNotebook(nb) {
+  // Resume an existing session bound to this notebook rather than spawning a
+  // new one on every call. GET /api/sessions (session_routes.py) includes
+  // notebook_id on each session object — added specifically so
+  // "notebook-bound sessions render a badge ... and hide the RAG toggle"
+  // (see that route's comment), so no separate backend lookup is needed:
+  // scan the already-loaded window.sessionModule.getSessions() list.
+  // Deliberately does NOT call sm.loadSessions() first to force a refetch:
+  // loadSessions() also auto-selects/switches the currently open session as
+  // a side effect (sessions.js's targetId resolution, ~line 1791) — doing
+  // that on every call, including the common case where no notebook session
+  // exists yet, would risk silently switching the visible chat before the
+  // create path even runs. The already loaded list is fresh enough for what
+  // matters here: a session created earlier in this page load (including by
+  // this same function, below, which does call loadSessions() — but only
+  // after creating one). Only active (non-archived) sessions are in the
+  // list, which is fine: an archived match would fall through to creating a
+  // new session below, but there is none in that case since it's filtered
+  // out entirely.
+  const sm = window.sessionModule;
+  const candidates = (sm?.getSessions?.() || []).filter(s => s.notebook_id === nb.id);
+  if (candidates.length && sm?.selectSession) {
+    // The bug this fixes is users already having several duplicate sessions
+    // for one notebook — resume the most recently active one (by last
+    // message, else last update, else creation), not just whichever order
+    // the list happens to return.
+    candidates.sort((a, b) =>
+      (_parseTs(b.last_message_at || b.updated_at || b.created_at) || 0) -
+      (_parseTs(a.last_message_at || a.updated_at || a.created_at) || 0));
+    await sm.selectSession(candidates[0].id);
+    return;
+  }
+
+  const cfg = await _resolveChatConfig();
+  const fd = new FormData();
+  fd.append('name', nb.name || 'Notebook');
+  fd.append('notebook_id', nb.id);
+  // Mandatory: without it the backend 400s on a missing endpoint_url, and it
+  // also lets a bare (model-less) session through when nothing resolved.
+  fd.append('skip_validation', 'true');
+  if (cfg) {
+    fd.append('endpoint_url', cfg.endpoint_url || '');
+    fd.append('model', cfg.model || '');
+    if (cfg.endpoint_id) fd.append('endpoint_id', cfg.endpoint_id);
+  }
+
+  const payload = await _fetchJson(`${API_BASE}/api/session`, { method: 'POST', body: fd });
+
+  // Reuse app.js's live sessions instance (published on window), exactly as
+  // dashboard.js does — one obvious instance, and no risk of a duplicate
+  // module record if app.js's import specifier ever grows a ?v= query again.
+  // (`sm` was already resolved above, for the existing-session lookup.)
+  if (sm?.loadSessions && sm?.selectSession) {
+    // The new session must be in the module's list before selectSession can
+    // resolve it — load first, then select.
+    await sm.loadSessions();
+    await sm.selectSession(payload.id);
+  } else {
+    window.location.hash = '#' + payload.id;
+    window.location.reload();
+  }
+}
+
 async function _openChat() {
   if (!_detail) return;
   const btn = document.getElementById('notebook-open-chat');
@@ -769,73 +860,12 @@ async function _openChat() {
   _showError('notebook-detail-error', '');
 
   try {
-    // Resume an existing session bound to this notebook rather than
-    // spawning a new one on every click. GET /api/sessions (session_routes.py)
-    // includes notebook_id on each session object — added specifically so
-    // "notebook-bound sessions render a badge ... and hide the RAG toggle"
-    // (see that route's comment), so no separate backend lookup is needed:
-    // scan the already-loaded window.sessionModule.getSessions() list.
-    // Deliberately does NOT call sm.loadSessions() first to force a refetch:
-    // loadSessions() also auto-selects/switches the currently open session as
-    // a side effect (sessions.js's targetId resolution, ~line 1791) — doing
-    // that on every "Open chat" click, including the common case where no
-    // notebook session exists yet, would risk silently switching the visible
-    // chat behind this modal before the create path even runs. The already
-    // loaded list is fresh enough for what matters here: a session created
-    // earlier in this page load (including by this same function, below,
-    // which does call loadSessions() — but only after creating one). Only
-    // active (non-archived) sessions are in the list, which is fine: an
-    // archived match would fall through to creating a new session below, but
-    // there is none in that case since it's filtered out entirely.
-    const sm = window.sessionModule;
-    const candidates = (sm?.getSessions?.() || []).filter(s => s.notebook_id === _detail.id);
-    if (candidates.length && sm?.selectSession) {
-      // The bug this fixes is users already having several duplicate
-      // sessions for one notebook — resume the most recently active one
-      // (by last message, else last update, else creation), not just
-      // whichever order the list happens to return.
-      candidates.sort((a, b) =>
-        (_parseTs(b.last_message_at || b.updated_at || b.created_at) || 0) -
-        (_parseTs(a.last_message_at || a.updated_at || a.created_at) || 0));
-      // Select first, close after — keeps the modal up while the chat loads.
-      // (selectSession catches its own errors internally, so this ordering is
-      // about visual continuity, not error reporting.)
-      const epoch = _openEpoch;
-      await sm.selectSession(candidates[0].id);
-      if (epoch === _openEpoch) closeNotebooks();
-      return;
-    }
-
-    const cfg = await _resolveChatConfig();
-    const fd = new FormData();
-    fd.append('name', _detail.name || 'Notebook');
-    fd.append('notebook_id', _detail.id);
-    // Mandatory: without it the backend 400s on a missing endpoint_url, and
-    // it also lets a bare (model-less) session through when nothing resolved.
-    fd.append('skip_validation', 'true');
-    if (cfg) {
-      fd.append('endpoint_url', cfg.endpoint_url || '');
-      fd.append('model', cfg.model || '');
-      if (cfg.endpoint_id) fd.append('endpoint_id', cfg.endpoint_id);
-    }
-
-    const payload = await _fetchJson(`${API_BASE}/api/session`, { method: 'POST', body: fd });
-
-    // Reuse app.js's live sessions instance (published on window), exactly as
-    // dashboard.js does — one obvious instance, and no risk of a duplicate
-    // module record if app.js's import specifier ever grows a ?v= query again.
-    // (`sm` was already resolved above, for the existing-session lookup.)
-    if (sm?.loadSessions && sm?.selectSession) {
-      // The new session must be in the module's list before selectSession
-      // can resolve it — load first, then select.
-      const epoch = _openEpoch;
-      await sm.loadSessions();
-      await sm.selectSession(payload.id);
-      if (epoch === _openEpoch) closeNotebooks();
-    } else {
-      window.location.hash = '#' + payload.id;
-      window.location.reload();
-    }
+    // Select first, close after — keeps the modal up while the chat loads.
+    // (selectSession catches its own errors internally, so this ordering is
+    // about visual continuity, not error reporting.)
+    const epoch = _openEpoch;
+    await openOrCreateSessionForNotebook(_detail);
+    if (epoch === _openEpoch) closeNotebooks();
   } catch (e) {
     _showError('notebook-detail-error', `Could not open chat (${e.message})`);
   } finally {
@@ -952,4 +982,4 @@ export function closeNotebooks() {
 
 export function isNotebooksOpen() { return _open; }
 
-export default { openNotebooks, closeNotebooks, isNotebooksOpen };
+export default { openNotebooks, closeNotebooks, isNotebooksOpen, openOrCreateSessionForNotebook };

@@ -41261,3 +41261,128 @@ body.notebook-session #rag-indicator-btn {
 .notebook-podcast-links a {
   color: var(--fg);
 }
+
+/* ── Notebooks workspace (Task 3) — NotebookLM-style 3-panel fullscreen shell
+   around the existing chat. CSS-primary: #chat-container itself is never
+   moved or reparented (see static/index.html and notebookWorkspace.js) — all
+   of this only lays fixed chrome around it, driven by one body class. */
+body.notebook-workspace-open #nbws-root { display: flex; }
+#nbws-root {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10005;
+  pointer-events: none;
+  --nbws-topbar-h: 44px;
+}
+#nbws-root .nbws-panel { pointer-events: auto; background: var(--panel); border-color: var(--border); }
+#nbws-topbar {
+  pointer-events: auto;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: var(--nbws-topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+#nbws-sources {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 280px;
+  border-right: 1px solid var(--border);
+  padding-top: var(--nbws-topbar-h);
+  overflow-y: auto;
+  transition: width 0.18s ease, padding 0.18s ease;
+}
+#nbws-studio {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 320px;
+  border-left: 1px solid var(--border);
+  padding-top: var(--nbws-topbar-h);
+  overflow-y: auto;
+  transition: width 0.18s ease, padding 0.18s ease;
+}
+/* Collapse toggle (per-panel button in .nbws-panel-head) — width/padding
+   transition to 0 rather than display:none so the transition above animates. */
+#nbws-sources.nbws-collapsed,
+#nbws-studio.nbws-collapsed {
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  padding-top: var(--nbws-topbar-h);
+  overflow: hidden;
+  border: none;
+}
+.nbws-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.nbws-panel-title { font-weight: 600; }
+#nbws-sources-body,
+#nbws-studio-body { padding: 12px; }
+.nbws-back-btn,
+.nbws-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.nbws-back-btn:hover,
+.nbws-collapse-btn:hover { background: var(--border); }
+.nbws-notebook-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40vw;
+}
+.nbws-session-select {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  max-width: 200px;
+}
+/* Mobile tabbar (Task 7 wires the switching behaviour + media query below
+   700px) — hidden on desktop by default. */
+.nbws-tabbar { display: none; gap: 4px; }
+.nbws-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.nbws-tab.nbws-tab-active { color: var(--fg); border-color: var(--fg); }
+
+/* The workspace hides the wide sidebar and reflows the (untouched, never
+   reparented) chat between the two fixed panels instead. */
+body.notebook-workspace-open .sidebar { display: none; }
+body.notebook-workspace-open #chat-container {
+  margin-left: 280px;
+  margin-right: 320px;
+  padding-top: var(--nbws-topbar-h, 44px);
+  transition: margin 0.18s ease;
+}
+body.notebook-workspace-open.nbws-sources-collapsed #chat-container { margin-left: 0; }
+body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-right: 0; }
+/* nbws-end */
