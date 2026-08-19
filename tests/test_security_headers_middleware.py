@@ -26,6 +26,14 @@ def _build_app():
     def root():
         return {"ok": True}
 
+    @app.get("/api/notebooks/{notebook_id}/artifacts/{artifact_id}/report")
+    def notebook_report(notebook_id: str, artifact_id: str):
+        return {"ok": True}
+
+    @app.get("/api/notebooks/{notebook_id}/sources")
+    def notebook_sources(notebook_id: str):
+        return {"ok": True}
+
     return app
 
 
@@ -65,3 +73,26 @@ def test_permissions_policy_locks_camera_and_geolocation_but_allows_self_microph
     # would also block the app's own same-origin voice/STT button.
     assert "microphone=()" not in policy
     assert "microphone=(self)" in policy
+
+
+def test_notebook_artifact_report_gets_relaxed_report_csp():
+    """The notebook-artifact visual report reuses src/visual_report.py's
+    self-contained template (inline scripts + toolbar), same as
+    /api/research/report/<id>, so it needs the same relaxed CSP rather than
+    the app-wide nonce-only default."""
+    response = _client().get("/api/notebooks/nb1/artifacts/art1/report")
+
+    csp = response.headers["content-security-policy"]
+    assert "script-src 'self' 'unsafe-inline'" in csp
+    assert "frame-ancestors 'none'" in csp
+
+
+def test_notebook_sources_keeps_default_strict_csp():
+    """The relaxed CSP is scoped to the one report route, not the whole
+    /api/notebooks/ prefix — a sibling route like /sources must keep the
+    app-wide nonce-only CSP."""
+    response = _client().get("/api/notebooks/nb1/sources")
+
+    csp = response.headers["content-security-policy"]
+    assert "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0]
+    assert "frame-ancestors 'none'" in csp
