@@ -829,6 +829,9 @@ const KIND_LABELS = {
 const _PLUS_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const _FILE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="notebook-artifact-file-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 const _DOC_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+// Rename affordance — same pencil glyph sessions.js's per-session rename
+// menu item uses, so "rename" reads as the same action everywhere in the app.
+const _RENAME_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>';
 
 function _artifactRow(a) {
   const label = KIND_LABELS[a.kind] || a.kind;
@@ -846,6 +849,15 @@ function _artifactRow(a) {
   const openSrcBtn = isPodcast ? '' : `
       <button type="button" class="notebook-artifact-opendoc" data-art-id="${_esc(a.id)}"
               title="Open source document">${_DOC_ICON}</button>`;
+  // Rename button lives in the same button group as the open-source-document
+  // button (same class for shared icon-button chrome, distinct second class
+  // so its own listener can target it). Every row gets one, including
+  // podcast rows (they carry a title too — see the download link's
+  // filename below), unlike the doc button which only exists where there's
+  // a source document to open.
+  const renameBtn = `
+      <button type="button" class="notebook-artifact-opendoc notebook-artifact-rename" data-art-id="${_esc(a.id)}"
+              title="Rename">${_RENAME_ICON}</button>`;
   const row = `
     <div class="list-item notebook-artifact-item${isPodcast ? ' notebook-podcast-item' : ''}"
          data-art-id="${_esc(a.id)}" data-doc-id="${_esc(a.document_id)}" data-kind="${_esc(a.kind)}">
@@ -855,6 +867,7 @@ function _artifactRow(a) {
       ${hint}
       <span class="dashboard-row-sub notebook-artifact-date">${_esc(_shortDate(a.created_at))}</span>
       ${openSrcBtn}
+      ${renameBtn}
       <button type="button" class="notebook-src-del notebook-artifact-del" data-art-id="${_esc(a.id)}"
               title="Delete artifact">${_CLOSE_ICON}</button>
     </div>`;
@@ -908,6 +921,7 @@ async function _loadArtifacts() {
     row.addEventListener('click', (e) => {
       if (e.target.closest('.notebook-artifact-del')) return;
       if (e.target.closest('.notebook-artifact-opendoc')) return;
+      if (e.target.closest('.notebook-artifact-rename-input')) return;
       const kind = row.dataset.kind;
       if (kind === 'podcast') { _togglePodcastPanel(row); return; }
       // Mindmap keeps its existing preview as the primary click (Task B
@@ -925,12 +939,26 @@ async function _loadArtifacts() {
   });
   // Secondary "open source document" icon button on every non-podcast row —
   // always routes through the shared _openArtifact doc-viewer path,
-  // regardless of what the row's own click does.
-  box.querySelectorAll('.notebook-artifact-opendoc').forEach(btn => {
+  // regardless of what the row's own click does. Excludes the rename button:
+  // it shares this class for icon-button chrome (same tokens, no new color)
+  // but has its own click handler below, and both share a `.closest()` guard
+  // in the row's own click handler above, so it must never double-match here.
+  box.querySelectorAll('.notebook-artifact-opendoc:not(.notebook-artifact-rename)').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const row = box.querySelector(`.notebook-artifact-item[data-art-id="${CSS.escape(btn.dataset.artId)}"]`);
       if (row) _openArtifact(row);
+    });
+  });
+  // Rename: click swaps the title span for an inline <input> (never
+  // window.prompt — browser dialogs block automated/headless drivers, the
+  // same reason _armConfirm above uses a two-step button instead of
+  // window.confirm for delete). Enter saves via PATCH; Escape or blur cancels.
+  box.querySelectorAll('.notebook-artifact-rename').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const row = box.querySelector(`.notebook-artifact-item[data-art-id="${CSS.escape(btn.dataset.artId)}"]`);
+      if (row) _startArtifactRename(row);
     });
   });
   // "Open transcript" reuses _openArtifact on the row it belongs to (found
@@ -951,6 +979,65 @@ async function _loadArtifacts() {
 function _togglePodcastPanel(row) {
   const panel = document.getElementById(`nbws-podcast-panel-${row.dataset.artId}`);
   if (panel) panel.hidden = !panel.hidden;
+}
+
+/** Inline rename: swap `row`'s title span for a text input (never
+ *  window.prompt — see the rename-button click handler's comment above).
+ *  Enter saves via PATCH and re-renders the Files list from the server
+ *  response; Escape or blur (and an unchanged/empty value on Enter) restore
+ *  the original span without a network call. Reuses .session-rename-input
+ *  (sessions.js's own inline rename box) — same tokens/border/radius, no
+ *  new styling. */
+function _startArtifactRename(row) {
+  if (!_state.notebook) return;
+  const titleEl = row.querySelector('.notebook-artifact-title');
+  if (!titleEl || row.querySelector('.notebook-artifact-rename-input')) return;
+  const artifactId = row.dataset.artId;
+  const original = titleEl.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = original;
+  // `.grow` (flex:1, same as the title span it replaces): without it the
+  // input's own `.session-rename-input` width:100% takes a full line in
+  // this wrapping flex row, pushing the date + buttons onto a second line.
+  input.className = 'grow session-rename-input notebook-artifact-rename-input';
+  titleEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const restore = () => {
+    if (settled) return;
+    settled = true;
+    input.replaceWith(titleEl);
+  };
+  const commit = async () => {
+    if (settled) return;
+    const newTitle = input.value.trim();
+    if (!newTitle || newTitle === original) { restore(); return; }
+    settled = true;
+    try {
+      await _fetchJson(
+        `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artifactId)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      _showArtifactError('');
+      await _loadArtifacts();
+    } catch (e) {
+      _showArtifactError(`Rename failed (${e.message})`);
+      titleEl.textContent = original;
+      input.replaceWith(titleEl);
+    }
+  };
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { e.preventDefault(); restore(); }
+  });
+  input.addEventListener('blur', restore);
 }
 
 async function _deleteArtifact(artifactId) {
