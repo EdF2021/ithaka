@@ -153,6 +153,71 @@ def test_studio_panel_labels_are_english_not_dutch():
     assert "Studiegids" not in _WS
 
 
+# ── Task: NotebookArtifact title-kolom + hernoemen ──────────────────────────
+
+def test_artifact_row_has_rename_button_in_same_group_as_opendoc_button():
+    # Scoped to _artifactRow's own body: the rename button must live inside
+    # the row markup, next to the existing "open source document" button
+    # (same $-openSrcBtn/${renameBtn} pair), not bolted on somewhere else.
+    fn = _between(_WS, "function _artifactRow", "\n}\n")
+    assert "notebook-artifact-rename" in fn
+    assert "${openSrcBtn}" in fn
+    assert "${renameBtn}" in fn
+    assert fn.index("${openSrcBtn}") < fn.index("${renameBtn}")
+
+
+def test_row_click_guards_rename_input_before_kind_dispatch():
+    # Same precedent as test_artifact_click_podcast_toggles_mindmap_previews_
+    # others_open_report above: assert the exact guard clause AND that it
+    # runs before the podcast/mindmap/report dispatch, not just that the
+    # string exists somewhere in the file.
+    handler = _between(
+        _WS,
+        "row.addEventListener('click', (e) => {",
+        "\n  });\n  box.querySelectorAll('.notebook-artifact-del')",
+    )
+    assert "if (e.target.closest('.notebook-artifact-rename-input')) return;" in handler
+    guard_idx = handler.index("notebook-artifact-rename-input")
+    podcast_idx = handler.index("kind === 'podcast'")
+    assert guard_idx < podcast_idx
+
+
+def test_rename_button_click_handler_stops_propagation_and_starts_rename():
+    fn = _between(
+        _WS,
+        "box.querySelectorAll('.notebook-artifact-rename').forEach(btn => {",
+        "\n  });\n  // \"Open transcript\"",
+    )
+    assert "e.stopPropagation();" in fn
+    assert "_startArtifactRename(row);" in fn
+
+
+def test_start_artifact_rename_enter_saves_via_patch_escape_and_blur_cancel():
+    fn = _between(_WS, "function _startArtifactRename", "\n}\n")
+    assert "if (!_state.notebook) return;" in fn
+    assert "method: 'PATCH'" in fn
+    assert "JSON.stringify({ title: newTitle })" in fn
+    assert "e.key === 'Enter'" in fn
+    assert "commit();" in fn
+    assert "e.key === 'Escape'" in fn
+    assert "restore();" in fn
+    assert "input.addEventListener('blur', restore);" in fn
+    # The input itself must stop its own clicks from bubbling to the row's
+    # click handler (which would otherwise open the report/preview).
+    assert "input.addEventListener('click', (e) => e.stopPropagation());" in fn
+    enter_idx = fn.index("e.key === 'Enter'")
+    escape_idx = fn.index("e.key === 'Escape'")
+    assert enter_idx < escape_idx
+
+
+def test_rename_input_keeps_grow_so_row_does_not_wrap():
+    # The title span it replaces carries `.grow` (flex:1) — dropping it on
+    # the input would push the date + action buttons onto a second line in
+    # this wrapping flex row (.notebook-artifact-item is flex-wrap:wrap).
+    fn = _between(_WS, "function _startArtifactRename", "\n}\n")
+    assert "input.className = 'grow session-rename-input notebook-artifact-rename-input';" in fn
+
+
 def test_artifact_error_slot_lives_in_files_section_not_generate():
     # Review fix-round 1: of _showArtifactError's 6 call sites, 5 are
     # Files-section concerns (load/delete/podcast/open-artifact failures) —

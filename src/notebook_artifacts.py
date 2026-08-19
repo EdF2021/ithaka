@@ -381,9 +381,10 @@ async def generate_artifact(
         raise RuntimeError("Het model gaf een leeg antwoord terug")
 
     document_id = str(uuid.uuid4())
+    document_title = f"{notebook.name} — {spec['label']}"
     db_session.add(Document(
         id=document_id,
-        title=f"{notebook.name} — {spec['label']}",
+        title=document_title,
         owner=owner,
         language="markdown",
         current_content=content,
@@ -394,6 +395,11 @@ async def generate_artifact(
         notebook_id=notebook.id,
         document_id=document_id,
         kind=kind,
+        # Own title, seeded from the same value as the Document's — a fixed,
+        # renamable title from the start rather than a NULL that only ever
+        # falls back to the (also renamable, but conceptually separate)
+        # Document title. See NotebookArtifact.title in core/database.py.
+        title=document_title,
     )
     db_session.add(artifact)
     db_session.commit()
