@@ -41394,4 +41394,8 @@ body.notebook-workspace-open #chat-container {
 }
 body.notebook-workspace-open.nbws-sources-collapsed #chat-container { margin-left: 0; }
 body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-right: 0; }
+/* Later notebooks-workspace CSS (Task 4 sources styling, Task 6 studio
+   styling, Task 7's <=700px media query) belongs ABOVE this line — the
+   marker comment right below is the end-of-block anchor Task 7's static
+   test scans up to, so anything appended after it falls outside that scan. */
 /* nbws-end */

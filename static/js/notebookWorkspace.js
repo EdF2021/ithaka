@@ -40,9 +40,19 @@ let _escHandler = null;
 // others or leave the workspace stuck open.
 const _closeHooks = [];
 
-/** Register a function to run on every closeNotebookWorkspace(). */
+/**
+ * Register a function to run on every closeNotebookWorkspace(). Returns an
+ * unregister function the caller should invoke from its own teardown (e.g. a
+ * re-render that re-registers) so the array never accumulates stale/duplicate
+ * entries — same contract as escMenuStack.js's registerMenuDismiss.
+ */
 export function registerCloseHook(fn) {
-  if (typeof fn === 'function') _closeHooks.push(fn);
+  if (typeof fn !== 'function') return () => {};
+  _closeHooks.push(fn);
+  return () => {
+    const i = _closeHooks.indexOf(fn);
+    if (i !== -1) _closeHooks.splice(i, 1);
+  };
 }
 
 // Shared panel state for Task 4 (sources) / Task 5 (session chips) / Task 6
