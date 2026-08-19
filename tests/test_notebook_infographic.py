@@ -113,6 +113,47 @@ def test_parser_promotes_non_english_key_numbers_heading():
     assert headings == ["Aandachtspunten"]
 
 
+def test_parser_accepts_hyphen_and_endash_separators():
+    md = (
+        "# T\n\n"
+        "## Key numbers\n"
+        "- **42%** — en-dash label\n"
+        "- **7** - hyphen label\n"
+    )
+    parsed = _parse_infographic_markdown(md)
+    assert parsed["stats"] == [
+        ("42%", "en-dash label"),
+        ("7", "hyphen label"),
+    ]
+
+
+def test_parser_no_key_numbers_section_still_renders_sections():
+    md = (
+        "# T\n\n"
+        "## Highlights\n"
+        "- Fact one\n"
+        "- Fact two\n\n"
+        "> Takeaway line.\n"
+    )
+    parsed = _parse_infographic_markdown(md)
+    assert parsed["stats"] == []
+    assert [h for h, _, _ in parsed["sections"]] == ["Highlights"]
+    assert parsed["takeaway"] == "Takeaway line."
+
+
+def test_parser_malformed_stat_bullet_without_bold_degrades_gracefully():
+    md = (
+        "# T\n\n"
+        "## Key numbers\n"
+        "- 42% zonder bold — label\n"
+        "- **3** — wel goed\n"
+    )
+    parsed = _parse_infographic_markdown(md)
+    assert ("3", "wel goed") in parsed["stats"]
+    flat = str(parsed)
+    assert "42% zonder bold" in flat  # niet stil weggegooid
+
+
 # ---- renderer (pure) ----------------------------------------------------
 
 def test_renderer_full_structure_has_stat_cards():
