@@ -1160,6 +1160,15 @@ function _openArtifactReport(row) {
 // file-icon). Splitting them into separate headed blocks — not just relying
 // on button vs. row styling — is the fix for the "which of these are
 // buttons vs. file names?" confusion the redesign was requested for.
+//
+// #nbws-artifact-error lives in the Files section, not Generate: of
+// _showArtifactError's 6 call sites, only _generateArtifact's failure is a
+// Generate-section concern — load-artifacts, delete-artifact, both podcast-
+// poll-failure branches and open-artifact-failed are all Files-section
+// failures. One shared error slot (not one per section) is the minimal fix
+// that still renders all 6 visibly; splitting it into two slots would need
+// every call site to know which section it's reporting for, for no real
+// benefit since these errors are rare and never fire concurrently.
 function _studioPanelSkeleton() {
   return `
     <div class="nbws-studio-section nbws-studio-generate">
@@ -1170,10 +1179,10 @@ function _studioPanelSkeleton() {
         <button type="button" class="dashboard-action-btn notebook-podcast-gen-btn" id="nbws-podcast-btn"
                 data-kind="podcast">${_PLUS_ICON}<span>${_esc(KIND_LABELS.podcast)}</span></button>
       </div>
-      <div class="notebook-error" id="nbws-artifact-error"></div>
     </div>
     <div class="nbws-studio-section nbws-studio-files">
       <div class="nbws-studio-section-head">Files</div>
+      <div class="notebook-error" id="nbws-artifact-error"></div>
       <div class="notebook-artifacts" id="nbws-artifacts">
         <div class="dashboard-empty">Loading&hellip;</div>
       </div>

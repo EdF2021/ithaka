@@ -41114,9 +41114,14 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   font-weight: bold;
   margin: 2px 0 6px;
 }
+/* Two-column grid (not flex-wrap) so the 6 Generate buttons (Task B) line up
+   tidily in a 320px-wide panel instead of ragged-wrapping by label length —
+   consolidated here (single declaration) rather than left as a second,
+   non-adjacent override further down that only won on `display` via cascade
+   order. */
 .notebook-artifact-btns {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
   margin-bottom: 8px;
 }
@@ -41515,12 +41520,6 @@ body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
   margin-bottom: 6px;
   padding-bottom: 4px;
   border-bottom: 1px solid var(--border);
-}
-/* Two-column grid (not flex-wrap) so the 6 Generate buttons line up tidily
-   in a 320px-wide panel instead of ragged-wrapping by label length. */
-.notebook-artifact-btns {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
 }
 .notebook-artifact-gen-btn,
 .notebook-podcast-gen-btn { justify-content: flex-start; }

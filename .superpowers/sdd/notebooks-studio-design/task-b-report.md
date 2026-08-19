@@ -139,3 +139,73 @@ Screenshot paths (session scratchpad, not committed):
   is pre-existing (not introduced by Task B) but is now more visible with the file icon
   present. Flagging in case Task A's `/artifacts` POST or PATCH surface sets a
   human-readable title later — the row markup already supports `a.title` when present.
+
+## Fix round 1 (review response)
+
+Review verdict was Quality: CHANGES_REQUIRED with 2 Important findings
+(`review-b-findings.md`, diff `878384c..611e2ee`). Both addressed:
+
+**Finding 1 — `#nbws-artifact-error` scoped to the wrong section.** Of `_showArtifactError`'s
+6 call sites, only `_generateArtifact`'s own failure is a Generate-section concern;
+load-artifacts, delete-artifact, both podcast-poll-failure branches, and open-artifact-failed
+are all Files-section failures. Fix: moved the single error div from `.nbws-studio-generate`
+into `.nbws-studio-files` (minimal option — one shared slot, not one per section, since the
+call sites never fire concurrently and splitting would need every site to know which section
+it's reporting for). `static/js/notebookWorkspace.js`, `_studioPanelSkeleton`.
+
+**Finding 2 — no committed regression test for the kind-branching.** The prior 3 tests were
+loose substring checks that would still pass if the `podcast`/`mindmap` guards were dropped
+or reordered. Replaced `test_artifact_row_click_opens_visual_report_in_new_tab` with two
+tighter tests in `tests/test_notebook_workspace_static.py`:
+- `test_open_artifact_report_calls_window_open_with_report_endpoint` — scoped to
+  `_openArtifactReport`'s own function body (via `_between`), not a bare file-wide substring.
+- `test_artifact_click_podcast_toggles_mindmap_previews_others_open_report` — isolates the row
+  click handler body and asserts both exact guard clauses (`kind === 'podcast'` →
+  `_togglePodcastPanel`, `kind === 'mindmap'` → `_openArtifact`) AND their relative order
+  before the `_openArtifactReport(row)` fallthrough — so a dropped/reordered guard fails the
+  test even though every substring would individually still be present in the file.
+
+Also added `test_artifact_error_slot_lives_in_files_section_not_generate` as a direct
+regression lock for Finding 1's fix.
+
+**Verified the new tests actually catch the regressions they claim to** (not just that they
+pass): temporarily removed the podcast/mindmap guards in the source — the branching test
+failed as expected (`assert "if (kind === 'podcast') ... in handler` → AssertionError);
+temporarily moved the error div back into the Generate section — the placement test failed
+as expected. Reverted both after confirming, then re-ran the full suite green.
+
+**Minor finding 3 (cheap, addressed):** consolidated the two non-adjacent
+`.notebook-artifact-btns` CSS rule blocks (`static/style.css`) into one declaration
+(`display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;`) at the
+original location; removed the second, cascade-dependent override further down the file.
+
+**Minor finding 4 and Nit finding 5:** skipped per the review's own assessment ("harmless,
+not a defect" / "not worth changing").
+
+### Verification
+
+```
+.venv/bin/python -m pytest tests/test_notebook_workspace_static.py -q
+20 passed, 1 warning in 0.10s
+```
+```
+node --check static/js/notebookWorkspace.js
+OK
+```
+
+Browser re-verify (same worktree smoke instance, port 7004, same fresh `ITHAKA_DATA_DIR`):
+discovered a stale service worker was serving a cached copy of `notebookWorkspace.js` on
+plain reload (browser showed the pre-fix DOM structure); unregistered it via
+`navigator.serviceWorker.getRegistrations()` and hard-reloaded — after that, live DOM
+queries confirmed `#nbws-artifact-error` renders inside `.nbws-studio-files` and NOT inside
+`.nbws-studio-generate`. A genuine error (a stale-hash "Notebook not found" 404 surfaced by
+the smoke session's own navigation quirk) rendered correctly under the FILES header rather
+than attached to the Generate buttons. Screenshot:
+`/tmp/claude-1000/-home-eddef-projects-ithaka/e63be040-0811-4a76-95c3-3f72b2163bd8/scratchpad/taskb-fixround1-error-in-files.png`.
+
+### Concerns (fix round 1)
+
+- None new. The service-worker cache gotcha above is worth flagging generally for anyone
+  smoke-testing this workspace after a JS change: a plain `navigate_page reload` is not
+  sufficient to see the new code — unregister the service worker (or hard-reload with
+  devtools cache disabled AND clear application storage) first.
