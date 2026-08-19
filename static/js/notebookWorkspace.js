@@ -609,11 +609,35 @@ function _bodyText(msgNode) {
   return (clone.textContent || '').trim();
 }
 
+// chat.js has no semantic "this bubble is an error" class — it renders
+// errors/timeouts straight into the normal `.msg-ai .body` shape via inline
+// styling and a fixed message prefix instead: typewriterInto's red text on
+// stream failure (chat.js:3428-3435, `errorHolder.style.color =
+// 'var(--red)'`, text `Error: ...`), the background-stream error banner
+// (chat.js:3980-3981, `<i style="color: var(--color-error)">[Background
+// stream encountered an error]</i>`), and the research-clarification timeout
+// notice (chat.js:3519-3521, plain text "Research clarification timed
+// out..."). Catch all three by the inline error-color tokens the first two
+// share, with the literal message prefixes as a second signal in case the
+// styling ever changes without the wording changing too.
+const _ERROR_BUBBLE_TEXT_RE = /^(Error:|\[Background stream encountered an error\]|Research clarification timed out)/i;
+
+function _isErrorBubble(msgNode) {
+  const body = msgNode?.querySelector('.body');
+  if (!body) return false;
+  if (/var\(--red\)|var\(--color-error\)/.test(body.innerHTML || '')) return true;
+  return _ERROR_BUBBLE_TEXT_RE.test((body.textContent || '').trim());
+}
+
 /** Plain-text {question, answer} of the most recently finished exchange,
  *  read straight from the last two `.msg-user`/`.msg-ai` bubbles in
  *  #chat-history — the same DOM chat.js itself renders into, so there is no
  *  separate state to keep in sync. Returns null when the tail isn't a clean
- *  user->assistant pair (e.g. still streaming, or an error bubble). */
+ *  user->assistant pair: still streaming (last bubble isn't `.msg-ai` yet),
+ *  no preceding user bubble, empty text, or the assistant bubble is one of
+ *  chat.js's error/timeout renders (see `_isErrorBubble`) — a failed
+ *  exchange must never be POSTed to suggest_questions as if it were a real
+ *  answer. */
 function _lastQAPair() {
   const box = document.getElementById('chat-history');
   if (!box) return null;
@@ -621,6 +645,7 @@ function _lastQAPair() {
   if (!nodes.length) return null;
   const last = nodes[nodes.length - 1];
   if (!last.classList.contains('msg-ai')) return null;
+  if (_isErrorBubble(last)) return null;
   let userNode = null;
   for (let i = nodes.length - 2; i >= 0; i--) {
     if (nodes[i].classList.contains('msg-user')) { userNode = nodes[i]; break; }
