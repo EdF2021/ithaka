@@ -2151,10 +2151,13 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
 }
 
 // Pending session — stored locally until the first message is sent
-let _pendingChat = null; // { url, modelId, endpointId, notebookId }
+let _pendingChat = null; // { url, modelId, endpointId }
 // notebook_id sent with the most recently materialized pending session (or
-// null if none was sent). Survives past the point where _pendingChat is
-// cleared so chat.js can fail-closed-verify the bind after materialization.
+// null if none was sent). Read fresh from live workspace state inside
+// materializePendingSession() (NOT captured at createDirectChat() time — the
+// workspace can switch notebooks, or open/close, in between — see issue #22
+// review round 1), and survives past the point where _pendingChat is cleared
+// so chat.js can fail-closed-verify the bind at the same instant it was decided.
 let _lastMaterializedNotebookId = null;
 
 export function createDirectChat(url, modelId, endpointId) {
@@ -2170,13 +2173,12 @@ export function createDirectChat(url, modelId, endpointId) {
     if (window._syncGroupIndicator) window._syncGroupIndicator(false);
   }
 
-  // Don't hit the API — just store the model info and prepare the UI.
-  // Bind to the open notebook workspace (if any) up front, so the session
-  // materialized on first send is grounded from the start (issue #22).
-  const notebookId = window.notebookWorkspace?.isNotebookWorkspaceOpen?.()
-    ? (window.notebookWorkspace?.getCurrentNotebookId?.() || null)
-    : null;
-  _pendingChat = { url, modelId, endpointId, notebookId };
+  // Don't hit the API — just store the model info and prepare the UI. The
+  // notebook binding (if any) is decided later, live, inside
+  // materializePendingSession() — not captured here, since this pending chat
+  // can outlive a notebook switch or a workspace open/close before the first
+  // send (issue #22).
+  _pendingChat = { url, modelId, endpointId };
   _skipAutoSelect = true;
   _suppressNextSessionLoading = true;
   currentSessionId = null;
@@ -2208,9 +2210,8 @@ export function createDirectChat(url, modelId, endpointId) {
   // Update model picker to show the pending model
   updateModelPicker();
 
-  // Update current-meta header — the pending chat may already carry a
-  // notebookId (captured above), but the header only reflects real,
-  // materialized sessions, so this still shows the generic "New Chat" title.
+  // Update current-meta header — a pending chat is never notebook-bound yet
+  // (the bind, if any, is decided later inside materializePendingSession()).
   _setChatMetaTitle({ name: 'New Chat' });
 
   // Enable input
@@ -2223,9 +2224,20 @@ export async function materializePendingSession() {
   const pending = _pendingChat;
   if (!pending) return false;
   _pendingChat = null;
+  // Read the notebook binding live, right now — NOT from a value captured
+  // back at createDirectChat() time. The workspace can switch notebooks, or
+  // open/close, at any point between the pending chat being created and this
+  // first send, so the bind decision and chat.js's fail-closed check (which
+  // reads getLastMaterializedNotebookId()) must both use this same instant
+  // as ground truth (issue #22 review round 1: capture-at-create produced a
+  // stale silent mis-bind after a notebook switch, and a false-positive
+  // block when a workspace opened after the pending chat was created).
+  const nbId = window.notebookWorkspace?.isNotebookWorkspaceOpen?.()
+    ? (window.notebookWorkspace?.getCurrentNotebookId?.() || null)
+    : null;
   // Recorded before the network round-trip so chat.js can fail-closed-check
   // the bind even though _pendingChat itself is already cleared (issue #22).
-  _lastMaterializedNotebookId = pending.notebookId || null;
+  _lastMaterializedNotebookId = nbId;
 
   const incognitoChk = document.getElementById('incognito-toggle');
   const isIncognito = incognitoChk && incognitoChk.checked;
@@ -2242,8 +2254,8 @@ export async function materializePendingSession() {
   if (pending.endpointId) {
     fd.append('endpoint_id', pending.endpointId);
   }
-  if (pending.notebookId) {
-    fd.append('notebook_id', pending.notebookId);
+  if (nbId) {
+    fd.append('notebook_id', nbId);
   }
 
   let res;

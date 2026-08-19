@@ -5,8 +5,16 @@ Rootcause: createDirectChat()/materializePendingSession() in sessions.js never
 carried the open workspace's notebook_id into the materialized session, so
 chat.js's source_ids were dropped server-side (routes/chat_helpers.py enforces
 that source_ids require a notebook-bound session). The fix binds the pending
-chat to the open workspace's notebook at creation time and adds a fail-closed
-check in chat.js as a safety net.
+chat to the open workspace's notebook and adds a fail-closed check in chat.js
+as a safety net.
+
+Design note (review round 1): the binding is decided READ-AT-MATERIALIZE,
+inside materializePendingSession(), not captured at createDirectChat() time.
+A pending chat can outlive a notebook switch or a workspace open/close before
+the first send — capture-at-create produced both a silent mis-bind (stale
+notebook_id survives a switch) and a false-positive fail-closed block (a
+workspace opened after the pending chat was created). Reading live workspace
+state at the same instant the fail-closed check reads it eliminates both.
 
 Source-text assertions only, following the precedent set by
 test_notebook_workspace_static.py: this repo has no build step and no JS DOM
@@ -41,27 +49,39 @@ def test_get_current_notebook_id_registered_on_window_notebook_workspace():
     assert "window.notebookWorkspace = notebookWorkspace;" in _WS
 
 
-# ── sessions.js: createDirectChat binds notebookId into _pendingChat ───────
+# ── sessions.js: createDirectChat no longer captures notebookId (round 1) ──
 
 
-def test_create_direct_chat_captures_notebook_id_from_open_workspace():
+def test_create_direct_chat_does_not_capture_notebook_id():
+    # Capture-at-create was the review-round-1 defect (stale bind after a
+    # notebook switch, false-positive block when a workspace opens later).
     fn = _between(_SESSIONS, "export function createDirectChat(", "\n}\n")
-    assert "isNotebookWorkspaceOpen" in fn
-    assert "getCurrentNotebookId" in fn
-    assert "_pendingChat = { url, modelId, endpointId, notebookId };" in fn
+    assert "getCurrentNotebookId" not in fn
+    assert "notebookId" not in fn
+    assert "_pendingChat = { url, modelId, endpointId };" in fn
 
 
-# ── sessions.js: materializePendingSession appends notebook_id conditionally
+# ── sessions.js: materializePendingSession reads the bind live and appends
+# notebook_id conditionally, at the same instant as the fail-closed check ──
 
 
-def test_materialize_pending_session_appends_notebook_id_conditionally():
+def test_materialize_pending_session_reads_notebook_binding_live():
     fn = _between(
         _SESSIONS,
         "export async function materializePendingSession()",
         "\nexport function hasPendingChat()",
     )
-    assert "if (pending.notebookId) {" in fn
-    assert "fd.append('notebook_id', pending.notebookId);" in fn
+    assert "window.notebookWorkspace?.isNotebookWorkspaceOpen?.()" in fn
+    assert "window.notebookWorkspace?.getCurrentNotebookId?.()" in fn
+    assert "const nbId =" in fn
+    assert "if (nbId) {" in fn
+    assert "fd.append('notebook_id', nbId);" in fn
+    # The live read must happen before the notebook_id append, and both must
+    # come from materialize-time state, not a value carried on `pending`.
+    read_idx = fn.index("const nbId =")
+    append_idx = fn.index("fd.append('notebook_id', nbId);")
+    assert read_idx < append_idx
+    assert "pending.notebookId" not in fn
 
 
 def test_materialize_pending_session_exposes_last_notebook_binding():
