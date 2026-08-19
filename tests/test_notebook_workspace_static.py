@@ -112,12 +112,57 @@ def test_studio_panel_has_generate_and_files_section_headers():
     assert 'nbws-studio-section-head">Files<' in _WS
 
 
-def test_artifact_row_click_opens_visual_report_in_new_tab():
-    assert "/report" in _WS
-    assert "window.open" in _WS
-    assert "'_blank'" in _WS or '"_blank"' in _WS
+def test_open_artifact_report_calls_window_open_with_report_endpoint():
+    # Scoped to _openArtifactReport's own body (not a bare "somewhere in the
+    # file" substring check) so this fails if the report-tab call is moved,
+    # dropped, or its target/tab-behavior changed.
+    fn = _between(_WS, "function _openArtifactReport", "\n}\n")
+    assert "window.open(" in fn
+    assert "/report`" in fn
+    assert "'_blank'" in fn
+
+
+def test_artifact_click_podcast_toggles_mindmap_previews_others_open_report():
+    """Regression for the two behaviors the design brief calls out most
+    specifically: podcast rows must never open the report tab (Task A 404s
+    that route for podcast) and mindmap rows must keep their existing
+    _openArtifact preview. A bare '"/report" in _WS' substring check would
+    still pass even if the podcast/mindmap guards were dropped or reordered
+    after the report fallthrough — so this asserts the exact guard clauses
+    AND their relative order inside the row click handler. """
+    handler = _between(
+        _WS,
+        "row.addEventListener('click', (e) => {",
+        "\n  });\n  box.querySelectorAll('.notebook-artifact-del')",
+    )
+    assert "if (kind === 'podcast') { _togglePodcastPanel(row); return; }" in handler
+    assert "if (kind === 'mindmap') { _openArtifact(row); return; }" in handler
+    assert "_openArtifactReport(row);" in handler
+    podcast_idx = handler.index("kind === 'podcast'")
+    mindmap_idx = handler.index("kind === 'mindmap'")
+    report_idx = handler.index("_openArtifactReport(row);")
+    # Both guards must return before the fallthrough is ever reached —
+    # if either 'return' were dropped, or a guard moved after the
+    # fallthrough call, this ordering assertion catches it even though every
+    # substring above would still individually be present in the file.
+    assert podcast_idx < mindmap_idx < report_idx
 
 
 def test_studio_panel_labels_are_english_not_dutch():
     assert "Study guide" in _WS
     assert "Studiegids" not in _WS
+
+
+def test_artifact_error_slot_lives_in_files_section_not_generate():
+    # Review fix-round 1: of _showArtifactError's 6 call sites, 5 are
+    # Files-section concerns (load/delete/podcast/open-artifact failures) —
+    # only _generateArtifact's own failure is a Generate-section concern.
+    # The error div must render inside .nbws-studio-files, not
+    # .nbws-studio-generate, so it doesn't visually misattribute those
+    # failures to the generate buttons.
+    files_section = _between(_WS, 'nbws-studio-section-head">Files<', "</div>\n    </div>`;")
+    assert 'id="nbws-artifact-error"' in files_section
+    generate_section = _between(
+        _WS, 'nbws-studio-section-head">Generate<', 'nbws-studio-section-head">Files<'
+    )
+    assert 'id="nbws-artifact-error"' not in generate_section
