@@ -41510,8 +41510,73 @@ body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
    10005 without needing !important. */
 body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
 
-/* Later notebooks-workspace CSS (Task 7's <=700px media query) belongs
-   ABOVE this line — the marker comment right below is the end-of-block
-   anchor Task 7's static test scans up to, so anything appended after it
-   falls outside that scan. */
+/* ── Mobile tabs (Task 7, <=700px) — replaces the side-by-side
+   sources/chat/studio columns with ONE full-width "page" at a time, switched
+   by #nbws-tabbar's three buttons (wired in notebookWorkspace.js's
+   _setActiveTab, which toggles .nbws-tab-active on the active tab button AND
+   on the matching panel — reusing the same class .nbws-tab already defines
+   for the button's own active look, per the task brief). Desktop rules above
+   are untouched outside this query. */
+@media (max-width: 700px) {
+  .nbws-tabbar { display: flex; }
+
+  /* Collapse is a desktop-only affordance — tabs already give every panel
+     the full screen when active, so the collapse button (and the narrow
+     32px strip it produces) has no useful meaning here. Hiding the button
+     stops it from ever being tapped on mobile; _onMobileBreakpointChange in
+     notebookWorkspace.js additionally clears any .nbws-collapsed state left
+     over from a desktop session the moment the viewport crosses this
+     breakpoint, so a panel collapsed on desktop still shows its full content
+     the instant its tab becomes active on mobile (rather than rendering the
+     collapsed 32px strip's hidden-title/hidden-body state at 100% width). */
+  .nbws-collapse-btn { display: none; }
+
+  #nbws-sources,
+  #nbws-studio {
+    display: none;
+    position: fixed;
+    inset: var(--nbws-topbar-h) 0 0 0;
+    width: 100% !important;
+    border: none;
+  }
+  #nbws-sources.nbws-tab-active,
+  #nbws-studio.nbws-tab-active { display: block; }
+
+  /* Chat fills the screen behind the (now display:none-by-default) panels
+     when its own tab is active — margins collapse to 0 (no side panels to
+     leave room for) and it's hidden outright while a side panel's tab owns
+     the screen, so no focusable/scrollable chat content sits underneath a
+     full-width panel. */
+  body.notebook-workspace-open #chat-container {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  body.notebook-workspace-open.nbws-mobile-tab-sources #chat-container,
+  body.notebook-workspace-open.nbws-mobile-tab-studio #chat-container {
+    display: none;
+  }
+
+  /* Follow-up chips (Task 5) float above the chat composer — full width to
+     match the now-marginless chat column, and hidden along with chat itself
+     on the sources/studio tabs (see #chat-container above). */
+  #nbws-chips {
+    left: 0;
+    right: 0;
+  }
+  body.notebook-workspace-open.nbws-mobile-tab-sources #nbws-chips,
+  body.notebook-workspace-open.nbws-mobile-tab-studio #nbws-chips {
+    display: none;
+  }
+
+  /* The topbar (back-btn + name + badge + session-select + tabbar) is tight
+     at 360px — trim the notebook-name and session-select ceilings the
+     desktop values above set so the tabbar itself never gets pushed off
+     the right edge. */
+  .nbws-notebook-name { max-width: 22vw; }
+  .nbws-session-select { max-width: 84px; }
+}
+
+/* Later notebooks-workspace CSS belongs ABOVE this line — the marker comment
+   right below is the end-of-block anchor the static test scans up to, so
+   anything appended after it falls outside that scan. */
 /* nbws-end */

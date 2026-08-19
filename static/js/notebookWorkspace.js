@@ -165,6 +165,48 @@ function _resetPanel(which) {
   _setCollapseButtonState(document.getElementById(btnId), false, _PANEL_LABELS[which]);
 }
 
+// ---- Mobile tabs (Task 7) --------------------------------------------------
+
+const _MOBILE_TABS = ['sources', 'chat', 'studio'];
+
+/**
+ * Switch the mobile (<=700px) "which panel fills the screen" tab. Toggles
+ * .nbws-tab-active on the matching #nbws-tabbar button AND on the matching
+ * side panel (style.css's <=700px query only shows a panel with that class)
+ * — the button and panel intentionally share the one class name per the task
+ * brief. Also flips one of three body classes so style.css can hide chat
+ * (and the follow-up chips floating above it) while a side panel owns the
+ * screen; on desktop none of this has any effect (the <=700px query is the
+ * only place any of these classes are read).
+ */
+function _setActiveTab(tab) {
+  if (!_MOBILE_TABS.includes(tab)) tab = 'chat';
+  document.querySelectorAll('.nbws-tab').forEach((btn) => {
+    const active = btn.dataset.nbwsTab === tab;
+    btn.classList.toggle('nbws-tab-active', active);
+    btn.setAttribute('aria-selected', String(active));
+  });
+  document.getElementById('nbws-sources')?.classList.toggle('nbws-tab-active', tab === 'sources');
+  document.getElementById('nbws-studio')?.classList.toggle('nbws-tab-active', tab === 'studio');
+  document.body.classList.toggle('nbws-mobile-tab-sources', tab === 'sources');
+  document.body.classList.toggle('nbws-mobile-tab-chat', tab === 'chat');
+  document.body.classList.toggle('nbws-mobile-tab-studio', tab === 'studio');
+}
+
+const _MOBILE_MQL = window.matchMedia('(max-width: 700px)');
+
+// Collapse (desktop-only, see the <=700px query's .nbws-collapse-btn rule)
+// leaves a panel's .nbws-collapsed class in place across a resize — without
+// this, a panel collapsed on desktop and then viewed through mobile's
+// "full-width when active" tab would render its collapsed 32px-strip state
+// (title/body hidden) stretched to 100% width instead of showing normally.
+function _onMobileBreakpointChange(e) {
+  if (!e.matches) return;
+  _resetPanel('sources');
+  _resetPanel('studio');
+  document.body.classList.remove('nbws-sources-collapsed', 'nbws-studio-collapsed');
+}
+
 // Wired once (guarded by a dataset flag) — #nbws-root is static chrome in
 // index.html that persists across opens/closes, so listeners must not stack.
 function _wireChrome() {
@@ -178,6 +220,11 @@ function _wireChrome() {
     ?.addEventListener('click', () => _toggleCollapse('sources'));
   document.getElementById('nbws-studio-collapse')
     ?.addEventListener('click', () => _toggleCollapse('studio'));
+
+  document.querySelectorAll('.nbws-tab').forEach((btn) => {
+    btn.addEventListener('click', () => _setActiveTab(btn.dataset.nbwsTab));
+  });
+  _MOBILE_MQL.addEventListener('change', _onMobileBreakpointChange);
 
   // Source-count badge ("n/m sources") — a small pill in the fixed topbar,
   // which sits above the composer without ever touching chat-container's own
@@ -1135,6 +1182,7 @@ async function _openImpl(nb) {
   document.body.classList.add('notebook-workspace-open');
   root.removeAttribute('aria-hidden');
   _bindEscape();
+  _setActiveTab('chat'); // default tab on every open, desktop and mobile alike
 
   _wireSourcesPanel();
   _loadSources();
@@ -1179,6 +1227,11 @@ export function closeNotebookWorkspace() {
   }
   _resetPanel('sources');
   _resetPanel('studio');
+  document.body.classList.remove(
+    'nbws-mobile-tab-sources',
+    'nbws-mobile-tab-chat',
+    'nbws-mobile-tab-studio'
+  );
 
   // Stale count must not flash for the next notebook opened — the badge is
   // static topbar chrome that outlives this close, unlike #nbws-sources-body.

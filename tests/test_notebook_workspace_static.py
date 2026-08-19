@@ -96,3 +96,10 @@ def test_workspace_keeps_running_when_artifact_opens():
 
 def test_podcast_poll_stops_on_workspace_close():
     assert "_stopPodcastPoll" in _WS
+
+
+# ── Task 7: mobile (<=700px) tabs ────────────────────────────────────────────
+
+def test_mobile_tabbar_exists():
+    assert 'data-nbws-tab="chat"' in _HTML or 'data-nbws-tab="chat"' in _WS
+    assert "max-width: 700px" in _between(_CSS, "#nbws-root", "/* nbws-end */")
