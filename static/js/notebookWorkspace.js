@@ -801,6 +801,7 @@ async function _loadArtifacts() {
     return;
   }
   if (epoch !== _openEpoch || !box) return;
+  _showArtifactError('');
   const artifacts = data.artifacts || [];
   if (!artifacts.length) {
     box.innerHTML = '<div class="dashboard-empty">No artifacts yet — generate one above</div>';
@@ -1096,13 +1097,12 @@ async function _openImpl(nb) {
 
   // Resolve/select the bound session BEFORE the notebooks-picker modal
   // closes and BEFORE the body class flips — load-then-open, never
-  // open-then-load, same posture as notebooks.js's own _openChat/
-  // _openArtifact. On failure the workspace must NOT open and the picker
-  // modal must NOT close: report the error into the list view's
-  // #notebook-list-error (the view actually showing behind the modal at
-  // this point — the grid, not the detail view) via notebooks.js's exported
-  // showListError, exactly how _openChat reports into #notebook-detail-error
-  // on its own failure path.
+  // open-then-load, same posture as this module's own _openArtifact
+  // (load-then-close). On failure the workspace must NOT open and the
+  // picker modal must NOT close: report the error into the list view's
+  // #notebook-list-error (the only view notebooks.js has left, since Task 6
+  // removed its in-modal detail view) via notebooks.js's exported
+  // showListError.
   try {
     if (typeof notebooksMod?.openOrCreateSessionForNotebook === 'function') {
       await notebooksMod.openOrCreateSessionForNotebook(nb);
