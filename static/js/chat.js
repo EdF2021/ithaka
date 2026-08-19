@@ -855,9 +855,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       // Fail-closed vangnet (issue #22): the notebook workspace is open right
       // now, but the session just materialized without a notebook binding —
       // sending would let RAG grounding silently drop while the notebook UI
-      // still implies grounded answers. The primary fix is createDirectChat
-      // capturing notebookId + materializePendingSession appending it above;
-      // this only catches the case where that path was bypassed.
+      // still implies grounded answers. The primary fix is
+      // materializePendingSession reading the open workspace's notebook id
+      // live at materialize time; this only catches a bypassed path.
       if (window.notebookWorkspace?.isNotebookWorkspaceOpen?.() &&
           !(sessionModule.getLastMaterializedNotebookId && sessionModule.getLastMaterializedNotebookId())) {
         const box = document.getElementById('chat-history');
