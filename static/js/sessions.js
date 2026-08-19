@@ -2151,7 +2151,11 @@ export async function selectSession(id, { keepSidebar = false, showLoading = tru
 }
 
 // Pending session — stored locally until the first message is sent
-let _pendingChat = null; // { url, modelId, endpointId }
+let _pendingChat = null; // { url, modelId, endpointId, notebookId }
+// notebook_id sent with the most recently materialized pending session (or
+// null if none was sent). Survives past the point where _pendingChat is
+// cleared so chat.js can fail-closed-verify the bind after materialization.
+let _lastMaterializedNotebookId = null;
 
 export function createDirectChat(url, modelId, endpointId) {
   _sessionNavToken++;
@@ -2166,8 +2170,13 @@ export function createDirectChat(url, modelId, endpointId) {
     if (window._syncGroupIndicator) window._syncGroupIndicator(false);
   }
 
-  // Don't hit the API — just store the model info and prepare the UI
-  _pendingChat = { url, modelId, endpointId };
+  // Don't hit the API — just store the model info and prepare the UI.
+  // Bind to the open notebook workspace (if any) up front, so the session
+  // materialized on first send is grounded from the start (issue #22).
+  const notebookId = window.notebookWorkspace?.isNotebookWorkspaceOpen?.()
+    ? (window.notebookWorkspace?.getCurrentNotebookId?.() || null)
+    : null;
+  _pendingChat = { url, modelId, endpointId, notebookId };
   _skipAutoSelect = true;
   _suppressNextSessionLoading = true;
   currentSessionId = null;
@@ -2199,7 +2208,9 @@ export function createDirectChat(url, modelId, endpointId) {
   // Update model picker to show the pending model
   updateModelPicker();
 
-  // Update current-meta header — a pending chat is never notebook-bound yet.
+  // Update current-meta header — the pending chat may already carry a
+  // notebookId (captured above), but the header only reflects real,
+  // materialized sessions, so this still shows the generic "New Chat" title.
   _setChatMetaTitle({ name: 'New Chat' });
 
   // Enable input
@@ -2212,6 +2223,9 @@ export async function materializePendingSession() {
   const pending = _pendingChat;
   if (!pending) return false;
   _pendingChat = null;
+  // Recorded before the network round-trip so chat.js can fail-closed-check
+  // the bind even though _pendingChat itself is already cleared (issue #22).
+  _lastMaterializedNotebookId = pending.notebookId || null;
 
   const incognitoChk = document.getElementById('incognito-toggle');
   const isIncognito = incognitoChk && incognitoChk.checked;
@@ -2228,12 +2242,16 @@ export async function materializePendingSession() {
   if (pending.endpointId) {
     fd.append('endpoint_id', pending.endpointId);
   }
+  if (pending.notebookId) {
+    fd.append('notebook_id', pending.notebookId);
+  }
 
   let res;
   try {
     res = await fetch(`${API_BASE}/api/session`, { method: 'POST', body: fd });
   } catch (e) {
     uiModule.showError('Failed to reach backend: ' + e);
+    _lastMaterializedNotebookId = null;
     return false;
   }
 
@@ -2246,6 +2264,7 @@ export async function materializePendingSession() {
 
   if (!res.ok) {
     uiModule.showError(`Session create failed (${res.status}) ${payload.detail || JSON.stringify(payload)}`);
+    _lastMaterializedNotebookId = null;
     return false;
   }
 
@@ -2271,6 +2290,10 @@ export async function materializePendingSession() {
 
 export function hasPendingChat() { return !!_pendingChat; }
 export function getPendingChat() { return _pendingChat; }
+// notebook_id sent with the most recent materializePendingSession() call, or
+// null. Lets chat.js fail-closed-verify the notebook bind after materialize
+// clears _pendingChat (issue #22).
+export function getLastMaterializedNotebookId() { return _lastMaterializedNotebookId; }
 // Getters for external access
 export function getCurrentSessionId() {
   return currentSessionId;
@@ -3519,6 +3542,7 @@ const sessionModule = {
   materializePendingSession,
   hasPendingChat,
   getPendingChat,
+  getLastMaterializedNotebookId,
   getCurrentSessionId,
   getSessions,
   refreshChatMetaTitle,

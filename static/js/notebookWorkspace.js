@@ -371,6 +371,13 @@ export function getSourceIdsForChat() {
   return selectable.filter(id => _state.selection.has(id));
 }
 
+/** The id of the notebook bound to the currently open workspace, or null
+ *  when the workspace is closed / no notebook is loaded yet. */
+export function getCurrentNotebookId() {
+  if (!_open || !_state.notebook) return null;
+  return _state.notebook.id;
+}
+
 function _showSourcesError(msg) {
   const el = document.getElementById('nbws-sources-error');
   if (el) el.textContent = msg || '';
@@ -1354,6 +1361,7 @@ const notebookWorkspace = {
   isNotebookWorkspaceOpen,
   registerCloseHook,
   getSourceIdsForChat,
+  getCurrentNotebookId,
   EMPTY_SELECTION_MESSAGE,
   _state,
 };

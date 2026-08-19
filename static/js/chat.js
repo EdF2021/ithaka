@@ -851,6 +851,27 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       const ok = await sessionModule.materializePendingSession();
       _sendPerf.mark('pending_session_done');
       if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
+
+      // Fail-closed vangnet (issue #22): the notebook workspace is open right
+      // now, but the session just materialized without a notebook binding —
+      // sending would let RAG grounding silently drop while the notebook UI
+      // still implies grounded answers. The primary fix is createDirectChat
+      // capturing notebookId + materializePendingSession appending it above;
+      // this only catches the case where that path was bypassed.
+      if (window.notebookWorkspace?.isNotebookWorkspaceOpen?.() &&
+          !(sessionModule.getLastMaterializedNotebookId && sessionModule.getLastMaterializedNotebookId())) {
+        const box = document.getElementById('chat-history');
+        if (box) {
+          const errHolder = document.createElement('div');
+          // chat-error: same inert semantic marker as the other error/timeout
+          // render sites in this file — no styling/behavior attached.
+          errHolder.className = 'msg msg-ai chat-error';
+          errHolder.innerHTML = '<div class="body"><i style="color: var(--color-error);">Notebook session could not be bound — retry from the workspace</i></div>';
+          box.appendChild(errHolder);
+        }
+        _releaseSendFlag();
+        return;
+      }
     }
 
     if (!sessionModule.getCurrentSessionId()) {
