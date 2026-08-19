@@ -218,6 +218,28 @@ def test_rename_input_keeps_grow_so_row_does_not_wrap():
     assert "input.className = 'grow session-rename-input notebook-artifact-rename-input';" in fn
 
 
+# ── Task: infographic artifact ───────────────────────────────────────────
+
+def test_infographic_generate_button_exists_with_english_label():
+    kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
+    assert "'infographic'" in kinds
+    labels = _between(_WS, "const KIND_LABELS = {", "\n};")
+    assert "infographic: 'Infographic'," in labels
+
+
+def test_infographic_is_a_plain_text_artifact_not_a_special_row_kind():
+    # Row-click dispatch only special-cases podcast (toggle player) and
+    # mindmap (preview); infographic must fall through to the same
+    # _openArtifactReport(row) path as study_guide/briefing/faq/quiz — no
+    # extra branch should exist for it.
+    handler = _between(
+        _WS,
+        "row.addEventListener('click', (e) => {",
+        "\n  });\n  box.querySelectorAll('.notebook-artifact-del')",
+    )
+    assert "kind === 'infographic'" not in handler
+
+
 def test_artifact_error_slot_lives_in_files_section_not_generate():
     # Review fix-round 1: of _showArtifactError's 6 call sites, 5 are
     # Files-section concerns (load/delete/podcast/open-artifact failures) —

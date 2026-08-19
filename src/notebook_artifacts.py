@@ -169,6 +169,19 @@ mindmap
     Tweede tak
       Detail drie
 ```""",
+
+    "infographic": """Maak een infographic: een compacte, visueel scanbare pagina met de kern van de bronnen in cijfers en korte feiten.
+
+Structuur, exact in deze volgorde en met exact deze koppen (de renderer parst op deze structuur):
+- "# " met een pakkende titel in de taal van de bronnen.
+- "## Key numbers": 3 tot 5 bullets, elk exact in de vorm "- **<getal, percentage of korte metric>** — <label van maximaal 8 woorden>". Zijn er geen cijfers in de bronnen, gebruik dan een telwoord of kort feit als "getal" (bijvoorbeeld "3 panelen" of "geen vermeld") - verzin nooit een cijfer dat niet in de bronnen staat.
+- Daarna 3 tot 4 gewone secties, elk "## <sectiekop>" met 2 tot 4 korte bullet-feiten.
+- Afsluitend één blockquote-regel "> " met één kernboodschap in één zin.
+
+Regels:
+- Elk "key number" en elk bullet-feit moet herleidbaar zijn tot de bronnen; geen verzonnen cijfers of aannames.
+- Houd bullets kort en concreet - geen volledige alinea's.
+- Gebruik uitsluitend de koppen "## Key numbers" en de overige sectiekoppen; geen extra kopniveaus (geen "###").""",
 }
 
 _KIND_LABELS = {
@@ -177,6 +190,7 @@ _KIND_LABELS = {
     "faq": "FAQ",
     "quiz": "Quiz",
     "mindmap": "Mindmap",
+    "infographic": "Infographic",
 }
 
 # kind -> {label, prompt}. Insertion order is the order the UI lists them in.

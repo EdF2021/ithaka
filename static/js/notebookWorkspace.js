@@ -807,17 +807,21 @@ window.addEventListener('ithaka:chat-busy-change', _onChatBusyChange);
 
 // Fixed generate-button order and English labels per the Task B redesign
 // (studio panel is Generate-buttons + Files-list, no more Dutch strings) —
-// the backend only accepts these five `kind` values via POST /artifacts.
-// `podcast` is a sixth artifact kind, but it is generated through its own
+// the backend only accepts these six `kind` values via POST /artifacts.
+// `podcast` is a seventh artifact kind, but it is generated through its own
 // endpoint/job flow (see _generatePodcast) — it stays out of ARTIFACT_KINDS
-// and only shares KIND_LABELS (for the pill text on its row).
-const ARTIFACT_KINDS = ['study_guide', 'briefing', 'faq', 'quiz', 'mindmap'];
+// and only shares KIND_LABELS (for the pill text on its row). `infographic`
+// is a plain text artifact like the first five (POST /artifacts, opens via
+// the same report endpoint) — no row-click branching needed, see the click
+// handler below.
+const ARTIFACT_KINDS = ['study_guide', 'briefing', 'faq', 'quiz', 'mindmap', 'infographic'];
 const KIND_LABELS = {
   study_guide: 'Study guide',
   briefing: 'Briefing',
   faq: 'FAQ',
   quiz: 'Quiz',
   mindmap: 'Mindmap',
+  infographic: 'Infographic',
   podcast: 'Podcast',
 };
 

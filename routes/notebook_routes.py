@@ -3,6 +3,7 @@
 import logging
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -22,6 +23,7 @@ from src.notebook_audio import (
     set_synthesizer,
     start_podcast_job,
 )
+from src.notebook_infographic import generate_infographic
 from src.notebook_ingest import ingest_notebook_file
 from src.notebook_report import generate_notebook_artifact_report
 from src.notebook_suggest import suggest_questions
@@ -459,12 +461,23 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # nothing for the visual-report template to render.
             if artifact.kind == "podcast":
                 raise HTTPException(status_code=404, detail="No visual report for podcast artifacts")
-            html_content = generate_notebook_artifact_report(
-                notebook_name=nb.name,
-                kind=artifact.kind,
-                document_title=artifact.title or document.title,
-                document_content=document.current_content,
-            )
+            # Infographic gets its own compact poster renderer instead of
+            # the shared long-form editorial template — see
+            # src/notebook_infographic.py's module docstring for why.
+            if artifact.kind == "infographic":
+                html_content = generate_infographic(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            else:
+                html_content = generate_notebook_artifact_report(
+                    notebook_name=nb.name,
+                    kind=artifact.kind,
+                    document_title=artifact.title or document.title,
+                    document_content=document.current_content,
+                )
             return HTMLResponse(content=html_content)
         finally:
             db_session.close()
