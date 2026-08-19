@@ -41294,7 +41294,7 @@ body.notebook-workspace-open #nbws-root { display: flex; }
   border-right: 1px solid var(--border);
   padding-top: var(--nbws-topbar-h);
   overflow-y: auto;
-  transition: width 0.18s ease, padding 0.18s ease;
+  transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
 }
 #nbws-studio {
   position: absolute;
@@ -41303,18 +41303,30 @@ body.notebook-workspace-open #nbws-root { display: flex; }
   border-left: 1px solid var(--border);
   padding-top: var(--nbws-topbar-h);
   overflow-y: auto;
-  transition: width 0.18s ease, padding 0.18s ease;
+  transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
 }
-/* Collapse toggle (per-panel button in .nbws-panel-head) — width/padding
-   transition to 0 rather than display:none so the transition above animates. */
+/* Collapse toggle (per-panel button in .nbws-panel-head) — narrows to a slim
+   strip that still shows the collapse/expand button, rather than width:0.
+   The button lives inside the very <aside> it collapses, so zeroing the
+   whole panel (an earlier version of this rule did) would clip the button
+   itself away with it, leaving no way to re-expand on desktop (the mobile
+   tabbar that could otherwise reach it is display:none there). */
 #nbws-sources.nbws-collapsed,
 #nbws-studio.nbws-collapsed {
-  width: 0;
-  padding-left: 0;
-  padding-right: 0;
-  padding-top: var(--nbws-topbar-h);
+  width: 32px;
   overflow: hidden;
-  border: none;
+}
+#nbws-sources.nbws-collapsed .nbws-panel-title,
+#nbws-studio.nbws-collapsed .nbws-panel-title,
+#nbws-sources.nbws-collapsed #nbws-sources-body,
+#nbws-studio.nbws-collapsed #nbws-studio-body {
+  display: none;
+}
+#nbws-sources.nbws-collapsed .nbws-panel-head,
+#nbws-studio.nbws-collapsed .nbws-panel-head {
+  justify-content: center;
+  padding-left: 4px;
+  padding-right: 4px;
 }
 .nbws-panel-head {
   display: flex;
@@ -41392,8 +41404,11 @@ body.notebook-workspace-open #chat-container {
   padding-top: var(--nbws-topbar-h, 44px);
   transition: margin 0.18s ease;
 }
-body.notebook-workspace-open.nbws-sources-collapsed #chat-container { margin-left: 0; }
-body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-right: 0; }
+/* 32px matches #nbws-sources.nbws-collapsed/#nbws-studio.nbws-collapsed's
+   collapsed width above — the two must be kept in sync by hand (same
+   sibling-vs-descendant reasoning as --nbws-topbar-h's fallback usage). */
+body.notebook-workspace-open.nbws-sources-collapsed #chat-container { margin-left: 32px; }
+body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-right: 32px; }
 /* Later notebooks-workspace CSS (Task 4 sources styling, Task 6 studio
    styling, Task 7's <=700px media query) belongs ABOVE this line — the
    marker comment right below is the end-of-block anchor Task 7's static

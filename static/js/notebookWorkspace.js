@@ -17,7 +17,10 @@
  * notebooks.js itself opens this module the other way around — grid-card
  * clicks there prefer `window.notebookWorkspace` (published at the bottom of
  * this file) and fall back to a dynamic import, the same handoff shape its
- * own `_openArtifact` uses for document.js.
+ * own `_openArtifact` uses for document.js. A failed session-resolve leaves
+ * the workspace closed and the notebooks-picker modal open, with the error
+ * reported into it via notebooks.js's exported showListError — never a
+ * silently-swallowed failure that opens an empty shell anyway.
  *
  * Panel bodies (#nbws-sources-body / #nbws-studio-body) are intentionally
  * left empty here: Task 4 fills sources, Task 5 fills the session
@@ -95,11 +98,44 @@ function _unbindEscape() {
   _escHandler = null;
 }
 
-function _toggleCollapse(panelId, bodyClass) {
+// Collapsing a panel does NOT hide its header row — only style.css's
+// `.nbws-collapsed` rule narrows the <aside> to a slim strip that still
+// shows the collapse/expand button (title text hides at that width). The
+// button that triggers the collapse lives inside the very element being
+// collapsed, so it must stay reachable there for the toggle to round-trip —
+// zeroing the whole aside (an earlier version of this rule did) traps the
+// panel closed with no way back on desktop.
+const _PANEL_LABELS = {
+  sources: { collapse: 'Collapse sources', expand: 'Expand sources' },
+  studio: { collapse: 'Collapse studio', expand: 'Expand studio' },
+};
+
+function _setCollapseButtonState(btn, collapsed, labels) {
+  if (!btn) return;
+  const label = collapsed ? labels.expand : labels.collapse;
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', String(!collapsed));
+}
+
+function _toggleCollapse(which) {
+  const panelId = which === 'sources' ? 'nbws-sources' : 'nbws-studio';
+  const btnId = which === 'sources' ? 'nbws-sources-collapse' : 'nbws-studio-collapse';
+  const bodyClass = which === 'sources' ? 'nbws-sources-collapsed' : 'nbws-studio-collapsed';
   const panel = document.getElementById(panelId);
   if (!panel) return;
   const collapsed = panel.classList.toggle('nbws-collapsed');
   document.body.classList.toggle(bodyClass, collapsed);
+  _setCollapseButtonState(document.getElementById(btnId), collapsed, _PANEL_LABELS[which]);
+}
+
+// Reset one panel to its default expanded state — used on close so the next
+// open always starts with both panels showing.
+function _resetPanel(which) {
+  const panelId = which === 'sources' ? 'nbws-sources' : 'nbws-studio';
+  const btnId = which === 'sources' ? 'nbws-sources-collapse' : 'nbws-studio-collapse';
+  document.getElementById(panelId)?.classList.remove('nbws-collapsed');
+  _setCollapseButtonState(document.getElementById(btnId), false, _PANEL_LABELS[which]);
 }
 
 // Wired once (guarded by a dataset flag) — #nbws-root is static chrome in
@@ -112,9 +148,9 @@ function _wireChrome() {
   document.getElementById('nbws-back-btn')
     ?.addEventListener('click', closeNotebookWorkspace);
   document.getElementById('nbws-sources-collapse')
-    ?.addEventListener('click', () => _toggleCollapse('nbws-sources', 'nbws-sources-collapsed'));
+    ?.addEventListener('click', () => _toggleCollapse('sources'));
   document.getElementById('nbws-studio-collapse')
-    ?.addEventListener('click', () => _toggleCollapse('nbws-studio', 'nbws-studio-collapsed'));
+    ?.addEventListener('click', () => _toggleCollapse('studio'));
 }
 
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks
@@ -129,26 +165,6 @@ async function _importNotebooks() {
   return (imported && imported.default) || imported;
 }
 
-// Resume/create the session bound to this notebook, exactly like the detail
-// view's "Open chat" button — reused (not duplicated) from notebooks.js via
-// its exported openOrCreateSessionForNotebook.
-async function _selectSessionForNotebook(nb) {
-  const mod = await _importNotebooks();
-  if (mod && typeof mod.openOrCreateSessionForNotebook === 'function') {
-    await mod.openOrCreateSessionForNotebook(nb);
-  }
-}
-
-async function _closeNotebooksModal() {
-  try {
-    const mod = await _importNotebooks();
-    if (mod && mod.isNotebooksOpen && mod.isNotebooksOpen()) mod.closeNotebooks();
-  } catch (_) {
-    // Best-effort only — a missing/broken notebooks module must not stop the
-    // workspace itself from opening.
-  }
-}
-
 async function _openImpl(nb) {
   if (!nb) return;
   const root = _root();
@@ -157,6 +173,44 @@ async function _openImpl(nb) {
   _openEpoch++;
   const epoch = _openEpoch;
 
+  // notebooks.js is where the grid-card click that led here lives, so it's
+  // already loaded — this resolves the cached module record, not a fresh
+  // fetch/execute (see _importNotebooks above). A genuinely failed import
+  // (e.g. the module itself is broken) leaves nothing to report an error
+  // into either, so just bail without touching the still-open modal.
+  let notebooksMod;
+  try {
+    notebooksMod = await _importNotebooks();
+  } catch (_) {
+    return;
+  }
+  notebooksMod?.showListError?.('');
+
+  // Resolve/select the bound session BEFORE the notebooks-picker modal
+  // closes and BEFORE the body class flips — load-then-open, never
+  // open-then-load, same posture as notebooks.js's own _openChat/
+  // _openArtifact. On failure the workspace must NOT open and the picker
+  // modal must NOT close: report the error into the list view's
+  // #notebook-list-error (the view actually showing behind the modal at
+  // this point — the grid, not the detail view) via notebooks.js's exported
+  // showListError, exactly how _openChat reports into #notebook-detail-error
+  // on its own failure path.
+  try {
+    if (typeof notebooksMod?.openOrCreateSessionForNotebook === 'function') {
+      await notebooksMod.openOrCreateSessionForNotebook(nb);
+    }
+  } catch (e) {
+    if (epoch === _openEpoch) {
+      notebooksMod?.showListError?.(`Could not open chat (${e.message})`);
+    }
+    return;
+  }
+
+  // A newer open() or a close() finished first while we were awaiting above
+  // — don't clobber it with stale state, and don't close a modal a fresher
+  // call may already be relying on staying open.
+  if (epoch !== _openEpoch) return;
+
   _state.notebook = nb;
   _state.sources = [];
   _state.selection = new Set();
@@ -164,31 +218,13 @@ async function _openImpl(nb) {
   const nameEl = document.getElementById('nbws-notebook-name');
   if (nameEl) nameEl.textContent = nb.name || '(untitled)';
 
-  // Resolve/select the bound session BEFORE the notebooks-picker modal
-  // closes and BEFORE the body class flips — load-then-close (never
-  // close-then-load), same posture as notebooks.js's own _openChat/
-  // _openArtifact, so a failure here still has somewhere visible to report
-  // to instead of dropping the user into an empty shell.
-  try {
-    await _selectSessionForNotebook(nb);
-  } catch (_) {
-    // Swallow: an unresolved session isn't fatal here — the workspace still
-    // opens around whatever chat state is already current. Every fetch in
-    // this feature degrades on its own rather than blocking the rest of the
-    // view (same rule notebooks.js follows throughout).
-  }
-
-  // A newer open() or a close() finished first while we were awaiting above
-  // — don't clobber it with stale state.
-  if (epoch !== _openEpoch) return;
-
   _wireChrome();
   _open = true;
   document.body.classList.add('notebook-workspace-open');
   root.removeAttribute('aria-hidden');
   _bindEscape();
 
-  await _closeNotebooksModal();
+  if (notebooksMod?.isNotebooksOpen?.()) notebooksMod.closeNotebooks();
 }
 
 /** Open the workspace for notebook `nb` ({id, name, ...} from the notebooks list/API). */
@@ -223,8 +259,8 @@ export function closeNotebookWorkspace() {
     if (root.contains(document.activeElement)) document.activeElement.blur();
     root.setAttribute('aria-hidden', 'true');
   }
-  document.getElementById('nbws-sources')?.classList.remove('nbws-collapsed');
-  document.getElementById('nbws-studio')?.classList.remove('nbws-collapsed');
+  _resetPanel('sources');
+  _resetPanel('studio');
 
   _unbindEscape();
 

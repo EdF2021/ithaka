@@ -86,6 +86,19 @@ function _showError(id, msg) {
   if (el) el.textContent = msg || '';
 }
 
+/**
+ * Show (or, passed '', clear) an error in the list view's error slot
+ * (#notebook-list-error). Exported so notebookWorkspace.js can report a
+ * failed session-resolve when opening the workspace straight from a
+ * grid-card click: the list view — not the detail view — is what's showing
+ * behind the still-open notebooks modal at that point, so
+ * #notebook-detail-error (what _openChat below reports into) isn't in the
+ * DOM yet to report into.
+ */
+export function showListError(message) {
+  _showError('notebook-list-error', message);
+}
+
 // Original label of every currently-armed confirm button, so disarming can
 // restore it. A WeakMap (not a data-attribute) because the label contains
 // markup — and because re-arming must never capture "Sure?" as the original.
@@ -982,4 +995,4 @@ export function closeNotebooks() {
 
 export function isNotebooksOpen() { return _open; }
 
-export default { openNotebooks, closeNotebooks, isNotebooksOpen, openOrCreateSessionForNotebook };
+export default { openNotebooks, closeNotebooks, isNotebooksOpen, openOrCreateSessionForNotebook, showListError };
