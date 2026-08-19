@@ -346,6 +346,7 @@ class VectorRAG:
         k: int = 5,
         owner: Optional[str] = None,
         notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not self.healthy:
             return []
@@ -360,6 +361,8 @@ class VectorRAG:
                 conditions.append({"owner": owner})
             if notebook_id:
                 conditions.append({"notebook_id": notebook_id})
+            if source_ids:
+                conditions.append({"document_id": {"$in": list(source_ids)}})
             if len(conditions) > 1:
                 where_filter = {"$and": conditions}
             elif conditions:
@@ -411,7 +414,9 @@ class VectorRAG:
 
         except Exception as e:
             logger.error(f"search failed: {e}")
-            return self._keyword_search_fallback(query, k, owner=owner, notebook_id=notebook_id)
+            return self._keyword_search_fallback(
+                query, k, owner=owner, notebook_id=notebook_id, source_ids=source_ids,
+            )
 
     def _keyword_search_fallback(
         self,
@@ -419,6 +424,7 @@ class VectorRAG:
         k: int = 5,
         owner: Optional[str] = None,
         notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         try:
             if not self._active_collections():
@@ -437,6 +443,8 @@ class VectorRAG:
                     if owner and meta.get("owner") != owner:
                         continue
                     if notebook_id and meta.get("notebook_id") != notebook_id:
+                        continue
+                    if source_ids and meta.get("document_id") not in source_ids:
                         continue
                     doc_lower = doc.lower()
                     score = sum(1 for w in query_words if w in doc_lower)

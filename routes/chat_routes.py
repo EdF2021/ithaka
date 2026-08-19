@@ -522,6 +522,7 @@ def setup_chat_routes(
         use_research = chat_request.use_research
         time_filter = chat_request.time_filter
         preset_id = chat_request.preset_id
+        source_ids = chat_request.source_ids
 
         # Verify the caller owns this session before loading it.
         # Without this, any authenticated user can post into another user's chat.
@@ -576,6 +577,7 @@ def setup_chat_routes(
             time_filter=time_filter,
             webhook_manager=webhook_manager,
             allow_tool_preprocessing=allow_tool_preprocessing,
+            source_ids=source_ids,
         )
 
         # Research injection
@@ -869,6 +871,13 @@ def setup_chat_routes(
             except Exception as e:
                 logger.warning("Failed to parse attachments JSON, ignoring attachments", exc_info=e)
 
+        # Notebook per-source filter: only a list of strings is accepted,
+        # anything else (missing, wrong type, non-string items) is ignored.
+        source_ids = None
+        _raw_source_ids = (body or {}).get("source_ids")
+        if isinstance(_raw_source_ids, list) and all(isinstance(x, str) for x in _raw_source_ids):
+            source_ids = _raw_source_ids
+
         no_memory = str(form_data.get("no_memory", "")).lower() == "true"
         pre_context_tool_policy = build_effective_tool_policy(
             last_user_message=message,
@@ -896,6 +905,7 @@ def setup_chat_routes(
             # index would be useless / unwanted noise.
             agent_mode=(chat_mode == "agent"),
             allow_tool_preprocessing=allow_tool_preprocessing,
+            source_ids=source_ids,
         )
 
         _research_flags = {"do": do_research}  # Mutable container for generator scope

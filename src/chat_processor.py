@@ -273,14 +273,21 @@ class ChatProcessor:
         return preface, used_memories
 
     def _rag_preface(
-        self, message: str, owner: Optional[str], notebook_id: Optional[str] = None
+        self,
+        message: str,
+        owner: Optional[str],
+        notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
     ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
         """RAG: search if rag_manager available, inject only above threshold.
 
         When ``notebook_id`` is set the search is scoped to that notebook's
         chunks and widened to ``k=8``: a notebook is a bounded source set and
         the answer may use nothing else, so recall matters more than it does
-        for the open-ended personal-docs case.
+        for the open-ended personal-docs case. ``source_ids``, when given,
+        further restricts retrieval to those document ids within the
+        notebook (the frontend's per-source checkboxes); it is only
+        meaningful alongside a ``notebook_id``.
         """
         preface: List[Dict[str, str]] = []
         rag_sources: List[Dict[str, Any]] = []
@@ -288,7 +295,9 @@ class ChatProcessor:
             rag_manager = getattr(self.personal_docs_manager, 'rag_manager', None)
             if rag_manager:
                 k = 8 if notebook_id else 5
-                results = rag_manager.search(message, k=k, owner=owner, notebook_id=notebook_id)
+                results = rag_manager.search(
+                    message, k=k, owner=owner, notebook_id=notebook_id, source_ids=source_ids,
+                )
                 # Filter by similarity threshold
                 relevant = [r for r in results if r.get("similarity", 0) >= self.RAG_SIMILARITY_THRESHOLD]
                 if relevant:
@@ -458,6 +467,7 @@ class ChatProcessor:
         incognito: bool = False,
         use_skills: bool = True,
         notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
     ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[Dict[str, str]], List[Dict[str, Any]]]:
         """Build the context preface for LLM calls.
 
@@ -513,7 +523,7 @@ class ChatProcessor:
 
         # RAG: search if enabled and rag_manager available, inject only above threshold
         if use_rag:
-            rag_preface, rag_sources = self._rag_preface(message, owner, notebook_id)
+            rag_preface, rag_sources = self._rag_preface(message, owner, notebook_id, source_ids)
             preface.extend(rag_preface)
 
         # A notebook turn with no surviving sources must refuse out loud. This
