@@ -3433,6 +3433,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                 errMsg += '\n\nThis model may not support tools — try switching to Chat mode.';
               }
               typewriterInto(errorHolder, errMsg);
+              // Semantic marker (inert — no styling/behavior attached) so
+              // consumers like notebookWorkspace.js's follow-up chips can
+              // reliably tell "this bubble is a failed exchange" apart from
+              // a normal answer, instead of sniffing inline color/text.
+              errorHolder.closest('.msg-ai')?.classList.add('chat-error');
             }
           }
         }
@@ -3517,7 +3522,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
             var _box = document.getElementById('chat-history');
             if (_box && sessionModule.getCurrentSessionId() === _timeoutSessionId) {
               var _timeoutMsg = document.createElement('div');
-              _timeoutMsg.className = 'msg msg-ai';
+              // chat-error: same inert semantic marker as the other two
+              // error/timeout render sites (see the comment at the
+              // typewriterInto call above) — no styling/behavior attached.
+              _timeoutMsg.className = 'msg msg-ai chat-error';
               _timeoutMsg.innerHTML = '<div class="role">Ithaka</div><div class="body" style="opacity:0.6;font-style:italic;">Research clarification timed out. Toggle research again to start over.</div>';
               _box.appendChild(_timeoutMsg);
               uiModule.scrollHistory();
@@ -3977,7 +3985,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       var box = document.getElementById('chat-history');
       if (box) {
         var errHolder = document.createElement('div');
-        errHolder.className = 'msg msg-ai';
+        // chat-error: same inert semantic marker as the other two
+        // error/timeout render sites — no styling/behavior attached.
+        errHolder.className = 'msg msg-ai chat-error';
         errHolder.innerHTML = '<div class="body"><i style="color: var(--color-error);">[Background stream encountered an error]</i></div>';
         box.appendChild(errHolder);
       }

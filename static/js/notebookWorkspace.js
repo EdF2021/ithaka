@@ -609,24 +609,19 @@ function _bodyText(msgNode) {
   return (clone.textContent || '').trim();
 }
 
-// chat.js has no semantic "this bubble is an error" class — it renders
-// errors/timeouts straight into the normal `.msg-ai .body` shape via inline
-// styling and a fixed message prefix instead: typewriterInto's red text on
-// stream failure (chat.js:3428-3435, `errorHolder.style.color =
-// 'var(--red)'`, text `Error: ...`), the background-stream error banner
-// (chat.js:3980-3981, `<i style="color: var(--color-error)">[Background
-// stream encountered an error]</i>`), and the research-clarification timeout
-// notice (chat.js:3519-3521, plain text "Research clarification timed
-// out..."). Catch all three by the inline error-color tokens the first two
-// share, with the literal message prefixes as a second signal in case the
-// styling ever changes without the wording changing too.
-const _ERROR_BUBBLE_TEXT_RE = /^(Error:|\[Background stream encountered an error\]|Research clarification timed out)/i;
-
+// chat.js marks its three error/timeout `.msg-ai` render sites (stream
+// failure at chat.js:3428-3441, the research-clarification timeout at
+// chat.js:3519-3524, the background-stream error banner at
+// chat.js:3980-3983) with an inert `chat-error` class — no styling or
+// behavior attached, added purely so a failed exchange can be told apart
+// from a normal answer without sniffing message text or inline colors
+// (a text/color heuristic tried first here false-positived on any *normal*
+// answer that happened to start with "Error:" or contain a --red/
+// --color-error token, e.g. explaining a source's own error message or
+// quoting a CSS snippet — flagged in review and replaced with this
+// semantic check).
 function _isErrorBubble(msgNode) {
-  const body = msgNode?.querySelector('.body');
-  if (!body) return false;
-  if (/var\(--red\)|var\(--color-error\)/.test(body.innerHTML || '')) return true;
-  return _ERROR_BUBBLE_TEXT_RE.test((body.textContent || '').trim());
+  return !!msgNode && msgNode.classList.contains('chat-error');
 }
 
 /** Plain-text {question, answer} of the most recently finished exchange,
