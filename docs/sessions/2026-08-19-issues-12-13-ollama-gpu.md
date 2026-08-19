@@ -39,4 +39,15 @@ Diagnose-recept bij "modellen onbereikbaar vanuit container": `ss -tln | grep 11
 
 ## Open
 
-- #16 — CI draait nooit (GitHub Actions billing/spending-limit; alleen Ed kan dit fixen).
+- Geen — zie addendum: #16 is dezelfde sessie nog opgelost.
+
+## Addendum: #16 opgelost — CI werkt (12:03)
+
+Rootcause was tweeledig, géén billing: (1) event-aflevering kapot sinds
+repo-creatie-per-push — 0 check-suites op elke push/PR terwijl workflow_dispatch
+wél draaide; fix = Actions via API uit/aan toggelen (`PUT /actions/permissions`).
+(2) Alle push-triggers stonden op `branches: [main]` (upstream-erfenis) terwijl
+het werk op dev gebeurt; nu `[dev, main]` (eb12c23). Bonusfix: GHCR-imagenaam
+moest lowercase (`edf2021/ithaka`, e36efda). Eindstand: alle 7 workflows groen
+op push naar dev, incl. volle pytest (3m04) en multi-arch docker-publish naar
+ghcr.io. #16 en #17 gesloten; geen open issues meer.
