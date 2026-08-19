@@ -103,3 +103,21 @@ def test_podcast_poll_stops_on_workspace_close():
 def test_mobile_tabbar_exists():
     assert 'data-nbws-tab="chat"' in _HTML or 'data-nbws-tab="chat"' in _WS
     assert "max-width: 700px" in _between(_CSS, "#nbws-root", "/* nbws-end */")
+
+
+# ── Task B: studio panel redesign — Generate/Files sections ────────────────
+
+def test_studio_panel_has_generate_and_files_section_headers():
+    assert 'nbws-studio-section-head">Generate<' in _WS
+    assert 'nbws-studio-section-head">Files<' in _WS
+
+
+def test_artifact_row_click_opens_visual_report_in_new_tab():
+    assert "/report" in _WS
+    assert "window.open" in _WS
+    assert "'_blank'" in _WS or '"_blank"' in _WS
+
+
+def test_studio_panel_labels_are_english_not_dutch():
+    assert "Study guide" in _WS
+    assert "Studiegids" not in _WS

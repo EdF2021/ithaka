@@ -798,20 +798,30 @@ window.addEventListener('ithaka:chat-busy-change', _onChatBusyChange);
 // `registerCloseHook(_stopPodcastPoll)` instead of notebooks.js's old
 // modal-close/leave-detail-view hooks.
 
-// Fixed generate-button order and Dutch labels per the design spec — the
-// backend only accepts these five `kind` values via POST /artifacts.
+// Fixed generate-button order and English labels per the Task B redesign
+// (studio panel is Generate-buttons + Files-list, no more Dutch strings) —
+// the backend only accepts these five `kind` values via POST /artifacts.
 // `podcast` is a sixth artifact kind, but it is generated through its own
 // endpoint/job flow (see _generatePodcast) — it stays out of ARTIFACT_KINDS
 // and only shares KIND_LABELS (for the pill text on its row).
 const ARTIFACT_KINDS = ['study_guide', 'briefing', 'faq', 'quiz', 'mindmap'];
 const KIND_LABELS = {
-  study_guide: 'Studiegids',
+  study_guide: 'Study guide',
   briefing: 'Briefing',
   faq: 'FAQ',
   quiz: 'Quiz',
   mindmap: 'Mindmap',
   podcast: 'Podcast',
 };
+
+// Small inline monochrome icons (no Unicode emoji, per repo convention) used
+// to disambiguate the Generate buttons (a plus/add glyph — these CREATE
+// something) from the Files rows (a file glyph — these ARE something) and
+// the per-row "open source document" affordance (a document-with-lines
+// glyph). All three are 1px-stroke outline icons matching _CLOSE_ICON below.
+const _PLUS_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+const _FILE_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="notebook-artifact-file-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+const _DOC_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
 
 function _artifactRow(a) {
   const label = KIND_LABELS[a.kind] || a.kind;
@@ -821,14 +831,23 @@ function _artifactRow(a) {
   // nowrap+ellipsis, so text appended inside it would be the first thing
   // clipped on a narrow viewport — and this hint is required, per spec.
   const hint = a.kind === 'mindmap'
-    ? '<span class="notebook-artifact-hint">(Preview voor de mindmap)</span>' : '';
+    ? '<span class="notebook-artifact-hint">(Preview for the mindmap)</span>' : '';
+  // Every non-podcast row gets a secondary "open source document" icon
+  // button (Task B requirement 3) — it always routes through the existing
+  // _openArtifact doc-viewer path, independent of what the row's own click
+  // does (report view for most kinds, the mindmap preview for mindmap).
+  const openSrcBtn = isPodcast ? '' : `
+      <button type="button" class="notebook-artifact-opendoc" data-art-id="${_esc(a.id)}"
+              title="Open source document">${_DOC_ICON}</button>`;
   const row = `
     <div class="list-item notebook-artifact-item${isPodcast ? ' notebook-podcast-item' : ''}"
          data-art-id="${_esc(a.id)}" data-doc-id="${_esc(a.document_id)}" data-kind="${_esc(a.kind)}">
+      ${_FILE_ICON}
       <span class="notebook-artifact-kind">${_esc(label)}</span>
       <span class="grow notebook-artifact-title">${_esc(title)}</span>
       ${hint}
       <span class="dashboard-row-sub notebook-artifact-date">${_esc(_shortDate(a.created_at))}</span>
+      ${openSrcBtn}
       <button type="button" class="notebook-src-del notebook-artifact-del" data-art-id="${_esc(a.id)}"
               title="Delete artifact">${_CLOSE_ICON}</button>
     </div>`;
@@ -874,21 +893,37 @@ async function _loadArtifacts() {
   _showArtifactError('');
   const artifacts = data.artifacts || [];
   if (!artifacts.length) {
-    box.innerHTML = '<div class="dashboard-empty">No artifacts yet — generate one above</div>';
+    box.innerHTML = '<div class="dashboard-empty">Nothing generated yet — use Generate above.</div>';
     return;
   }
   box.innerHTML = artifacts.map(_artifactRow).join('');
   box.querySelectorAll('.notebook-artifact-item').forEach(row => {
     row.addEventListener('click', (e) => {
       if (e.target.closest('.notebook-artifact-del')) return;
-      if (row.dataset.kind === 'podcast') { _togglePodcastPanel(row); return; }
-      _openArtifact(row);
+      if (e.target.closest('.notebook-artifact-opendoc')) return;
+      const kind = row.dataset.kind;
+      if (kind === 'podcast') { _togglePodcastPanel(row); return; }
+      // Mindmap keeps its existing preview as the primary click (Task B
+      // requirement 3) — every other kind opens the polished visual report
+      // Task A's backend renders, in a new tab.
+      if (kind === 'mindmap') { _openArtifact(row); return; }
+      _openArtifactReport(row);
     });
   });
   box.querySelectorAll('.notebook-artifact-del').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       _armConfirm(btn, () => _deleteArtifact(btn.dataset.artId));
+    });
+  });
+  // Secondary "open source document" icon button on every non-podcast row —
+  // always routes through the shared _openArtifact doc-viewer path,
+  // regardless of what the row's own click does.
+  box.querySelectorAll('.notebook-artifact-opendoc').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const row = box.querySelector(`.notebook-artifact-item[data-art-id="${CSS.escape(btn.dataset.artId)}"]`);
+      if (row) _openArtifact(row);
     });
   });
   // "Open transcript" reuses _openArtifact on the row it belongs to (found
@@ -930,7 +965,7 @@ async function _generateArtifact(kind, btn) {
   const label = btn?.querySelector('span');
   const original = label ? label.textContent : null;
   if (btn) btn.disabled = true;
-  if (label) label.textContent = 'Genereren…';
+  if (label) label.textContent = 'Generating…';
   _showArtifactError('');
   try {
     await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts`, {
@@ -963,14 +998,14 @@ function _podcastPendingRowHtml(text) {
 }
 
 function _podcastPhaseText(status) {
-  if (status.phase === 'script') return 'Script schrijven…';
+  if (status.phase === 'script') return 'Writing script…';
   if (status.phase === 'tts') {
     const seg = status.segment != null ? status.segment : '?';
     const total = status.total != null ? status.total : '?';
-    return `Audio genereren… ${seg}/${total}`;
+    return `Generating audio… ${seg}/${total}`;
   }
-  if (status.phase === 'concat') return 'Samenvoegen…';
-  return 'Bezig…';
+  if (status.phase === 'concat') return 'Merging…';
+  return 'Working…';
 }
 
 /** Insert (or update, if already present) the pending row at the top of the
@@ -1014,8 +1049,8 @@ async function _pollPodcast() {
     if (!_podcastPoll || _podcastPoll.jobId !== jobId) return;
     _stopPodcastPoll();
     const msg = /^HTTP 404/.test(e.message)
-      ? 'Generatie afgebroken (server herstart)'
-      : `Podcast mislukt (${e.message})`;
+      ? 'Generation aborted (server restarted)'
+      : `Podcast failed (${e.message})`;
     // _loadArtifacts() replaces #nbws-artifacts wholesale, which both removes
     // the pending row and restores the empty-state if this was the
     // notebook's only artifact — plain removal would leave the box empty.
@@ -1033,7 +1068,7 @@ async function _pollPodcast() {
   if (status.status === 'error') {
     _stopPodcastPoll();
     await _loadArtifacts();
-    _showArtifactError(`Podcast mislukt${status.error ? `: ${status.error}` : ''}`);
+    _showArtifactError(`Podcast failed${status.error ? `: ${status.error}` : ''}`);
     return;
   }
 
@@ -1103,17 +1138,45 @@ async function _openArtifact(row) {
   }
 }
 
+/**
+ * Open the visual report for a generated artifact in a new tab — Task A's
+ * backend contract: GET /api/notebooks/<notebookId>/artifacts/<artifactId>/report.
+ * A plain new-tab navigation (not fetch+render): if that endpoint 404s the
+ * user just sees a 404 page in the new tab, the workspace stays untouched.
+ */
+function _openArtifactReport(row) {
+  if (!_state.notebook) return;
+  const artId = row.dataset.artId;
+  if (!artId) return;
+  window.open(
+    `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artId)}/report`,
+    '_blank'
+  );
+}
+
+// Two visually distinct sections (Task B): "Generate" is the row of action
+// buttons (each carries a plus-icon so they unmistakably read as actions,
+// not names), "Files" is the generated-artifact list (each row carries a
+// file-icon). Splitting them into separate headed blocks — not just relying
+// on button vs. row styling — is the fix for the "which of these are
+// buttons vs. file names?" confusion the redesign was requested for.
 function _studioPanelSkeleton() {
   return `
-    <div class="notebook-artifact-btns" id="nbws-artifact-btns">
-      ${ARTIFACT_KINDS.map(kind => `<button type="button" class="dashboard-action-btn notebook-artifact-gen-btn"
-              data-kind="${_esc(kind)}"><span>${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
-      <button type="button" class="dashboard-action-btn notebook-podcast-gen-btn" id="nbws-podcast-btn"
-              data-kind="podcast"><span>${_esc(KIND_LABELS.podcast)}</span></button>
+    <div class="nbws-studio-section nbws-studio-generate">
+      <div class="nbws-studio-section-head">Generate</div>
+      <div class="notebook-artifact-btns" id="nbws-artifact-btns">
+        ${ARTIFACT_KINDS.map(kind => `<button type="button" class="dashboard-action-btn notebook-artifact-gen-btn"
+                data-kind="${_esc(kind)}">${_PLUS_ICON}<span>${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
+        <button type="button" class="dashboard-action-btn notebook-podcast-gen-btn" id="nbws-podcast-btn"
+                data-kind="podcast">${_PLUS_ICON}<span>${_esc(KIND_LABELS.podcast)}</span></button>
+      </div>
+      <div class="notebook-error" id="nbws-artifact-error"></div>
     </div>
-    <div class="notebook-error" id="nbws-artifact-error"></div>
-    <div class="notebook-artifacts" id="nbws-artifacts">
-      <div class="dashboard-empty">Loading&hellip;</div>
+    <div class="nbws-studio-section nbws-studio-files">
+      <div class="nbws-studio-section-head">Files</div>
+      <div class="notebook-artifacts" id="nbws-artifacts">
+        <div class="dashboard-empty">Loading&hellip;</div>
+      </div>
     </div>`;
 }
 
