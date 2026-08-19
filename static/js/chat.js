@@ -827,6 +827,24 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       }
     }
 
+    // Notebook workspace source filter — block sends with zero sources
+    // selected, before anything renders (user bubble, input clear) or any
+    // session work starts. getSourceIdsForChat() contract (notebookWorkspace.js):
+    // null = no filter (workspace closed, or every source is checked),
+    // string[] = a checked subset, [] = nothing checked (must not send).
+    // Computed once here and reused unchanged at the fd.append site below —
+    // not recomputed, so a mid-send checkbox change can't desync the guard
+    // from what actually gets sent.
+    let _nbwsSourceIds = null;
+    if (window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen()) {
+      _nbwsSourceIds = window.notebookWorkspace.getSourceIdsForChat ? window.notebookWorkspace.getSourceIdsForChat() : null;
+      if (Array.isArray(_nbwsSourceIds) && _nbwsSourceIds.length === 0) {
+        uiModule.showError(window.notebookWorkspace.EMPTY_SELECTION_MESSAGE || 'Select at least one source');
+        _releaseSendFlag();
+        return;
+      }
+    }
+
     // Materialize pending session (deferred from model click) on first message
     if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {
       _sendPerf.mark('pending_session_begin');
@@ -1194,6 +1212,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       fd.append('message', _finalMsgWithInject);
       fd.append('session', streamSessionId);
       if (ids.length) fd.append('attachments', JSON.stringify(ids));
+      // Notebook workspace source filter — same JSON-string-in-a-form-field
+      // shape as `attachments` above, since this whole request is FormData,
+      // not a JSON body. `_nbwsSourceIds` was computed once at the top of
+      // this handler (see the send guard there); null means no filter.
+      if (Array.isArray(_nbwsSourceIds)) fd.append('source_ids', JSON.stringify(_nbwsSourceIds));
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && activeDocIdForSend) {
         try {

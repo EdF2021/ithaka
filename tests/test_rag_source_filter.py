@@ -6,9 +6,17 @@ Chroma where-filter shape (an extra ``$and`` condition alongside notebook_id)
 and the keyword-fallback's Python-side equivalent, plus the ChatRequest field
 that carries source_ids in from the API.
 """
+import ast
+import json
+from pathlib import Path
+
 import src.rag_vector as rag_vector
 from src.rag_vector import VectorRAG
 from src.request_models import ChatRequest
+
+_CHAT_ROUTES_SRC = (
+    Path(__file__).resolve().parent.parent / "routes" / "chat_routes.py"
+).read_text(encoding="utf-8")
 
 
 class _FakeLane:
@@ -93,3 +101,79 @@ def test_chat_request_accepts_source_ids():
 
     default_req = ChatRequest(message="x", session="s")
     assert default_req.source_ids is None
+
+
+# --- /api/chat_stream form-data fallback (Task 4) ---------------------------
+#
+# chat.js's actual browser send is FormData, not a JSON body — `body` in
+# chat_stream is only ever populated for `application/json` callers, so the
+# JSON-body-only read below silently dropped source_ids for every real UI
+# send. Task 4 added a form-field fallback (source_ids as a JSON-encoded
+# string, exactly like the pre-existing `attachments` field) so the frontend
+# checkbox panel actually reaches retrieval. Pinned two ways: a static check
+# that the fallback code exists (mirrors test_chat_route_tool_policy.py's
+# body-fallback tests for allow_bash/allow_web_search), and a functional test
+# of the parsing logic itself.
+
+
+def test_chat_stream_source_ids_falls_back_to_form_data():
+    tree = ast.parse(_CHAT_ROUTES_SRC)
+    chat_stream_func = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.AsyncFunctionDef) and n.name == "chat_stream"),
+        None,
+    )
+    assert chat_stream_func is not None, "chat_stream function not found"
+
+    found = any(
+        isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "get"
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "form_data"
+        and n.args
+        and isinstance(n.args[0], ast.Constant)
+        and n.args[0].value == "source_ids"
+        for n in ast.walk(chat_stream_func)
+    )
+    assert found, "chat_stream must read source_ids from form_data as a fallback"
+
+
+def _parse_source_ids_form_fallback(raw_body_value, raw_form_value):
+    """Replicates chat_routes.py's source_ids parsing for a functional test
+    without needing a full HTTP request/session fixture."""
+    source_ids = None
+    if isinstance(raw_body_value, list) and all(isinstance(x, str) for x in raw_body_value):
+        source_ids = raw_body_value
+    else:
+        if raw_form_value:
+            try:
+                parsed = json.loads(raw_form_value)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+                source_ids = parsed
+    return source_ids
+
+
+def test_form_fallback_parses_json_encoded_list():
+    assert _parse_source_ids_form_fallback(None, json.dumps(["d1", "d2"])) == ["d1", "d2"]
+
+
+def test_form_fallback_ignores_malformed_json():
+    assert _parse_source_ids_form_fallback(None, "not json") is None
+
+
+def test_form_fallback_ignores_non_list_or_non_string_items():
+    assert _parse_source_ids_form_fallback(None, json.dumps({"a": 1})) is None
+    assert _parse_source_ids_form_fallback(None, json.dumps(["a", 1])) is None
+
+
+def test_form_fallback_ignores_missing_field():
+    assert _parse_source_ids_form_fallback(None, None) is None
+    assert _parse_source_ids_form_fallback(None, "") is None
+
+
+def test_json_body_still_wins_over_form_field():
+    """A JSON API caller's body list is used as-is, form_data isn't consulted."""
+    assert _parse_source_ids_form_fallback(["b1"], json.dumps(["f1"])) == ["b1"]

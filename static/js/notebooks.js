@@ -387,44 +387,13 @@ function _sourceRow(src) {
     </div>`;
 }
 
-async function _renderSources() {
-  const box = document.getElementById('notebook-sources');
-  if (!box || !_detail) return;
-  let data;
-  try {
-    data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_detail.id)}/sources`);
-  } catch (e) {
-    box.innerHTML = '';
-    _showError('notebook-detail-error', `Could not load sources (${e.message})`);
-    return;
-  }
-  const sources = data.sources || [];
-  if (!sources.length) {
-    box.innerHTML = '<div class="dashboard-empty">No sources yet — add files above</div>';
-    return;
-  }
-  box.innerHTML = sources.map(_sourceRow).join('');
-  box.querySelectorAll('.notebook-src-del').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _armConfirm(btn, () => _deleteSource(btn.dataset.srcId));
-    });
-  });
-}
-
-async function _deleteSource(sourceId) {
-  if (!_detail) return;
-  try {
-    await _fetchJson(
-      `${API_BASE}/api/notebooks/${encodeURIComponent(_detail.id)}/sources/${encodeURIComponent(sourceId)}`,
-      { method: 'DELETE' });
-    _showError('notebook-detail-error', '');
-  } catch (e) {
-    _showError('notebook-detail-error', `Remove failed (${e.message})`);
-    return;
-  }
-  _renderSources();
-}
+// _renderSources/_deleteSource (rendering the #notebook-sources box in this
+// module's detail view) were removed in Task 4: the sources panel now lives
+// in notebookWorkspace.js's #nbws-sources-body (checkboxes, per-source
+// delete, upload — the same _sourceRow/_armConfirm shapes, copied there
+// since this module keeps them private). _showDetail below is unreachable
+// (grid-card clicks route straight to the workspace via _openWorkspace, not
+// here) — Task 6 removes the rest of the detail view.
 
 function _artifactRow(a) {
   const label = KIND_LABELS[a.kind] || a.kind;
@@ -915,7 +884,7 @@ function _showDetail(nb) {
       <div class="dashboard-empty">Loading&hellip;</div>
     </div>
     <div class="notebook-sources" id="notebook-sources">
-      <div class="dashboard-empty">Loading&hellip;</div>
+      <div class="dashboard-empty">Sources are managed in the notebook workspace — open the notebook to add or remove them.</div>
     </div>`;
 
   document.getElementById('notebook-back').addEventListener('click', _showList);
@@ -925,7 +894,6 @@ function _showDetail(nb) {
   });
   document.getElementById('notebook-podcast-btn').addEventListener('click', (e) => _generatePodcast(e.currentTarget));
   _setupUploadZone();
-  _renderSources();
   _renderArtifacts();
 }
 

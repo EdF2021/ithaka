@@ -35,3 +35,22 @@ def test_grid_click_opens_workspace_not_detail():
 
 def test_index_html_has_workspace_root():
     assert 'id="nbws-root"' in _HTML
+
+
+# ── Task 4: sources panel + source_ids chat filter ──────────────────────────
+
+_CHAT_STREAM_JS = (_REPO / "static" / "js" / "chatStream.js").read_text(encoding="utf-8")
+_CHAT_JS = (_REPO / "static" / "js" / "chat.js").read_text(encoding="utf-8")
+
+
+def test_chat_payload_includes_source_ids_hook():
+    src = _CHAT_STREAM_JS + _CHAT_JS
+    assert "getSourceIdsForChat" in src
+
+
+def test_empty_selection_blocks_send():
+    assert "Select at least one source" in _WS
+
+
+def test_selection_persisted_per_notebook():
+    assert "notebook_source_sel_" in _WS

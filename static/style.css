@@ -41409,8 +41409,40 @@ body.notebook-workspace-open #chat-container {
    sibling-vs-descendant reasoning as --nbws-topbar-h's fallback usage). */
 body.notebook-workspace-open.nbws-sources-collapsed #chat-container { margin-left: 32px; }
 body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-right: 32px; }
-/* Later notebooks-workspace CSS (Task 4 sources styling, Task 6 studio
-   styling, Task 7's <=700px media query) belongs ABOVE this line — the
-   marker comment right below is the end-of-block anchor Task 7's static
-   test scans up to, so anything appended after it falls outside that scan. */
+
+/* Sources panel (Task 4) — rows/upload-zone/error line reuse the exact
+   .notebook-source-row/.notebook-status/.notebook-upload-zone/.notebook-error/
+   .notebook-src-del/.notebook-confirm-armed shapes already defined above for
+   notebooks.js's (now-dead) detail view; per-row checkboxes reuse the app's
+   existing .memory-select-cb dot styling. Only the select-all row and the two
+   n/m counters (panel header + topbar badge) have no existing equivalent. */
+.nbws-select-all-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+.nbws-source-count {
+  color: var(--color-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+/* Topbar badge — same pill shape as .notebook-status, sized for the fixed
+   chrome bar rather than a list row. */
+.nbws-source-badge {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.nbws-source-badge[hidden] { display: none; }
+
+/* Later notebooks-workspace CSS (Task 6 studio styling, Task 7's <=700px
+   media query) belongs ABOVE this line — the marker comment right below is
+   the end-of-block anchor Task 7's static test scans up to, so anything
+   appended after it falls outside that scan. */
 /* nbws-end */

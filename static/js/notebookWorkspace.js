@@ -27,7 +27,34 @@
  * picker/chips, Task 6 fills studio (and registers its podcast-poll-stop via
  * registerCloseHook below). `_state` is the shared read/write surface those
  * tasks build on instead of inventing a second source of truth.
+ *
+ * Task 4 (sources panel): fetches/renders `#nbws-sources-body`'s source list
+ * with per-row checkboxes (fed by `_state.selection`, a Set of RAG
+ * `document_id`s — NOT the NotebookSource row `id` used for delete, since the
+ * Chroma filter matches on `document_id`; a "failed" source has no
+ * document_id and gets an unselectable, disabled row). Selection persists per
+ * notebook in localStorage (`notebook_source_sel_<notebookId>`, storing the
+ * DESELECTED ids — new sources default selected). `getSourceIdsForChat()` is
+ * the contract chat.js/chatStream.js consume when building the
+ * /api/chat_stream request: null (all selected, or workspace closed — no
+ * filter), string[] (a checked subset), or [] (nothing checked — the caller
+ * must block the send with EMPTY_SELECTION_MESSAGE instead of sending).
+ * Upload/delete reuse the exact FormData/inline-confirm flow notebooks.js's
+ * (now-dead, Task 6 removes it) detail view used — copied rather than
+ * imported since those helpers were private to that module and coupled to
+ * its own `_detail`/DOM ids.
  */
+
+import uiModule from './ui.js';
+
+const API_BASE = window.location.origin;
+
+// Shown (via the shared toast/error mechanism, same as chat.js's other
+// blocked-send messages) when the user has unchecked every source; the exact
+// string is asserted by tests/test_notebook_workspace_static.py, and reused
+// verbatim by chat.js's send guard via the published `notebookWorkspace`
+// object below rather than a second copy of the literal.
+export const EMPTY_SELECTION_MESSAGE = 'Select at least one source';
 
 let _open = false;
 // Bumped on every open/close; a slow session-resolve await (openNotebookWorkspace
@@ -151,6 +178,334 @@ function _wireChrome() {
     ?.addEventListener('click', () => _toggleCollapse('sources'));
   document.getElementById('nbws-studio-collapse')
     ?.addEventListener('click', () => _toggleCollapse('studio'));
+
+  // Source-count badge ("n/m sources") — a small pill in the fixed topbar,
+  // which sits above the composer without ever touching chat-container's own
+  // DOM (per the module-header note above). Inserted once, right after the
+  // notebook name.
+  const topbar = document.getElementById('nbws-topbar');
+  if (topbar && !document.getElementById('nbws-source-badge')) {
+    const badge = document.createElement('span');
+    badge.id = 'nbws-source-badge';
+    badge.className = 'nbws-source-badge';
+    badge.hidden = true;
+    // insertBefore(node, null) appends as the last child — deliberately not
+    // the other DOM method for that (see the module header: this file must
+    // never contain that literal, a signal a static test elsewhere in the
+    // suite reads as "#chat-container might be getting reparented in here",
+    // which is never true — the badge is unrelated topbar chrome).
+    const nameEl = document.getElementById('nbws-notebook-name');
+    topbar.insertBefore(badge, (nameEl && nameEl.nextSibling) || null);
+  }
+}
+
+// ---- Sources panel (Task 4) ------------------------------------------------
+
+function _esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function _fetchJson(url, options) {
+  const res = await fetch(url, { credentials: 'same-origin', ...(options || {}) });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body && body.detail ? `: ${body.detail}` : '';
+    } catch (_) {}
+    throw new Error(`HTTP ${res.status}${detail}`);
+  }
+  return res.json();
+}
+
+const _CLOSE_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+const _ZONE_IDLE = 'Add sources — drop files here or click to upload';
+
+function _selStorageKey(notebookId) {
+  return `notebook_source_sel_${notebookId}`;
+}
+
+/** Deselected `document_id`s persisted for one notebook — default (nothing
+ *  stored, or storage unavailable/corrupt) is "everything selected". */
+function _loadDeselected(notebookId) {
+  try {
+    const raw = localStorage.getItem(_selStorageKey(notebookId));
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+
+function _saveDeselected(notebookId, deselectedSet) {
+  try {
+    localStorage.setItem(_selStorageKey(notebookId), JSON.stringify([...deselectedSet]));
+  } catch (_) {
+    // Storage unavailable (private mode / quota) — selection still works for
+    // this session, it just won't survive a reopen.
+  }
+}
+
+/** RAG-filterable ids among the currently loaded sources — a "failed" source
+ *  has no document_id (nothing was ever indexed for it) and is excluded from
+ *  both selection and the n/m counters. */
+function _selectableIds() {
+  return _state.sources.filter(s => s.document_id).map(s => s.document_id);
+}
+
+function _persistSelection() {
+  if (!_state.notebook) return;
+  const selectable = _selectableIds();
+  const deselected = new Set(selectable.filter(id => !_state.selection.has(id)));
+  _saveDeselected(_state.notebook.id, deselected);
+}
+
+/**
+ * The chat-payload contract (consumed by chat.js/chatStream.js):
+ *   null      — workspace closed, or every selectable source is checked
+ *               (nothing to filter on — same as omitting source_ids).
+ *   string[]  — a checked subset (the ids to filter retrieval to).
+ *   []        — nothing checked; the caller must block the send instead of
+ *               sending an always-empty-result request.
+ */
+export function getSourceIdsForChat() {
+  if (!_open) return null;
+  const selectable = _selectableIds();
+  if (!selectable.length) return null;
+  if (_state.selection.size >= selectable.length) return null;
+  return selectable.filter(id => _state.selection.has(id));
+}
+
+function _showSourcesError(msg) {
+  const el = document.getElementById('nbws-sources-error');
+  if (el) el.textContent = msg || '';
+}
+
+function _updateSelectAllAndCounters() {
+  const selectable = _selectableIds();
+  const total = selectable.length;
+  const selected = selectable.filter(id => _state.selection.has(id)).length;
+
+  const allCb = document.getElementById('nbws-select-all-cb');
+  if (allCb) {
+    allCb.checked = total > 0 && selected === total;
+    allCb.indeterminate = selected > 0 && selected < total;
+  }
+  const countEl = document.getElementById('nbws-source-count');
+  if (countEl) countEl.textContent = `${selected}/${total} source${total === 1 ? '' : 's'}`;
+
+  const badge = document.getElementById('nbws-source-badge');
+  if (badge) {
+    badge.hidden = !total;
+    badge.textContent = total ? `${selected}/${total} sources` : '';
+  }
+}
+
+// Original label of every currently-armed confirm button (mirrors
+// notebooks.js's identical helper — copied, not imported, since that one is
+// private to its module and coupled to its own DOM).
+const _confirmLabels = new WeakMap();
+
+function _disarmConfirm(btn) {
+  clearTimeout(Number(btn.dataset.armTimer));
+  btn.dataset.armed = '0';
+  btn.classList.remove('notebook-confirm-armed');
+  if (_confirmLabels.has(btn)) {
+    btn.innerHTML = _confirmLabels.get(btn);
+    _confirmLabels.delete(btn);
+  }
+}
+
+function _armConfirm(btn, action) {
+  if (btn.dataset.armed === '1') {
+    _disarmConfirm(btn);
+    action();
+    return;
+  }
+  _confirmLabels.set(btn, btn.innerHTML);
+  btn.dataset.armed = '1';
+  btn.classList.add('notebook-confirm-armed');
+  btn.textContent = 'Sure?';
+  btn.dataset.armTimer = String(setTimeout(() => _disarmConfirm(btn), 5000));
+}
+
+function _sourceRow(src) {
+  const failed = src.status !== 'indexed';
+  const docId = src.document_id || '';
+  const selectable = !!docId;
+  const checked = selectable && _state.selection.has(docId);
+  return `
+    <div class="list-item notebook-source-row" data-src-id="${_esc(src.id)}" data-doc-id="${_esc(docId)}">
+      <input type="checkbox" class="nbws-source-cb memory-select-cb" data-doc-id="${_esc(docId)}"
+             ${checked ? 'checked' : ''} ${selectable ? '' : 'disabled'}
+             title="${selectable ? 'Include in chat' : 'Not indexed — excluded from chat'}">
+      <span class="grow notebook-source-name" title="${_esc(src.filename || '')}">${_esc(src.filename || '(unnamed)')}</span>
+      <span class="notebook-status${failed ? ' notebook-status-failed' : ''}"
+            title="${_esc(failed ? (src.error || 'Indexing failed') : 'Indexed')}">${_esc(src.status || 'unknown')}</span>
+      <button type="button" class="notebook-src-del" data-src-id="${_esc(src.id)}"
+              title="Remove source">${_CLOSE_ICON}</button>
+    </div>`;
+}
+
+function _renderSourceList() {
+  const box = document.getElementById('nbws-source-list');
+  if (!box) return;
+  if (!_state.sources.length) {
+    box.innerHTML = '<div class="dashboard-empty">No sources yet — add files above</div>';
+    _updateSelectAllAndCounters();
+    return;
+  }
+  box.innerHTML = _state.sources.map(_sourceRow).join('');
+  box.querySelectorAll('.nbws-source-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const docId = cb.dataset.docId;
+      if (!docId) return;
+      if (cb.checked) _state.selection.add(docId);
+      else _state.selection.delete(docId);
+      _persistSelection();
+      _updateSelectAllAndCounters();
+    });
+  });
+  box.querySelectorAll('.notebook-src-del').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _armConfirm(btn, () => _deleteSource(btn.dataset.srcId));
+    });
+  });
+  _updateSelectAllAndCounters();
+}
+
+async function _deleteSource(sourceId) {
+  if (!_state.notebook) return;
+  try {
+    await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/sources/${encodeURIComponent(sourceId)}`,
+      { method: 'DELETE' });
+    _showSourcesError('');
+  } catch (e) {
+    _showSourcesError(`Remove failed (${e.message})`);
+    return;
+  }
+  await _loadSources();
+}
+
+/** Fetch this notebook's sources and reset selection from localStorage.
+ *  Guarded by `_openEpoch` so a slow fetch outlived by a close (or a switch
+ *  to a different notebook) can't clobber fresher state on arrival. */
+async function _loadSources() {
+  if (!_state.notebook) return;
+  const epoch = _openEpoch;
+  const nbId = _state.notebook.id;
+  let data;
+  try {
+    data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(nbId)}/sources`);
+  } catch (e) {
+    if (epoch !== _openEpoch) return;
+    _showSourcesError(`Could not load sources (${e.message})`);
+    const box = document.getElementById('nbws-source-list');
+    if (box) box.innerHTML = '';
+    return;
+  }
+  if (epoch !== _openEpoch) return;
+  _showSourcesError('');
+  _state.sources = data.sources || [];
+  const selectable = _selectableIds();
+  const deselected = _loadDeselected(nbId);
+  _state.selection = new Set(selectable.filter(id => !deselected.has(id)));
+  _renderSourceList();
+}
+
+/** Copied from notebooks.js's `_uploadSources` (that copy stays private to
+ *  the now-dead detail view Task 6 removes) — same FormData flow, scoped to
+ *  the workspace's own DOM. */
+async function _uploadSources(fileList) {
+  if (!fileList || !fileList.length || !_state.notebook) return;
+  const zone = document.getElementById('nbws-upload-zone');
+  if (zone) zone.textContent = 'Uploading…';
+  _showSourcesError('');
+
+  const fd = new FormData();
+  for (const file of fileList) fd.append('files', file);
+
+  try {
+    const data = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/sources`,
+      { method: 'POST', body: fd });
+    const failed = Number(data.failed || 0);
+    if (failed > 0) {
+      _showSourcesError(`${failed} file${failed === 1 ? '' : 's'} failed — see the status of each source below`);
+    }
+  } catch (e) {
+    _showSourcesError(`Upload failed (${e.message})`);
+  } finally {
+    if (zone) zone.textContent = _ZONE_IDLE;
+    await _loadSources();
+  }
+}
+
+// Wired once (dataset-flag guard) — the upload zone/select-all checkbox are
+// static chrome inside #nbws-sources-body that persists across opens/closes.
+function _setupUploadZone() {
+  const zone = document.getElementById('nbws-upload-zone');
+  const input = document.getElementById('nbws-file-input');
+  if (!zone || !input || zone.dataset.nbwsWired === '1') return;
+  zone.dataset.nbwsWired = '1';
+
+  zone.addEventListener('click', () => input.click());
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('dragover');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    if (e.dataTransfer && e.dataTransfer.files.length) _uploadSources(e.dataTransfer.files);
+  });
+  input.addEventListener('change', () => {
+    if (input.files.length) {
+      _uploadSources(input.files);
+      input.value = '';
+    }
+  });
+}
+
+function _sourcesPanelSkeleton() {
+  return `
+    <div class="notebook-upload-zone" id="nbws-upload-zone">${_ZONE_IDLE}</div>
+    <input type="file" id="nbws-file-input" multiple style="display:none">
+    <div class="notebook-error" id="nbws-sources-error"></div>
+    <div class="nbws-select-all-row">
+      <label class="memory-bulk-check-all"><input type="checkbox" id="nbws-select-all-cb"> Select all</label>
+      <span class="nbws-source-count" id="nbws-source-count"></span>
+    </div>
+    <div id="nbws-source-list"><div class="dashboard-empty">Loading&hellip;</div></div>`;
+}
+
+// Wired once (dataset-flag guard) — #nbws-sources-body is static chrome that
+// persists across opens/closes; only `_loadSources`/`_renderSourceList` (data,
+// not listeners) run again on every open.
+function _wireSourcesPanel() {
+  const body = document.getElementById('nbws-sources-body');
+  if (!body || body.dataset.nbwsWired === '1') return;
+  body.dataset.nbwsWired = '1';
+  body.innerHTML = _sourcesPanelSkeleton();
+
+  _setupUploadZone();
+
+  document.getElementById('nbws-select-all-cb')?.addEventListener('change', (e) => {
+    const checked = !!e.target.checked;
+    _state.selection = checked ? new Set(_selectableIds()) : new Set();
+    _persistSelection();
+    _renderSourceList();
+  });
 }
 
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks
@@ -224,6 +579,9 @@ async function _openImpl(nb) {
   root.removeAttribute('aria-hidden');
   _bindEscape();
 
+  _wireSourcesPanel();
+  _loadSources();
+
   if (notebooksMod?.isNotebooksOpen?.()) notebooksMod.closeNotebooks();
 }
 
@@ -262,6 +620,11 @@ export function closeNotebookWorkspace() {
   _resetPanel('sources');
   _resetPanel('studio');
 
+  // Stale count must not flash for the next notebook opened — the badge is
+  // static topbar chrome that outlives this close, unlike #nbws-sources-body.
+  const badge = document.getElementById('nbws-source-badge');
+  if (badge) { badge.hidden = true; badge.textContent = ''; }
+
   _unbindEscape();
 
   for (const hook of _closeHooks) {
@@ -278,6 +641,8 @@ const notebookWorkspace = {
   closeNotebookWorkspace,
   isNotebookWorkspaceOpen,
   registerCloseHook,
+  getSourceIdsForChat,
+  EMPTY_SELECTION_MESSAGE,
   _state,
 };
 
