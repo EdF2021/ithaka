@@ -67,7 +67,7 @@ ithaka/
 
 | File | Lines | Concern |
 |------|-------|---------|
-| `static/style.css` | **36,653** | Entire app CSS in one file (tracked separately in #2617) |
+| `static/style.css` | **36,653** | Entire app CSS in one file (tracked separately) |
 | `static/js/document.js` | **9,776** | Single JS file for document functionality |
 | `static/js/slashCommands.js` | 6,498 | |
 | `static/js/settings.js` | 5,266 | |
@@ -76,7 +76,7 @@ ithaka/
 | `static/js/chat.js` | 4,985 | |
 | `static/app.js` | 4,090 | |
 
-**Note**: Frontend modularization is tracked separately in #2617 (CSS) and is not the focus of this Phase 0 inventory. Frontend is listed here for completeness but follow-up slices should target Python backend boundaries first.
+**Note**: Frontend modularization (CSS) is tracked separately and is not the focus of this Phase 0 inventory. Frontend is listed here for completeness but follow-up slices should target Python backend boundaries first.
 
 ---
 
@@ -202,7 +202,7 @@ The 33 `do_*` functions in `tool_implementations.py` fall into natural domain gr
 
 ## 6. Risk Assessment & Candidate Slice Ranking
 
-> **Candidate proposals, not a committed plan.** The rankings, package shapes (e.g. `src/pkg/`, `src/domain/`, `src/infra/`, `src/api/`), split ordering, and route-grouping strategy below are **options for maintainer discussion**. Per #4082/#4071, slice ownership and order are settled by maintainers before any follow-up PR. §1–§3 above are the factual current-state inventory.
+> **Candidate proposals, not a committed plan.** The rankings, package shapes (e.g. `src/pkg/`, `src/domain/`, `src/infra/`, `src/api/`), split ordering, and route-grouping strategy below are **options for maintainer discussion**. Slice ownership and order are settled by maintainers before any follow-up PR. §1–§3 above are the factual current-state inventory.
 
 ### 6.1 Risk Scale
 
@@ -216,13 +216,13 @@ The 33 `do_*` functions in `tool_implementations.py` fall into natural domain gr
 
 | Priority | Target | Risk | Rationale |
 |----------|--------|------|-----------|
-| **1** | `src/tool_implementations.py` → `src/tools/*.py` | **MEDIUM** | 4,032 lines → ~10 files by tool category. Already has natural boundaries. 17 importers, tracked in #3629. Use `__init__.py` shim to keep existing imports working. |
+| **1** | `src/tool_implementations.py` → `src/tools/*.py` | **MEDIUM** | 4,032 lines → ~10 files by tool category. Already has natural boundaries. 17 importers. Use `__init__.py` shim to keep existing imports working. |
 | **2** | `routes/` → domain subdirectories (one domain per PR) | **MEDIUM** | 54 flat files. Done **one domain at a time** (e.g. a standalone PR for the email domain, then chat, …), not a broad reorganization — route modules carry helper imports, registration assumptions, and test import paths. |
-| **3** | `src/agent_loop.py` → `src/agent/loop.py` + submodules | **MEDIUM-HIGH** | 2,961 lines, 24 functions. Can extract prompt building, classification, verification, and runaway detection. Tracked in #3266. |
+| **3** | `src/agent_loop.py` → `src/agent/loop.py` + submodules | **MEDIUM-HIGH** | 2,961 lines, 24 functions. Can extract prompt building, classification, verification, and runaway detection. |
 | **4** | `src/` → `src/pkg/`, `src/domain/`, `src/infra/`, `src/api/` | **MEDIUM** | Structural reorganization. Split flat `src/` into layered packages. Must come after routes and tools are stable. |
 | **5** | `routes/email_*.py` consolidation | **LOW** | Already grouped by filename prefix. Low-risk cleanup within the email domain. |
 | **6** | `core/database.py` → `src/infra/database/models/*.py` | **HIGH** | 28 classes, 102 importers. Highest-risk split. Must be **last** in any sequence. Requires careful import shim strategy. |
-| **7** | Frontend CSS modularization | **MEDIUM** | 36,653 lines. Tracked in #2617. Separate timeline from backend work. |
+| **7** | Frontend CSS modularization | **MEDIUM** | 36,653 lines. Separate timeline from backend work. |
 | **8** | Frontend JS modularization | **MEDIUM** | 9,776 lines in `document.js`. Introduce ES modules at minimum. |
 
 ### 6.3 Candidate First 3 Behavior-Preserving Slices
@@ -233,7 +233,6 @@ The 33 `do_*` functions in `tool_implementations.py` fall into natural domain gr
 - Add `src/tools/__init__.py` re-exporting all symbols with current names
 - Update 17 importers to use new paths (can be deferred via shim)
 - Validation: `python -m pytest tests/ -x -q` + manual smoke test of tool execution
-- Reference: #3629
 
 **Slice 2: Group `routes/` by domain** (one domain per PR, not a broad sweep)
 
@@ -260,7 +259,7 @@ Each PR: add `__init__.py` re-exporting old names, update `app.py` router import
 
 ## 7. Safety Guardrails for Follow-Up Work
 
-Per maintainer guidance in #4082 and #4071:
+Per maintainer guidance:
 
 - [ ] **One domain/slice per PR** — never mix multiple reorganizations
 - [ ] **No behavior changes** mixed with file moves — pure reorganization only
@@ -297,9 +296,9 @@ timeout 5 python app.py 2>&1 | head -5 || true
 
 ## 9. Open Questions
 
-1. Is `#2538` (specs ground truth) the canonical behavior map baseline, and should this inventory be kept in sync with those specs once merged?
+1. Is the specs ground truth the canonical behavior map baseline, and should this inventory be kept in sync with those specs once merged?
 2. Should route grouping follow the domain map proposed here, or is there a different taxonomy preferred by maintainers?
-3. For the `tool_implementations.py` split (#3629), is the tool categorization in §5.2 acceptable, or should it follow a different grouping?
+3. For the `tool_implementations.py` split, is the tool categorization in §5.2 acceptable, or should it follow a different grouping?
 4. Should compatibility shims (`__init__.py`) be temporary (removed in a follow-up wave) or permanent?
 5. Should an ADR (Architecture Decision Record) document be started to track decisions made during this process?
 

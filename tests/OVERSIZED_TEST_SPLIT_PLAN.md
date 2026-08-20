@@ -7,9 +7,7 @@ It does not move files, rewrite assertions, extract helpers, or change CI.
 
 ## Roadmap context
 
-- Issue: #3983
-- Parent tracker: #2523
-- Follows #3973 / #3982, the report-only order-sensitivity diagnostics slice.
+- Follows the report-only order-sensitivity diagnostics slice.
 
 ## Methodology
 
