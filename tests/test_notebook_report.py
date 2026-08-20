@@ -51,6 +51,7 @@ def test_english_kind_labels_complete():
         "faq": "FAQ",
         "quiz": "Quiz",
         "mindmap": "Mindmap",
+        "infographic": "Infographic",
     }
 
 
@@ -130,6 +131,33 @@ def test_report_200_contains_artifact_title(monkeypatch, ts):
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "A Distinctive Artifact Title" in r.text
+
+
+def test_report_uses_artifact_title_over_document_title(monkeypatch, ts):
+    """NotebookArtifact.title, once set (e.g. via rename), must win over the
+    linked Document's title as the report's title fallback — the
+    document_title kwarg passed to generate_notebook_artifact_report is the
+    *effective* title, not always Document.title. See requirement 5/2 of the
+    title-column task."""
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    art_id = _make_artifact(
+        ts, nb_id, kind="faq",
+        title="Document Title (should lose)",
+        content="No heading here, just a question and an answer.",
+    )
+    s = ts()
+    try:
+        row = s.get(db.NotebookArtifact, art_id)
+        row.title = "Artifact Title (should win)"
+        s.commit()
+    finally:
+        s.close()
+
+    r = c.get(f"/api/notebooks/{nb_id}/artifacts/{art_id}/report")
+    assert r.status_code == 200
+    assert "Artifact Title (should win)" in r.text
+    assert "Document Title (should lose)" not in r.text
 
 
 def test_report_embeds_document_content(monkeypatch, ts):

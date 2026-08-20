@@ -3,6 +3,7 @@
 import logging
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -22,6 +23,7 @@ from src.notebook_audio import (
     set_synthesizer,
     start_podcast_job,
 )
+from src.notebook_infographic import generate_infographic
 from src.notebook_ingest import ingest_notebook_file
 from src.notebook_report import generate_notebook_artifact_report
 from src.notebook_suggest import suggest_questions
@@ -67,6 +69,17 @@ def _unlink_podcast_audio(audio_path: Optional[str]) -> None:
         path.unlink(missing_ok=True)
     except Exception as exc:
         logger.warning("Could not remove podcast audio %s: %s", audio_path, exc)
+
+
+def _artifact_dict_with_title(artifact, document_title):
+    """Enrich an artifact's to_dict() with the effective title: the
+    artifact's own (renamable) title if set, else the linked Document's
+    title. `document_title` may be None (see test_list_artifacts_title_none_
+    safe_when_document_missing) — that stays a safe fallback to None, same
+    as before this column existed."""
+    d = artifact.to_dict()
+    d["title"] = artifact.title or document_title
+    return d
 
 
 def _get_owned_notebook(db_session, notebook_id, user):
@@ -294,11 +307,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 .order_by(NotebookArtifact.created_at.desc())
                 .all()
             )
-            artifacts = []
-            for artifact, title in rows:
-                d = artifact.to_dict()
-                d["title"] = title
-                artifacts.append(d)
+            artifacts = [_artifact_dict_with_title(artifact, title) for artifact, title in rows]
             return {"artifacts": artifacts}
         finally:
             db_session.close()
@@ -389,6 +398,45 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         finally:
             db_session.close()
 
+    # ---- PATCH /api/notebooks/{id}/artifacts/{artifact_id} (rename) ----
+    @router.patch("/api/notebooks/{notebook_id}/artifacts/{artifact_id}")
+    async def rename_artifact(request: Request, notebook_id: str, artifact_id: str):
+        user = get_current_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        title = body.get("title") if isinstance(body, dict) else None
+        if not isinstance(title, str):
+            raise HTTPException(status_code=400, detail="title is verplicht")
+        title = title.strip()
+        if not title or len(title) > 200:
+            raise HTTPException(
+                status_code=400, detail="title moet 1-200 tekens zijn (na strip)"
+            )
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            # Outerjoin (not the report endpoint's inner join): an artifact
+            # whose Document was hard-deleted must still be renamable, it
+            # just keeps falling back to None for the enriched title, same
+            # as list_artifacts.
+            row = (
+                db_session.query(NotebookArtifact, Document.title)
+                .outerjoin(Document, Document.id == NotebookArtifact.document_id)
+                .filter(NotebookArtifact.id == artifact_id, NotebookArtifact.notebook_id == nb.id)
+                .first()
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            artifact, document_title = row
+            artifact.title = title
+            db_session.commit()
+            db_session.refresh(artifact)
+            return _artifact_dict_with_title(artifact, document_title)
+        finally:
+            db_session.close()
+
     # ---- GET /api/notebooks/{id}/artifacts/{artifact_id}/report ----
     @router.get("/api/notebooks/{notebook_id}/artifacts/{artifact_id}/report")
     async def get_artifact_report(request: Request, notebook_id: str, artifact_id: str):
@@ -413,12 +461,23 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # nothing for the visual-report template to render.
             if artifact.kind == "podcast":
                 raise HTTPException(status_code=404, detail="No visual report for podcast artifacts")
-            html_content = generate_notebook_artifact_report(
-                notebook_name=nb.name,
-                kind=artifact.kind,
-                document_title=document.title,
-                document_content=document.current_content,
-            )
+            # Infographic gets its own compact poster renderer instead of
+            # the shared long-form editorial template — see
+            # src/notebook_infographic.py's module docstring for why.
+            if artifact.kind == "infographic":
+                html_content = generate_infographic(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            else:
+                html_content = generate_notebook_artifact_report(
+                    notebook_name=nb.name,
+                    kind=artifact.kind,
+                    document_title=artifact.title or document.title,
+                    document_content=document.current_content,
+                )
             return HTMLResponse(content=html_content)
         finally:
             db_session.close()

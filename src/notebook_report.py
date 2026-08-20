@@ -26,6 +26,7 @@ ENGLISH_KIND_LABELS = {
     "faq": "FAQ",
     "quiz": "Quiz",
     "mindmap": "Mindmap",
+    "infographic": "Infographic",
 }
 
 

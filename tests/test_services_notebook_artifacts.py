@@ -74,6 +74,36 @@ def test_notebook_artifact_roundtrip():
         s.close()
 
 
+def test_notebook_artifact_title_defaults_to_none():
+    s = _TS()
+    try:
+        nb = make_notebook(s)
+        doc = make_document(s)
+        art = db.NotebookArtifact(id="a-title-none", notebook_id=nb.id, document_id=doc.id, kind="faq")
+        s.add(art)
+        s.commit()
+        d = art.to_dict()
+        assert d["title"] is None
+    finally:
+        s.close()
+
+
+def test_notebook_artifact_title_roundtrip():
+    s = _TS()
+    try:
+        nb = make_notebook(s)
+        doc = make_document(s)
+        art = db.NotebookArtifact(id="a-title-set", notebook_id=nb.id, document_id=doc.id,
+                                  kind="faq", title="Eigen titel")
+        s.add(art)
+        s.commit()
+        reloaded = s.query(db.NotebookArtifact).filter_by(id="a-title-set").one()
+        assert reloaded.title == "Eigen titel"
+        assert reloaded.to_dict()["title"] == "Eigen titel"
+    finally:
+        s.close()
+
+
 def test_artifact_cascade_on_notebook_delete():
     s = _TS()
     try:
@@ -92,6 +122,66 @@ def test_artifact_cascade_on_notebook_delete():
         assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 0
     finally:
         s.close()
+
+
+def test_migrate_add_notebook_artifact_title_column(tmp_path, monkeypatch):
+    """Mirrors test_migrate_add_notebook_artifact_audio_path_column in
+    tests/test_services_notebook_audio_model.py — same tmp_path + raw
+    sqlite3 table_info convention (see that test's module docstring for the
+    precedent this follows: tests/test_session_search.py's FTS migration
+    test)."""
+    import sqlite3
+
+    db_path = tmp_path / "app.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE notebook_artifacts (
+            id TEXT PRIMARY KEY,
+            notebook_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            audio_path VARCHAR,
+            created_at DATETIME,
+            updated_at DATETIME
+        );
+        INSERT INTO notebook_artifacts(id, notebook_id, document_id, kind)
+        VALUES ('a1', 'n1', 'd1', 'faq');
+        """
+    )
+    conn.close()
+
+    monkeypatch.setattr(db, "DATABASE_URL", f"sqlite:///{db_path}")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns_before = [row[1] for row in conn.execute("PRAGMA table_info(notebook_artifacts)")]
+    finally:
+        conn.close()
+    assert "title" not in columns_before
+
+    db._migrate_add_notebook_artifact_title_column()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns_after = [row[1] for row in conn.execute("PRAGMA table_info(notebook_artifacts)")]
+        assert "title" in columns_after
+
+        row = conn.execute("SELECT title FROM notebook_artifacts WHERE id = 'a1'").fetchone()
+        assert row == (None,)
+    finally:
+        conn.close()
+
+    # Idempotent: running it again on an already-migrated DB must not raise.
+    db._migrate_add_notebook_artifact_title_column()
+
+
+def test_migrate_add_notebook_artifact_title_column_missing_db_is_noop(tmp_path, monkeypatch):
+    missing_path = tmp_path / "does-not-exist.db"
+    monkeypatch.setattr(db, "DATABASE_URL", f"sqlite:///{missing_path}")
+
+    # No DB file at all yet (fresh install) — must not raise.
+    db._migrate_add_notebook_artifact_title_column()
 
 
 def test_artifact_cascade_on_document_delete():
@@ -165,12 +255,12 @@ def _user_content(messages):
 
 def test_artifact_kinds_registry_complete():
     assert set(artifacts.ARTIFACT_KINDS) == {
-        "study_guide", "briefing", "faq", "quiz", "mindmap"
+        "study_guide", "briefing", "faq", "quiz", "mindmap", "infographic"
     }
     labels = {k: v["label"] for k, v in artifacts.ARTIFACT_KINDS.items()}
     assert labels == {
         "study_guide": "Studiegids", "briefing": "Briefing", "faq": "FAQ",
-        "quiz": "Quiz", "mindmap": "Mindmap",
+        "quiz": "Quiz", "mindmap": "Mindmap", "infographic": "Infographic",
     }
     for kind, spec in artifacts.ARTIFACT_KINDS.items():
         assert spec["prompt"].strip(), kind
@@ -316,6 +406,9 @@ async def test_generate_creates_document_and_row(monkeypatch):
 
         assert art.kind == "faq"
         assert art.notebook_id == nb.id
+        # The artifact gets its own (renamable) title, seeded from the same
+        # value as the Document's — not left NULL to only ever fall back.
+        assert art.title == "Testboek — FAQ"
         doc = s.get(db.Document, art.document_id)
         assert doc.title == "Testboek — FAQ"
         assert doc.owner == "own"
