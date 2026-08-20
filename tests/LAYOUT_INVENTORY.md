@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Inventory for the first low-risk split of the flat `tests/` directory
-(issue #3712, parent #2523). This document only records *what* should move
+Inventory for the first low-risk split of the flat `tests/` directory.
+This document only records *what* should move
 first and *why*; it moves nothing. The actual move is a separate, mechanical
 PR that relocates the listed files verbatim and changes no test content.
 
@@ -25,7 +25,7 @@ Groups whose tests need no route/app setup and no real DB/session setup:
    No `TestClient`, no FastAPI app import, no SQLite files.
 2. **Helper self-tests** (`area_helpers`) - e.g. `test_helpers_import_state.py`,
    `test_db_stubs_helper.py`. Safe but tiny (two files), and they test the
-   shared helpers from the #3685 audit (merged) that the rest of the suite
+   shared helpers from an earlier audit (merged) that the rest of the suite
    depends on; little payoff as a first slice.
 3. **Pure unit / parsing tests** (`area_unit`) - `*_nonstring.py`,
    `*_nondict.py`, parsing tests. Large and heterogeneous; some touch
@@ -34,10 +34,9 @@ Groups whose tests need no route/app setup and no real DB/session setup:
    `test_docs_no_orphan_images.py`. Safe but tiny and `uncategorized` in the
    taxonomy, so a move buys little and matches no existing marker.
 
-Not candidates for the first move (per #3712 guidance): security/owner-scope
+Not candidates for the first move: security/owner-scope
 tests, route/API tests, DB/session-heavy tests, auth/session concurrency
-tests, and the taxonomy/runner infrastructure tests that changed recently
-(#3491, #3556, #3659, #3711).
+tests, and the taxonomy/runner infrastructure tests that changed recently.
 
 ## Recommended first move
 
@@ -99,7 +98,7 @@ Note: this inventory was refreshed against current `dev` after `tests/test_resea
   make the directory disagree with its marker. It belongs with the security
   group in a later phase.
 - `tests/test_run_focus.py`, `tests/test_taxonomy.py` - taxonomy/runner
-  infrastructure tests, recently changed (#3556, #3659); they also pin
+  infrastructure tests, recently changed; they also pin
   flat-layout paths (e.g. `tests/test_auth_config_lock_concurrency.py` in
   `test_run_focus.py`), so they stay put.
 - Script-like but `uncategorized` files - `test_pr_blocker_audit.py`,

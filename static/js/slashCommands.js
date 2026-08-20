@@ -5268,7 +5268,7 @@ const _ODYSSEY_QUOTES = [
   "A man who has been through bitter experiences and travelled far enjoys even his sufferings after a time.",
   "For a friend with an understanding heart is worth no less than a brother.",
   "The wine urges me on, the bewitching wine, which sets even a wise man to singing and to laughing gently.",
-  "I am Ithaka, son of Laertes, known to all for my cunning. My fame reaches even unto heaven.",
+  "Nothing is sweeter than a man's own country and his parents, however rich his home in a strange land.",
 ];
 
 const _8BALL = [

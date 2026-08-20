@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Ithaka is Ed's private fork of `pewdiepie-archdaemon/odysseus` (detached, no upstream remote): a self-hosted AI workspace (chat/agents, cookbook model serving, deep research, documents, email, notes/tasks/calendar) built on FastAPI + a vanilla-JS frontend. AGPL-3.0. Branch model: `dev` is the default working branch, `main` is the curated/stable branch — PRs target `dev`.
+Ithaka is Ed's self-hosted AI workspace (chat/agents, cookbook model serving, deep research, documents, email, notes/tasks/calendar) built on FastAPI + a vanilla-JS frontend, at `EdF2021/ithaka` (public). It started as a fork but is fully detached — no upstream remote; origin and third-party credits live in `ACKNOWLEDGMENTS.md`. AGPL-3.0. Branch model: `dev` is the default working branch, `main` is the curated/stable branch — PRs target `dev`.
 
 Session logs live in `docs/sessions/` — read the most recent one before starting substantial work. Operational guides (setup, backup/restore, security CI, PR-blocker audit) live in `docs/`; a deeper runtime/manager inventory lives in `specs/architecture-runtime-inventory.md`.
 

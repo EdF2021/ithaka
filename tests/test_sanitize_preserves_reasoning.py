@@ -3,8 +3,6 @@
 Providers like Moonshot (Kimi K2.5/K2.6) require reasoning_content on
 assistant tool-call messages. Stripping it causes HTTP 400 in multi-turn
 tool calling when thinking mode is enabled.
-
-See: https://github.com/pewdiepie-archdaemon/ithaka/issues/3118
 """
 import sys
 from unittest.mock import MagicMock
