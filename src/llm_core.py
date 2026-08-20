@@ -1265,7 +1265,7 @@ def _provider_headers(provider: str, headers: Optional[Dict] = None) -> Dict[str
     if isinstance(headers, dict):
         h.update(headers)
     if provider == "openrouter":
-        h.setdefault("HTTP-Referer", "https://github.com/pewdiepie-archdaemon/ithaka")
+        h.setdefault("HTTP-Referer", "https://github.com/EdF2021/ithaka")
         h.setdefault("X-OpenRouter-Title", "Ithaka")
     if provider == "copilot":
         # Ensure the Copilot-required headers are present even when the caller
