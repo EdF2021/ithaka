@@ -479,12 +479,18 @@ function _renderSourceList() {
 
 async function _deleteSource(sourceId) {
   if (!_state.notebook) return;
+  // Same `_openEpoch` guard as _loadSources: the error line is part of the
+  // shared, persistent panel, so a delete that resolves after a switch must
+  // not report notebook A's failure into notebook B's UI.
+  const epoch = _openEpoch;
   try {
     await _fetchJson(
       `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/sources/${encodeURIComponent(sourceId)}`,
       { method: 'DELETE' });
+    if (epoch !== _openEpoch) return;
     _showSourcesError('');
   } catch (e) {
+    if (epoch !== _openEpoch) return;
     _showSourcesError(`Remove failed (${e.message})`);
     return;
   }
@@ -529,19 +535,27 @@ async function _uploadSources(fileList) {
   const fd = new FormData();
   for (const file of fileList) fd.append('files', file);
 
+  // Guarded like _loadSources: an upload outlived by a switch must not write
+  // its result — or reset the idle zone text — into the next notebook's panel.
+  const epoch = _openEpoch;
   try {
     const data = await _fetchJson(
       `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/sources`,
       { method: 'POST', body: fd });
     const failed = Number(data.failed || 0);
-    if (failed > 0) {
+    if (epoch === _openEpoch && failed > 0) {
       _showSourcesError(`${failed} file${failed === 1 ? '' : 's'} failed — see the status of each source below`);
     }
   } catch (e) {
-    _showSourcesError(`Upload failed (${e.message})`);
+    if (epoch === _openEpoch) _showSourcesError(`Upload failed (${e.message})`);
   } finally {
+    // The zone text resets unconditionally: #nbws-upload-zone is injected once
+    // (_wireSourcesPanel is wired-once) and never re-rendered on open, so a
+    // guarded reset would strand "Uploading…" in the panel after a switch.
     if (zone) zone.textContent = _ZONE_IDLE;
-    await _loadSources();
+    // The reload is guarded — after a switch, _openImpl already loaded the new
+    // notebook's sources, so this would only fire a duplicate fetch.
+    if (epoch === _openEpoch) await _loadSources();
   }
 }
 
@@ -1046,12 +1060,16 @@ function _startArtifactRename(row) {
 
 async function _deleteArtifact(artifactId) {
   if (!_state.notebook) return;
+  // Guarded like _loadArtifacts — the error line is shared panel chrome.
+  const epoch = _openEpoch;
   try {
     await _fetchJson(
       `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artifactId)}`,
       { method: 'DELETE' });
+    if (epoch !== _openEpoch) return;
     _showArtifactError('');
   } catch (e) {
+    if (epoch !== _openEpoch) return;
     _showArtifactError(`Delete failed (${e.message})`);
     return;
   }
@@ -1065,16 +1083,20 @@ async function _generateArtifact(kind, btn) {
   if (btn) btn.disabled = true;
   if (label) label.textContent = 'Generating…';
   _showArtifactError('');
+  const epoch = _openEpoch;
   try {
     await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind }),
     });
-    await _loadArtifacts();
+    if (epoch === _openEpoch) await _loadArtifacts();
   } catch (e) {
-    _showArtifactError(`Could not generate (${e.message})`);
+    if (epoch === _openEpoch) _showArtifactError(`Could not generate (${e.message})`);
   } finally {
+    // Button and label reset unconditionally: both live in the wired-once
+    // studio panel, so a guarded reset would leave the button disabled and
+    // stuck on "Generating…" for whichever notebook is on screen next.
     if (btn) btn.disabled = false;
     if (label && original != null) label.textContent = original;
   }
@@ -1358,6 +1380,17 @@ async function _openImpl(nb) {
   // — don't clobber it with stale state, and don't close a modal a fresher
   // call may already be relying on staying open.
   if (epoch !== _openEpoch) return;
+
+  // Switching to a *different* notebook supersedes any in-flight podcast poll:
+  // it belongs to the notebook we're leaving, and the studio panel it paints
+  // into is a shared singleton wired once (see _wireStudioPanel). Without this
+  // the pending row and the disabled generate button follow the user into the
+  // new notebook. closeNotebookWorkspace has always done this via its close
+  // hook — but the notebooks picker switches workspaces by calling open()
+  // again, never close(), so that hook doesn't fire on this path.
+  // Re-opening the SAME notebook keeps the poll: _loadArtifacts below repaints
+  // the list and the next tick restores the pending row, so progress survives.
+  if (_state.notebook && _state.notebook.id !== nb.id) _stopPodcastPoll();
 
   _state.notebook = nb;
   _state.sources = [];
