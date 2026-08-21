@@ -1270,3 +1270,38 @@ def test_cleanup_empty_directory_removes_nothing(monkeypatch, tmp_path):
     removed, freed = audio.cleanup_orphaned_audio(_TS, max_age_seconds=3600)
 
     assert (removed, freed) == (0, 0)
+
+
+# --- Event-loop hygiene in the podcast job ---------------------------------
+#
+# The generate loop already offloads the blocking TTS call with
+# asyncio.to_thread. The WAV write next to it does the same kind of blocking
+# work (megabytes to disk per segment, tens of segments per job) and stalls the
+# whole app for every user if it runs inline on the loop. Source-text assertion
+# because driving the real job here would need a live TTS backend.
+
+def _generate_body() -> str:
+    src = (Path(__file__).resolve().parent.parent / "src" / "notebook_audio.py").read_text(
+        encoding="utf-8"
+    )
+    start = src.index("writer = _StreamingWavConcat(temp_path)")
+    return src[start:src.index("if writer.total_frames == 0", start)]
+
+
+def test_wav_writes_are_offloaded_to_a_thread_like_the_tts_call():
+    body = _generate_body()
+    assert "await asyncio.to_thread(writer.add_segment" in body, (
+        "add_segment writes WAV frames straight to disk; running it inline "
+        "blocks the event loop for the whole job's duration"
+    )
+    assert "await asyncio.to_thread(writer.close" in body, (
+        "close() rewrites the WAV header (seek + write) and belongs off the loop too"
+    )
+
+
+def test_writer_is_still_closed_on_the_failure_path():
+    """The offload must not move close() out of `finally` — a failed segment
+    still has to release the handle before the temp file is unlinked."""
+    body = _generate_body()
+    assert "finally:" in body
+    assert body.index("finally:") < body.index("asyncio.to_thread(writer.close")

@@ -132,11 +132,23 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
     @router.post("/api/notebooks")
     async def create_notebook(request: Request):
         user = get_current_user(request)
-        body = await request.json()
-        name = (body.get("name") or "").strip()
+        # Same body posture as create_artifact/rename_artifact: malformed JSON
+        # and non-string field types are client errors (400), not 500s. Without
+        # the isinstance guards, {"name": 123} raises AttributeError on .strip()
+        # and a dict/list description reaches SQLite as an unbindable type.
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
+        name = body.get("name")
+        name = name.strip() if isinstance(name, str) else ""
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
         description = body.get("description")
+        if description is not None and not isinstance(description, str):
+            raise HTTPException(status_code=400, detail="description must be a string")
         db_session = SessionLocal()
         try:
             nb = Notebook(id=str(uuid.uuid4()), owner=user, name=name, description=description)
@@ -151,17 +163,28 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
     @router.patch("/api/notebooks/{notebook_id}")
     async def update_notebook(request: Request, notebook_id: str):
         user = get_current_user(request)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
         db_session = SessionLocal()
         try:
             nb = _get_owned_notebook(db_session, notebook_id, user)
             if "name" in body:
-                name = (body.get("name") or "").strip()
+                name = body.get("name")
+                name = name.strip() if isinstance(name, str) else ""
                 if not name:
                     raise HTTPException(status_code=400, detail="name cannot be empty")
                 nb.name = name
             if "description" in body:
-                nb.description = body.get("description")
+                description = body.get("description")
+                if description is not None and not isinstance(description, str):
+                    raise HTTPException(
+                        status_code=400, detail="description must be a string"
+                    )
+                nb.description = description
             if "archived" in body:
                 nb.archived = bool(body.get("archived"))
             db_session.commit()
@@ -321,6 +344,12 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         except Exception:
             body = None
         kind = body.get("kind") if isinstance(body, dict) else None
+        # ARTIFACT_KINDS is a dict, so an unhashable `kind` (a list or dict
+        # from the request body) raises TypeError on the membership test
+        # below — a 500 where the client sent bad input. Same isinstance
+        # posture as rename_artifact's title check.
+        if not isinstance(kind, str):
+            raise HTTPException(status_code=400, detail=f"Onbekend artifact-type: {kind!r}")
         if kind not in ARTIFACT_KINDS:
             raise HTTPException(status_code=400, detail=f"Onbekend artifact-type: {kind}")
         db_session = SessionLocal()

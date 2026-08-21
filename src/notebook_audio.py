@@ -722,10 +722,18 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
                 # off the event loop it goes, or the whole app stalls for the
                 # job's duration.
                 data = await asyncio.to_thread(synthesize, chunk, voice)
-                writer.add_segment(index, data)
+                # add_segment parses the segment and writes its frames straight
+                # to disk (megabytes per segment, tens of segments per job), so
+                # it stalls the loop for the same reason the synthesize call
+                # above does. Sequential awaits, so no two threads ever touch
+                # the writer's state at once.
+                await asyncio.to_thread(writer.add_segment, index, data)
                 entry["segment"] = index
         finally:
-            writer.close()
+            # close() rewrites the WAV header (seek + write), so it belongs off
+            # the loop too. Kept inside `finally` so a failed segment still
+            # closes the handle before the temp file is unlinked below.
+            await asyncio.to_thread(writer.close)
         if writer.total_frames == 0:
             raise RuntimeError("TTS leverde geen audio (0 frames)")
 

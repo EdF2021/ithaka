@@ -98,6 +98,50 @@ def test_podcast_poll_stops_on_workspace_close():
     assert "_stopPodcastPoll" in _WS
 
 
+def test_podcast_poll_stops_when_switching_to_a_different_notebook():
+    """The notebooks picker switches workspaces by calling open() again, never
+    close(), so the close hook doesn't fire on that path. Without an explicit
+    stop in _openImpl the poll keeps painting notebook A's pending row — and
+    keeps A's generate button disabled — inside notebook B's studio panel,
+    which is a wired-once singleton shared across notebooks."""
+    open_impl = _between(_WS, "async function _openImpl", "\n}\n")
+    assert "_stopPodcastPoll()" in open_impl
+    # Guarded on an actual id change: re-opening the SAME notebook must keep
+    # the poll alive so in-flight progress survives.
+    assert "_state.notebook.id !== nb.id" in open_impl
+
+
+def test_notebook_scoped_handlers_guard_ui_writes_on_open_epoch():
+    """Every handler that writes into the shared, persistent panel chrome after
+    an await must check _openEpoch first — otherwise a delete/upload/generate
+    that resolves after a notebook switch reports the old notebook's result
+    into the new notebook's UI (same bug class as the sessions.js issue #22
+    fix: state captured at moment A, used at moment B)."""
+    for fn in ("_deleteSource", "_uploadSources", "_deleteArtifact", "_generateArtifact"):
+        body = _between(_WS, f"async function {fn}", "\n}\n")
+        assert "const epoch = _openEpoch;" in body, f"{fn} does not capture _openEpoch"
+        # Require the re-check form itself, not just the identifier: a bare
+        # `_openEpoch` anywhere after the first await would also match the
+        # capture line or a comment, so the assertion would pass with no guard
+        # on the write path at all.
+        assert ("epoch !== _openEpoch" in body or "epoch === _openEpoch" in body), (
+            f"{fn} captures _openEpoch but never compares it back"
+        )
+
+
+def test_shared_idle_chrome_resets_unconditionally():
+    """The counterpart to the guard above: controls that must return to an idle
+    state live in the wired-once skeleton and are never re-rendered on open, so
+    guarding THEIR reset would strand 'Uploading…' / a disabled 'Generating…'
+    button in whichever notebook is on screen next."""
+    upload = _between(_WS, "async function _uploadSources", "\n}\n")
+    assert "if (zone) zone.textContent = _ZONE_IDLE;" in upload.split("finally", 1)[1]
+    gen = _between(_WS, "async function _generateArtifact", "\n}\n")
+    finally_block = gen.split("finally", 1)[1]
+    assert "if (btn) btn.disabled = false;" in finally_block
+    assert "label.textContent = original;" in finally_block
+
+
 # ── Task 7: mobile (<=700px) tabs ────────────────────────────────────────────
 
 def test_mobile_tabbar_exists():

@@ -137,3 +137,68 @@ def test_delete_source_removes_row_but_not_document(monkeypatch, ts):
         assert s.get(db.Document, doc_id) is not None
     finally:
         s.close()
+
+
+# --- Malformed-body regression: client errors must be 400, never 500 ---
+#
+# create_notebook/update_notebook originally did a bare `await request.json()`
+# and assumed str fields, unlike their sister endpoints (create_artifact,
+# rename_artifact) which already guarded both. A non-str name reached
+# `.strip()` (AttributeError) and a dict/list description reached SQLite as an
+# unbindable type — both surfacing as 500 on plain bad input.
+
+@pytest.mark.parametrize("body", [
+    {"name": 123},
+    {"name": ["a"]},
+    {"name": {"a": 1}},
+    {"name": None},
+])
+def test_create_notebook_non_string_name_is_400(monkeypatch, ts, body):
+    c = _client(monkeypatch)
+    assert c.post("/api/notebooks", json=body).status_code == 400
+
+
+@pytest.mark.parametrize("description", [{"a": 1}, ["x"], 42])
+def test_create_notebook_non_string_description_is_400(monkeypatch, ts, description):
+    c = _client(monkeypatch)
+    r = c.post("/api/notebooks", json={"name": "ok", "description": description})
+    assert r.status_code == 400
+
+
+@pytest.mark.parametrize("raw", [b"not json at all", b"", b"[1,2,3]", b'"a string"'])
+def test_create_notebook_malformed_body_is_400(monkeypatch, ts, raw):
+    c = _client(monkeypatch)
+    r = c.post("/api/notebooks", content=raw,
+               headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+
+
+def test_create_notebook_accepts_null_description(monkeypatch, ts):
+    """None stays valid — the column is nullable and the UI omits the field."""
+    c = _client(monkeypatch)
+    r = c.post("/api/notebooks", json={"name": "ok", "description": None})
+    assert r.status_code == 200
+    assert r.json()["description"] is None
+
+
+@pytest.mark.parametrize("body", [{"name": 7}, {"description": ["x"]}])
+def test_update_notebook_bad_field_types_are_400(monkeypatch, ts, body):
+    c = _client(monkeypatch)
+    nb_id = c.post("/api/notebooks", json={"name": "Thesis"}).json()["id"]
+    assert c.patch(f"/api/notebooks/{nb_id}", json=body).status_code == 400
+
+
+def test_update_notebook_malformed_body_is_400(monkeypatch, ts):
+    c = _client(monkeypatch)
+    nb_id = c.post("/api/notebooks", json={"name": "Thesis"}).json()["id"]
+    r = c.patch(f"/api/notebooks/{nb_id}", content=b"{oops",
+                headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+
+
+def test_update_notebook_clears_description_with_null(monkeypatch, ts):
+    c = _client(monkeypatch)
+    nb_id = c.post("/api/notebooks", json={"name": "N", "description": "d"}).json()["id"]
+    r = c.patch(f"/api/notebooks/{nb_id}", json={"description": None})
+    assert r.status_code == 200
+    assert r.json()["description"] is None

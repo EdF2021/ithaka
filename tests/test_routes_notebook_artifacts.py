@@ -438,3 +438,17 @@ def test_notebook_delete_removes_artifact_documents_but_not_source_documents(mon
         assert s.get(db.NotebookArtifact, art["id"]) is None
     finally:
         s.close()
+
+
+@pytest.mark.parametrize("kind", [[1, 2, 3], {"a": 1}, 7, None, True])
+def test_generate_artifact_unhashable_or_non_string_kind_is_400(monkeypatch, ts, kind):
+    """ARTIFACT_KINDS is a dict, so `kind not in ARTIFACT_KINDS` raises
+    TypeError: unhashable type on a list/dict kind — a 500 on plain bad
+    client input. Every non-str kind must land on the same 400 as an
+    unknown string kind."""
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": kind})
+    assert r.status_code == 400
