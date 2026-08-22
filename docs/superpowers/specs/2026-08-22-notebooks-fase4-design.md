@@ -2,6 +2,10 @@
 
 *2026-08-22 — ontwerp op basis van Ed's referentiescreenshot (Gemini Notebook) en drie parallelle codeverkenningen. Vervolg op `docs/notebooklm-gap-analyse.md` (fase 1–3, alle gemerged).*
 
+> **Status 2026-08-22: alle vier deelprojecten geïmplementeerd en gemerged** —
+> 4a PR #35, 4b PR #37, 4c PR #38, 4d PR #39 (umbrella-issue #36).
+> Sessielog: `docs/sessions/2026-08-22-notebooks-fase4.md`.
+
 ## Doel
 
 De notebook-werkruimte functioneel en structureel gelijktrekken met Google's Gemini Notebook
