@@ -64,9 +64,29 @@ webbronnen, 3 gate-tests, static-JS-pins.
   opent wél de werkruimte). Workspace via `openNotebookWorkspace(nb)`
   (notebook-object, niet id).
 
+## Deploy-verificatie productie (:7000, 2026-08-22 avond)
+
+- `docker compose up -d --build`: image met ffmpeg + fonts-dejavu-core
+  gebouwd; `docker exec … which ffmpeg` → `/usr/bin/ffmpeg`, 8
+  DejaVu-fonts.
+- Desktop-browser (tijdelijk account `smoketest-claude`): werkruimte met
+  11-tegel-grid, webbron-zoek → 5 SearXNG-resultaten → "Toevoegen" →
+  `Ithaka The Poetry Foundation.md` **indexed**; video-generatie
+  end-to-end op prod (fasen script→…→compose 5 segmenten) → mp4 89s,
+  1280×720, h264+aac (ffprobe), afspelen + seek in `<video>` OK;
+  DB-rij `notebook_artifacts.video_path` matcht bestand.
+- Mobiel 360×800 (chrome-devtools `emulate`): tab-bar
+  Sources/Chat/Studio, tegel-grid 2 koloms, videoplayer binnen
+  viewport, zoekbalk + bronnenlijst OK. Console: alleen pre-existing
+  polls (404 research/stream_status, 403 cookbook/state voor
+  non-admin) — geen fase-4-fouten.
+- Remote: tailscale-node online; https://ithaka.tailb21d35.ts.net/login
+  → 200 (via `--resolve` wegens bekende WSL-DNS-gotcha).
+- Opgeruimd na verificatie: smoke-notebook (incl. mp4 via het
+  delete-cleanup-pad) en het tijdelijke account.
+
 ## Open / vervolg
 
-- Productie-stack op :7000 rebuilden (image bevat nu ffmpeg) + live-check.
 - Pre-existing: mobiel notebook-dialoog → chatsessie i.p.v. werkruimte
   (kandidaat voor eigen issue).
 - Gemini-features bewust niet gedaan: Delen/Analytics, "Opslaan in
