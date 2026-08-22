@@ -25,6 +25,7 @@ from src.notebook_audio import (
 )
 from src.notebook_flashcards import generate_flashcards
 from src.notebook_infographic import generate_infographic
+from src.notebook_slides import generate_slide_deck
 from src.notebook_ingest import ingest_notebook_file
 from src.notebook_report import generate_notebook_artifact_report
 from src.notebook_suggest import suggest_questions
@@ -494,7 +495,16 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # Infographic gets its own compact poster renderer instead of
             # the shared long-form editorial template — see
             # src/notebook_infographic.py's module docstring for why.
-            if artifact.kind == "flashcards":
+            if artifact.kind == "slide_deck":
+                # Slides are an interaction (navigate, notes toggle) — own
+                # viewer template, same reasoning as flashcards/infographic.
+                html_content = generate_slide_deck(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            elif artifact.kind == "flashcards":
                 # Flip cards are an interaction, not a long-form read — own
                 # compact template, same reasoning as the infographic below.
                 html_content = generate_flashcards(
