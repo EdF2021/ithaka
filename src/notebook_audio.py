@@ -113,6 +113,22 @@ Inhoud en lengte:
 - Het is gesproken tekst: volledige zinnen, geen opsommingen, geen verwijzingen naar "hierboven" of "dit document"."""
 
 
+# How many times the script call may be made before the job gives up. The
+# first attempt is the plain prompt; every later one carries the correction
+# below. Three is the ceiling because each attempt re-sends the full 60k-char
+# source context, and a model that misses the format three times running is
+# not going to hit it on the fourth.
+_SCRIPT_FORMAT_ATTEMPTS = 3
+
+_SCRIPT_FORMAT_CORRECTION = (
+    "Je vorige antwoord bevatte geen enkele regel die met \"S1: \" of \"S2: \" "
+    "begint, dus het is onbruikbaar als podcastscript. Geef het script opnieuw "
+    "en houd je exact aan het formaat: elke regel begint met \"S1: \" of "
+    "\"S2: \", afwisselend, en verder staat er niets in je antwoord — geen "
+    "inleiding, geen samenvatting, geen kopjes, geen markdown."
+)
+
+
 # --------------------------------------------------------------------------
 # Script parsing
 # --------------------------------------------------------------------------
@@ -509,6 +525,9 @@ _JOB_EVICT_AFTER_SECONDS = 1800
 _PUBLIC_JOB_FIELDS = (
     "status", "phase", "segment", "total", "error", "artifact",
     "notebook_id", "started_at",
+    # A retried script phase is otherwise a silent 2-3x longer "Writing
+    # script…"; the poll surfaces the attempt so the UI can show it.
+    "script_attempt",
 )
 
 
@@ -674,10 +693,44 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
     # workload="foreground" tells the local-model slot in src/llm_core.py the
     # same thing, so a local endpoint does not wait on has_foreground_activity()
     # either. Same semantics as deep research and as Fase 2's generate_artifact.
-    script = await task_llm_call_async(
-        messages, owner=owner, wait_for_quiet=False, workload="foreground"
-    )
-    turns = parse_dialogue(script or "")
+    #
+    # The format is strict (every line must start with "S1: " or "S2: ") but
+    # the model's compliance is not: with 60k characters of source text ahead
+    # of it, a weaker model — or whichever model the endpoint fallback chain
+    # lands on when the primary errors — sometimes answers with a prose summary
+    # instead of a dialogue. Measured on a real notebook: one attempt returned
+    # 0 speaker lines, the very next returned 38. Failing the whole job on a
+    # single bad roll wastes the user's wait for a retry the job can do itself,
+    # so give it a corrective nudge and try again. The nudge carries the failed
+    # output back so the model can see what it did wrong.
+    turns: list[tuple[str, str]] = []
+    last_error: Optional[RuntimeError] = None
+    attempt_messages = list(messages)
+    for attempt in range(_SCRIPT_FORMAT_ATTEMPTS):
+        entry["script_attempt"] = attempt + 1
+        script = await task_llm_call_async(
+            attempt_messages, owner=owner, wait_for_quiet=False, workload="foreground"
+        )
+        try:
+            turns = parse_dialogue(script or "")
+            break
+        except RuntimeError as exc:
+            last_error = exc
+            if attempt == _SCRIPT_FORMAT_ATTEMPTS - 1:
+                break
+            logger.warning(
+                "Podcast script attempt %d/%d had no S1:/S2: lines; retrying "
+                "with a format correction",
+                attempt + 1, _SCRIPT_FORMAT_ATTEMPTS,
+            )
+            attempt_messages = messages + [
+                {"role": "assistant", "content": (script or "")[:2000]},
+                {"role": "user", "content": _SCRIPT_FORMAT_CORRECTION},
+            ]
+    if not turns:
+        raise last_error or RuntimeError(
+            "Het model leverde geen bruikbaar dialoogscript op"
+        )
 
     # ── phase: tts ──
     voice_a, voice_b = resolve_voices()

@@ -1118,7 +1118,14 @@ function _podcastPendingRowHtml(text) {
 }
 
 function _podcastPhaseText(status) {
-  if (status.phase === 'script') return 'Writing script…';
+  if (status.phase === 'script') {
+    // A script_attempt > 1 means the model's first draft wasn't a usable
+    // dialogue and the job is having another go — surface it so the longer
+    // wait reads as progress, not a hang.
+    return status.script_attempt > 1
+      ? `Rewriting script… (attempt ${status.script_attempt})`
+      : 'Writing script…';
+  }
   if (status.phase === 'tts') {
     const seg = status.segment != null ? status.segment : '?';
     const total = status.total != null ? status.total : '?';
