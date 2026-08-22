@@ -273,6 +273,21 @@ def test_infographic_generate_button_exists_with_english_label():
 
 # ── Task: fase-4a studio tiles + flashcards/data_table ───────────────────
 
+def test_video_tile_and_job_flow_registered_client_side():
+    labels = _between(_WS, "const KIND_LABELS = {", "\n};")
+    assert "video: 'Video'," in labels
+    skeleton = _between(_WS, "function _studioPanelSkeleton", "\n}\n")
+    assert 'class="nbws-tile notebook-video-gen-btn nbws-tile--video"' in skeleton
+    # Video rows toggle their player panel, never the report path; the poll
+    # must have its own close-hook so no stale loop outlives the workspace.
+    handler = _between(_WS, "row.addEventListener('click'", "\n    });")
+    assert "_toggleVideoPanel(row)" in handler
+    assert "registerCloseHook(_stopVideoPoll);" in _WS
+    assert "notebook-video-gen-btn" in _WS
+    icons = _between(_WS, "const _KIND_ICONS = {", "\n};")
+    assert "video: '<svg" in icons
+
+
 def test_slide_deck_kind_registered_client_side_as_first_tile():
     kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
     assert kinds.split("[", 1)[-1].strip().startswith("'slide_deck'")

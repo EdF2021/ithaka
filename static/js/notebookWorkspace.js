@@ -840,6 +840,7 @@ const KIND_LABELS = {
   flashcards: 'Flashcards',
   data_table: 'Data table',
   podcast: 'Podcast',
+  video: 'Video',
 };
 
 // Per-kind studio-tile icons — 14px monochrome outline SVGs (stroke:
@@ -847,6 +848,7 @@ const KIND_LABELS = {
 // emoji, per repo convention). Podcast included: its tile renders first
 // in the grid even though it generates through its own job flow.
 const _KIND_ICONS = {
+  video: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="14" height="14" rx="2"/><polygon points="22 7 16 12 22 17 22 7"/></svg>',
   slide_deck: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/></svg>',
   podcast: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>',
   mindmap: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2.5"/><circle cx="4.5" cy="5" r="2"/><circle cx="19.5" cy="5" r="2"/><circle cx="4.5" cy="19" r="2"/><circle cx="19.5" cy="19" r="2"/><line x1="10.2" y1="10.4" x2="6" y2="6.3"/><line x1="13.8" y1="10.4" x2="18" y2="6.3"/><line x1="10.2" y1="13.6" x2="6" y2="17.7"/><line x1="13.8" y1="13.6" x2="18" y2="17.7"/></svg>',
@@ -884,7 +886,7 @@ function _artifactRow(a) {
   // button (Task B requirement 3) — it always routes through the existing
   // _openArtifact doc-viewer path, independent of what the row's own click
   // does (report view for most kinds, the mindmap preview for mindmap).
-  const openSrcBtn = isPodcast ? '' : `
+  const openSrcBtn = (isPodcast || a.kind === 'video') ? '' : `
       <button type="button" class="notebook-artifact-opendoc" data-art-id="${_esc(a.id)}"
               title="Open source document">${_DOC_ICON}</button>`;
   // Rename button lives in the same button group as the open-source-document
@@ -909,6 +911,20 @@ function _artifactRow(a) {
       <button type="button" class="notebook-src-del notebook-artifact-del" data-art-id="${_esc(a.id)}"
               title="Delete artifact">${_CLOSE_ICON}</button>
     </div>`;
+  if (a.kind === 'video') {
+    // Video rows mirror the podcast shape: a sibling panel with the player,
+    // an "Open script" link through the shared _openArtifact path (the
+    // linked Document holds the readable script) and a download link.
+    const videoUrl = `/api/notebook-video/${encodeURIComponent(a.video_path || '')}`;
+    return `${row}
+    <div class="notebook-podcast-panel" id="nbws-video-panel-${_esc(a.id)}" hidden>
+      <video controls preload="metadata" src="${videoUrl}"></video>
+      <div class="notebook-podcast-links">
+        <a href="#" class="notebook-podcast-transcript" data-art-id="${_esc(a.id)}">Open script</a>
+        <a href="${videoUrl}" download="${_esc(title)}.mp4">Download</a>
+      </div>
+    </div>`;
+  }
   if (!isPodcast) return row;
   // Podcast rows get a sibling panel (not nested — the row's own click
   // handler toggles it) with the player, a transcript link that reuses the
@@ -962,6 +978,7 @@ async function _loadArtifacts() {
       if (e.target.closest('.notebook-artifact-rename-input')) return;
       const kind = row.dataset.kind;
       if (kind === 'podcast') { _togglePodcastPanel(row); return; }
+      if (kind === 'video') { _toggleVideoPanel(row); return; }
       // Mindmap keeps its existing preview as the primary click (Task B
       // requirement 3) — every other kind opens the polished visual report
       // Task A's backend renders, in a new tab.
@@ -1016,6 +1033,13 @@ async function _loadArtifacts() {
  *  so this never routes through the shared _openArtifact document-viewer path). */
 function _togglePodcastPanel(row) {
   const panel = document.getElementById(`nbws-podcast-panel-${row.dataset.artId}`);
+  if (panel) panel.hidden = !panel.hidden;
+}
+
+/** Toggle a video row's player/links panel — same sibling-panel shape as
+ *  the podcast one above. */
+function _toggleVideoPanel(row) {
+  const panel = document.getElementById(`nbws-video-panel-${row.dataset.artId}`);
   if (panel) panel.hidden = !panel.hidden;
 }
 
@@ -1250,6 +1274,112 @@ async function _generatePodcast(btn) {
 // re-instantiated per open), so no matching unregister call is needed.
 registerCloseHook(_stopPodcastPoll);
 
+// ---- Video: separate job/polling flow (own endpoint, not /artifacts) ----
+
+// Same shape as _podcastPoll above; one video job per open notebook.
+let _videoPoll = null;
+
+function _videoPendingRowHtml(text) {
+  return `
+    <div class="list-item notebook-artifact-item notebook-podcast-pending" id="nbws-video-pending">
+      <span class="notebook-artifact-kind">${_esc(KIND_LABELS.video)}</span>
+      <span class="grow notebook-artifact-title">${_esc(text)}</span>
+    </div>`;
+}
+
+function _videoPhaseText(status) {
+  const seg = status.segment != null ? status.segment : '?';
+  const total = status.total != null ? status.total : '?';
+  if (status.phase === 'script') {
+    return status.script_attempt > 1
+      ? `Rewriting script… (attempt ${status.script_attempt})`
+      : 'Writing script…';
+  }
+  if (status.phase === 'render') return `Rendering slides… ${seg}/${total}`;
+  if (status.phase === 'tts') return `Generating narration… ${seg}/${total}`;
+  if (status.phase === 'compose') return `Composing video… ${seg}/${total}`;
+  return 'Working…';
+}
+
+function _insertVideoPending(text) {
+  const box = document.getElementById('nbws-artifacts');
+  if (!box) return;
+  const existing = document.getElementById('nbws-video-pending');
+  if (existing) {
+    const titleEl = existing.querySelector('.notebook-artifact-title');
+    if (titleEl) titleEl.textContent = text;
+    return;
+  }
+  if (box.querySelector('.dashboard-empty')) box.innerHTML = '';
+  box.insertAdjacentHTML('afterbegin', _videoPendingRowHtml(text));
+}
+
+function _stopVideoPoll() {
+  if (!_videoPoll) return;
+  clearTimeout(_videoPoll.timer);
+  if (_videoPoll.btn) _videoPoll.btn.disabled = false;
+  _videoPoll = null;
+}
+
+async function _pollVideo() {
+  if (!_videoPoll) return;
+  const { notebookId, jobId } = _videoPoll;
+  let status;
+  try {
+    status = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/video/${encodeURIComponent(jobId)}`);
+  } catch (e) {
+    if (!_videoPoll || _videoPoll.jobId !== jobId) return;
+    _stopVideoPoll();
+    const msg = /^HTTP 404/.test(e.message)
+      ? 'Generation aborted (server restarted)'
+      : `Video failed (${e.message})`;
+    await _loadArtifacts();
+    _showArtifactError(msg);
+    return;
+  }
+  if (!_videoPoll || _videoPoll.jobId !== jobId) return;
+
+  if (status.status === 'done') {
+    _stopVideoPoll();
+    await _loadArtifacts();
+    return;
+  }
+  if (status.status === 'error') {
+    _stopVideoPoll();
+    await _loadArtifacts();
+    _showArtifactError(`Video failed${status.error ? `: ${status.error}` : ''}`);
+    return;
+  }
+
+  _insertVideoPending(_videoPhaseText(status));
+  _videoPoll.timer = setTimeout(_pollVideo, 2000);
+}
+
+async function _generateVideo(btn) {
+  if (!_state.notebook || _videoPoll) return;
+  _showArtifactError('');
+  if (btn) btn.disabled = true;
+
+  let jobId;
+  try {
+    const data = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/video`, { method: 'POST' });
+    jobId = data.job_id;
+  } catch (e) {
+    _showArtifactError(`Could not generate (${e.message})`);
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  _insertVideoPending(_videoPhaseText({ phase: 'script' }));
+  _videoPoll = { notebookId: _state.notebook.id, jobId, timer: null, btn };
+  _pollVideo();
+}
+
+// Same close-hook reasoning as the podcast poll above.
+registerCloseHook(_stopVideoPoll);
+
 /**
  * Open a generated artifact in the document viewer, as an overlay ABOVE the
  * still-open workspace (style.css gives `body.notebook-workspace-open.doc-view
@@ -1323,6 +1453,8 @@ function _studioPanelSkeleton() {
       <div class="notebook-artifact-btns" id="nbws-artifact-btns">
         <button type="button" class="nbws-tile notebook-podcast-gen-btn nbws-tile--podcast" id="nbws-podcast-btn"
                 data-kind="podcast"><span class="nbws-tile-icon">${_KIND_ICONS.podcast}</span><span class="nbws-tile-label">Audio</span></button>
+        <button type="button" class="nbws-tile notebook-video-gen-btn nbws-tile--video" id="nbws-video-btn"
+                data-kind="video"><span class="nbws-tile-icon">${_KIND_ICONS.video}</span><span class="nbws-tile-label">${_esc(KIND_LABELS.video)}</span></button>
         ${ARTIFACT_KINDS.map(kind => `<button type="button" class="nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}"
                 data-kind="${_esc(kind)}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
       </div>
@@ -1349,6 +1481,7 @@ function _wireStudioPanel() {
     btn.addEventListener('click', () => _generateArtifact(btn.dataset.kind, btn));
   });
   document.getElementById('nbws-podcast-btn')?.addEventListener('click', (e) => _generatePodcast(e.currentTarget));
+  document.getElementById('nbws-video-btn')?.addEventListener('click', (e) => _generateVideo(e.currentTarget));
 }
 
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks

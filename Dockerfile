@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux \
     openssh-client \
     gosu \
+    ffmpeg \
+    fonts-dejavu-core \
     libgl1 \
     libglib2.0-0t64 \
     libxcb1 \

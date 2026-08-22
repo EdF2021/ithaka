@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse
 
 import src.notebook_audio as notebook_audio
+import src.notebook_video as notebook_video
 from core.database import Document, SessionLocal, Notebook, NotebookArtifact, NotebookSource
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
@@ -73,6 +74,25 @@ def _unlink_podcast_audio(audio_path: Optional[str]) -> None:
         logger.warning("Could not remove podcast audio %s: %s", audio_path, exc)
 
 
+def _unlink_video_file(video_path: Optional[str]) -> None:
+    """Best-effort removal of a video artifact's mp4. Never raises.
+
+    Same shape and reasoning as _unlink_podcast_audio above, against
+    notebook_video's whitelist regex and directory attribute.
+    """
+    if not isinstance(video_path, str) or not notebook_video.NOTEBOOK_VIDEO_RE.fullmatch(video_path):
+        return
+    try:
+        directory = Path(notebook_video.NOTEBOOK_VIDEO_DIR)
+        root = directory.resolve()
+        path = (directory / video_path).resolve()
+        if os.path.commonpath([str(root), str(path)]) != str(root):
+            return
+        path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Could not remove notebook video %s: %s", video_path, exc)
+
+
 def _artifact_dict_with_title(artifact, document_title):
     """Enrich an artifact's to_dict() with the effective title: the
     artifact's own (renamable) title if set, else the linked Document's
@@ -107,6 +127,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
     # know whether a TTSService exists at all.
     if tts_service is not None:
         set_synthesizer(tts_service.synthesize_voice)
+        notebook_video.set_synthesizer(tts_service.synthesize_voice)
 
     def _remove_notebook_chunks(notebook_id, document_id=None):
         try:
@@ -221,11 +242,13 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # entirely; the relationship cascade below then finds nothing
             # left to do.
             artifact_rows = (
-                db_session.query(NotebookArtifact.document_id, NotebookArtifact.audio_path)
+                db_session.query(NotebookArtifact.document_id, NotebookArtifact.audio_path,
+                                 NotebookArtifact.video_path)
                 .filter_by(notebook_id=nb.id).all()
             )
-            artifact_doc_ids = [doc_id for (doc_id, _audio_path) in artifact_rows]
-            artifact_audio_paths = [audio_path for (_doc_id, audio_path) in artifact_rows if audio_path]
+            artifact_doc_ids = [doc_id for (doc_id, _audio_path, _video_path) in artifact_rows]
+            artifact_audio_paths = [audio_path for (_doc_id, audio_path, _video_path) in artifact_rows if audio_path]
+            artifact_video_paths = [video_path for (_doc_id, _audio_path, video_path) in artifact_rows if video_path]
             if artifact_doc_ids:
                 (db_session.query(NotebookArtifact)
                  .filter_by(notebook_id=nb.id)
@@ -245,6 +268,8 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 pass
             for audio_path in artifact_audio_paths:
                 _unlink_podcast_audio(audio_path)
+            for video_path in artifact_video_paths:
+                _unlink_video_file(video_path)
             return {"success": True}
         finally:
             db_session.close()
@@ -411,6 +436,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # cache — audio_path deserves its own explicit local, not that.
             document_id = artifact.document_id
             audio_path = artifact.audio_path
+            video_path = artifact.video_path
             db_session.delete(artifact)
             db_session.flush()
             if doc is not None:
@@ -425,6 +451,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             except Exception:
                 pass
             _unlink_podcast_audio(audio_path)
+            _unlink_video_file(video_path)
             return {"success": True}
         finally:
             db_session.close()
@@ -490,8 +517,10 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             artifact, document = row
             # Podcasts have no markdown (audio_path, not current_content) —
             # nothing for the visual-report template to render.
-            if artifact.kind == "podcast":
-                raise HTTPException(status_code=404, detail="No visual report for podcast artifacts")
+            if artifact.kind in ("podcast", "video"):
+                # Media artifacts render through their player panel; their
+                # readable script/transcript opens via the linked Document.
+                raise HTTPException(status_code=404, detail="No visual report for media artifacts")
             # Infographic gets its own compact poster renderer instead of
             # the shared long-form editorial template — see
             # src/notebook_infographic.py's module docstring for why.
@@ -643,5 +672,82 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             db_session.close()
 
         return FileResponse(str(path), media_type="audio/wav", headers=NOTEBOOK_AUDIO_HEADERS)
+
+    # ---- POST /api/notebooks/{id}/video ----
+    @router.post("/api/notebooks/{notebook_id}/video")
+    async def create_video(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            # Same validation order as create_podcast: owner-404, then the
+            # user-facing TTS-400, ahead of the job start (which re-checks
+            # owner/bronnen/synthesizer/ffmpeg itself).
+            _get_owned_notebook(db_session, notebook_id, user)
+            if _current_tts_provider() in ("disabled", "browser"):
+                raise HTTPException(status_code=400, detail=_TTS_NOT_CONFIGURED_DETAIL)
+        finally:
+            db_session.close()
+
+        try:
+            job_id = notebook_video.start_video_job(notebook_id, user)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"job_id": job_id, "status": "running"}
+
+    # ---- GET /api/notebooks/{id}/video/{job_id} ----
+    @router.get("/api/notebooks/{notebook_id}/video/{job_id}")
+    async def get_video_status(request: Request, notebook_id: str, job_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+
+        job = notebook_video.get_job(job_id, user)
+        if job is None or job.get("notebook_id") != notebook_id:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        status = job.get("status")
+        error = job.get("error")
+        if status == "cancelled":
+            status = "error"
+            error = error or "Generatie afgebroken"
+        return {
+            "status": status,
+            "phase": job.get("phase"),
+            "segment": job.get("segment"),
+            "total": job.get("total"),
+            "script_attempt": job.get("script_attempt"),
+            "error": error,
+            "artifact": job.get("artifact"),
+        }
+
+    # ---- GET /api/notebook-video/{filename} ----
+    @router.get("/api/notebook-video/{filename}")
+    async def serve_notebook_video(request: Request, filename: str):
+        user = get_current_user(request)
+        path = notebook_video.resolve_notebook_video_path(filename)
+        db_session = SessionLocal()
+        try:
+            row = (
+                db_session.query(Notebook.owner)
+                .join(NotebookArtifact, NotebookArtifact.notebook_id == Notebook.id)
+                .filter(NotebookArtifact.video_path == filename)
+                .first()
+            )
+            if row is None or row[0] != user:
+                raise HTTPException(status_code=404, detail="Video not found")
+        finally:
+            db_session.close()
+
+        # FileResponse serves Range/206 natively, so the <video> element can
+        # seek without any extra work here.
+        return FileResponse(
+            str(path), media_type="video/mp4",
+            headers=notebook_video.NOTEBOOK_VIDEO_HEADERS,
+        )
 
     return router

@@ -22,11 +22,13 @@ MAX_SLIDES = 20
 MAX_BULLETS = 8
 
 
-def extract_slide_deck(content: str) -> dict:
+def extract_slide_deck(content: str, *, require_narration: bool = False) -> dict:
     """Parse and validate model output to {"title", "slides":[...]}.
 
     Raises ValueError (Dutch, fed back to the model on retry) when the JSON
-    fence is missing, malformed, or the schema does not hold.
+    fence is missing, malformed, or the schema does not hold. Each slide
+    keeps an optional "narration" field (spoken voice-over text); with
+    `require_narration=True` (the video pipeline) it must be non-empty.
     """
     m = _JSON_FENCE_RE.search(content or "")
     raw = (m.group(1) if m else (content or "")).strip()
@@ -63,10 +65,18 @@ def extract_slide_deck(content: str) -> dict:
             notes = ""
         if not isinstance(notes, str):
             raise ValueError(f'slide {i}: veld "notes" moet een string zijn')
+        narration = s.get("narration", "")
+        if narration is None:
+            narration = ""
+        if not isinstance(narration, str):
+            raise ValueError(f'slide {i}: veld "narration" moet een string zijn')
+        if require_narration and not narration.strip():
+            raise ValueError(f'slide {i}: veld "narration" ontbreekt of is leeg')
         cleaned.append({
             "title": st.strip(),
             "bullets": [b.strip() for b in bullets if b.strip()],
             "notes": notes.strip(),
+            "narration": narration.strip(),
         })
     return {"title": title.strip(), "slides": cleaned}
 

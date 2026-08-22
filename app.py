@@ -1246,6 +1246,20 @@ async def _startup_event():
 
     _startup_tasks.append(asyncio.create_task(_notebook_audio_janitor_loop()))
 
+    # Notebook-video janitor — same sweep for NOTEBOOK_VIDEO_DIR: stray
+    # `.videojob-*` workdirs and orphaned `<hex>.mp4` files (fase 4c).
+    async def _notebook_video_janitor_loop():
+        await asyncio.sleep(300)
+        while True:
+            try:
+                from src.notebook_video import cleanup_orphaned_video
+                await asyncio.to_thread(cleanup_orphaned_video, SessionLocal)
+            except Exception as e:
+                logger.debug(f"Notebook video janitor skipped: {e}")
+            await asyncio.sleep(3600)
+
+    _startup_tasks.append(asyncio.create_task(_notebook_video_janitor_loop()))
+
     # Nightly skill audit — at ~02:00 local, test + judge a batch of the
     # least-recently-checked skills, auto-fixing/escalating weak ones (never
     # deletes). Rotates through the library so each night covers different
