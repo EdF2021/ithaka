@@ -92,7 +92,7 @@ _TEMPLATE = """<!doctype html>
   .sd-notes {{ display:none; width:min(920px,100%); margin:0 auto 10px; padding:10px 14px; font-size:12px;
                border:1px dashed var(--border); border-radius:8px; opacity:.85; white-space:pre-wrap; }}
   body.show-notes .sd-notes.active {{ display:block; }}
-  nav {{ display:flex; align-items:center; justify-content:center; gap:14px; padding:0 0 16px; }}
+  nav {{ display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; padding:0 10px 16px; }}
   nav button {{ background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:8px;
                 padding:7px 16px; font:inherit; font-size:13px; cursor:pointer; }}
   nav button:hover {{ border-color:var(--accent); }}
