@@ -273,6 +273,13 @@ def test_infographic_generate_button_exists_with_english_label():
 
 # ── Task: fase-4a studio tiles + flashcards/data_table ───────────────────
 
+def test_slide_deck_kind_registered_client_side_as_first_tile():
+    kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
+    assert kinds.split("[", 1)[-1].strip().startswith("'slide_deck'")
+    labels = _between(_WS, "const KIND_LABELS = {", "\n};")
+    assert "slide_deck: 'Slides'," in labels
+
+
 def test_flashcards_and_data_table_kinds_registered_client_side():
     kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
     assert "'flashcards'" in kinds
@@ -292,7 +299,7 @@ def test_studio_tiles_have_per_kind_icon_and_accent_class():
     assert 'nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}' in skeleton
     assert '_KIND_ICONS[kind]' in skeleton
     icons = _between(_WS, "const _KIND_ICONS = {", "\n};")
-    for kind in ("podcast", "mindmap", "briefing", "flashcards", "quiz",
+    for kind in ("podcast", "slide_deck", "mindmap", "briefing", "flashcards", "quiz",
                  "infographic", "data_table", "study_guide", "faq"):
         assert f"{kind}: '<svg" in icons, kind
 

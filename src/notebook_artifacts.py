@@ -25,6 +25,7 @@ import uuid
 
 from core.database import Document, Notebook, NotebookArtifact, NotebookSource
 from src.event_bus import fire_event
+from src.notebook_slides import extract_slide_deck
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
 from src.task_endpoint import task_llm_call_async
 
@@ -207,6 +208,29 @@ Regels:
 - Elke celwaarde moet herleidbaar zijn tot de bronnen; ontbreekt een waarde, schrijf dan een streepje "-", verzin niets.
 - Houd cellen kort: geen volledige zinnen in cellen, toelichting hoort in de sectiekop of de slotregel.
 - Gebruik uitsluitend markdown-tabellen met "|"-syntax; geen HTML-tabellen.""",
+
+    "slide_deck": """Maak een diapresentatie van 6 tot 12 slides die de kern van de bronnen presenteert.
+
+Lever exact één codefence met taalaanduiding "json" en daarin één JSON-object, niets anders. Schema:
+
+{
+  "title": "presentatietitel in de taal van de bronnen",
+  "slides": [
+    {
+      "title": "slidetitel",
+      "bullets": ["punt een", "punt twee"],
+      "notes": "sprekersnotitie van twee tot vier zinnen"
+    }
+  ]
+}
+
+Regels:
+- Alle tekstvelden in de taal van de bronnen.
+- 6 tot 12 slides; de eerste slide introduceert het onderwerp, de laatste vat samen of concludeert.
+- Per slide 2 tot 5 bullets van elk maximaal 12 woorden; geen volledige zinnen met punt erachter.
+- "notes" is de uitgeschreven toelichting die een spreker bij de slide zou vertellen - op zichzelf begrijpelijk.
+- Elk feit moet herleidbaar zijn tot de bronnen; verzin niets.
+- Geen markdown of HTML binnen de JSON-strings; alleen platte tekst.""",
 }
 
 _KIND_LABELS = {
@@ -218,7 +242,17 @@ _KIND_LABELS = {
     "infographic": "Infographic",
     "flashcards": "Flashcards",
     "data_table": "Gegevenstabel",
+    "slide_deck": "Diapresentatie",
 }
+
+# Post-generation format validators: kind -> callable that raises ValueError
+# on a format miss. generate_artifact retries (with the error fed back) up to
+# _VALIDATION_ATTEMPTS times before giving up - same recovery shape as the
+# podcast script-format retry in src/notebook_audio.py.
+_KIND_VALIDATORS = {
+    "slide_deck": extract_slide_deck,
+}
+_VALIDATION_ATTEMPTS = 3
 
 # kind -> {label, prompt}. Insertion order is the order the UI lists them in.
 ARTIFACT_KINDS = {
@@ -414,10 +448,48 @@ async def generate_artifact(
     # workload="foreground" tells the local-model slot this is a synchronous
     # user-facing call, not a genuine background job, so it does not wait on
     # its own request's activity flag.
-    content = await task_llm_call_async(
-        messages, owner=owner, wait_for_quiet=False, workload="foreground"
-    )
-    content = _strip_think_blocks(content or "").strip()
+    validator = _KIND_VALIDATORS.get(kind)
+    content = ""
+    last_error = ""
+    for attempt in range(_VALIDATION_ATTEMPTS):
+        attempt_messages = list(messages)
+        if attempt > 0:
+            # Same shape as the podcast script-format retry (PR #32): feed the
+            # rejected answer plus the validation error back so the model can
+            # correct the format instead of guessing blind.
+            attempt_messages.append({"role": "assistant", "content": content})
+            attempt_messages.append({
+                "role": "user",
+                "content": (
+                    "Je vorige antwoord voldeed niet aan het gevraagde formaat "
+                    f"({last_error}). Lever het antwoord opnieuw, exact volgens de "
+                    "instructie hierboven."
+                ),
+            })
+        content = await task_llm_call_async(
+            attempt_messages, owner=owner, wait_for_quiet=False, workload="foreground"
+        )
+        content = _strip_think_blocks(content or "").strip()
+        if not content:
+            last_error = "leeg antwoord"
+            continue
+        if validator is None:
+            break
+        try:
+            validator(content)
+            break
+        except ValueError as e:
+            last_error = str(e)
+            logger.info(
+                "Artifact %s: formaat-misser op poging %d/%d: %s",
+                kind, attempt + 1, _VALIDATION_ATTEMPTS, last_error,
+            )
+            continue
+    else:
+        raise RuntimeError(
+            f"Het model leverde geen geldig antwoord na {_VALIDATION_ATTEMPTS} pogingen"
+            + (f" ({last_error})" if last_error else "")
+        )
     if not content:
         raise RuntimeError("Het model gaf een leeg antwoord terug")
 

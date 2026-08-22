@@ -29,6 +29,7 @@ ENGLISH_KIND_LABELS = {
     "infographic": "Infographic",
     "flashcards": "Flashcards",
     "data_table": "Data table",
+    "slide_deck": "Slide deck",
 }
 
 
