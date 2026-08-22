@@ -297,3 +297,11 @@ def test_artifact_error_slot_lives_in_files_section_not_generate():
         _WS, 'nbws-studio-section-head">Generate<', 'nbws-studio-section-head">Files<'
     )
     assert 'id="nbws-artifact-error"' not in generate_section
+
+
+def test_podcast_phase_text_surfaces_a_script_retry():
+    """A retried script phase must read as progress, not a hang: the phase-text
+    helper distinguishes script_attempt > 1 from the first attempt."""
+    body = _between(_WS, "function _podcastPhaseText", "\n}\n")
+    assert "script_attempt > 1" in body
+    assert "attempt" in body.lower()

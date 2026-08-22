@@ -1305,3 +1305,145 @@ def test_writer_is_still_closed_on_the_failure_path():
     body = _generate_body()
     assert "finally:" in body
     assert body.index("finally:") < body.index("asyncio.to_thread(writer.close")
+
+
+# ── Script-format retry ──────────────────────────────────────────────────
+#
+# The dialogue format is strict (every line starts with "S1: " or "S2: ") but
+# the model's compliance is not: measured against a real notebook on the
+# running stack, one script call returned 0 speaker lines and the very next
+# returned 38. Before the retry the job died on that single bad roll. These
+# tests drive the real `_generate` — the suite previously only exercised
+# `start_podcast_job`'s validation, so the whole writer loop went untested.
+
+_PROSE = "Dit materiaal bevat een schat aan kennis, ideeen en diensten."
+_DIALOGUE = "S1: Hallo daar.\nS2: Goedendag."
+
+
+class _FakeNotebook:
+    id = "nb-1"
+    name = "Repro"
+    owner = "own"
+
+
+class _FakeSession:
+    """Session stub: _generate only reads one notebook and adds two rows."""
+
+    def query(self, *a, **k):
+        return self
+
+    def filter(self, *a, **k):
+        return self
+
+    def first(self):
+        return _FakeNotebook()
+
+    def add(self, *a, **k):
+        pass
+
+    def commit(self):
+        pass
+
+    def refresh(self, *a, **k):
+        pass
+
+    def close(self):
+        pass
+
+
+def _wire_generate(monkeypatch, tmp_path, scripts):
+    """Point _generate at fakes and hand it `scripts` one call at a time.
+
+    `parse_dialogue` is deliberately NOT stubbed: it is what rejects a bad
+    script, so stubbing it would silently disable the behaviour under test.
+    """
+    monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
+    monkeypatch.setattr(audio, "gather_source_text", lambda nb, s: "Genoeg brontekst.")
+    monkeypatch.setattr(audio, "split_turn", lambda text: [text])
+    monkeypatch.setattr(audio, "resolve_voices", lambda: ("voice-a", "voice-b"))
+    monkeypatch.setattr(audio, "get_synthesizer", lambda: (lambda chunk, voice: _wav(120)))
+
+    seen = {"calls": 0, "corrections": 0}
+
+    async def _fake_llm(messages, owner=None, wait_for_quiet=None, workload=None):
+        if any(audio._SCRIPT_FORMAT_CORRECTION in (m.get("content") or "")
+               for m in messages):
+            seen["corrections"] += 1
+        i = seen["calls"]
+        seen["calls"] += 1
+        return scripts[i] if i < len(scripts) else scripts[-1]
+
+    monkeypatch.setattr(audio, "task_llm_call_async", _fake_llm)
+    return seen
+
+
+def test_script_retry_recovers_from_a_single_format_miss(monkeypatch, tmp_path):
+    seen = _wire_generate(monkeypatch, tmp_path, [_PROSE, _DIALOGUE])
+    entry = {}
+
+    asyncio.run(audio._generate(entry, "nb-1", "own", lambda: _FakeSession()))
+
+    assert seen["calls"] == 2, "the job did not retry after the unusable script"
+    assert seen["corrections"] == 1, "the retry did not carry the format correction"
+    assert entry["status"] == "done"
+    assert entry["script_attempt"] == 2
+    assert entry["artifact"]["kind"] == "podcast"
+
+
+def test_script_retry_survives_two_misses(monkeypatch, tmp_path):
+    seen = _wire_generate(monkeypatch, tmp_path, [_PROSE, _PROSE, _DIALOGUE])
+    entry = {}
+
+    asyncio.run(audio._generate(entry, "nb-1", "own", lambda: _FakeSession()))
+
+    assert seen["calls"] == 3
+    assert entry["status"] == "done"
+
+
+def test_script_retry_gives_up_and_does_not_loop(monkeypatch, tmp_path):
+    """A model that never complies must fail the job, not spend the context
+    budget forever — each attempt re-sends the full source text."""
+    seen = _wire_generate(monkeypatch, tmp_path, [_PROSE])
+    entry = {}
+
+    with pytest.raises(RuntimeError, match="geen bruikbaar dialoogscript"):
+        asyncio.run(audio._generate(entry, "nb-1", "own", lambda: _FakeSession()))
+
+    assert seen["calls"] == audio._SCRIPT_FORMAT_ATTEMPTS == 3
+
+
+def test_a_good_first_script_costs_exactly_one_call(monkeypatch, tmp_path):
+    """The retry must not turn every podcast into three LLM calls."""
+    seen = _wire_generate(monkeypatch, tmp_path, [_DIALOGUE])
+    entry = {}
+
+    asyncio.run(audio._generate(entry, "nb-1", "own", lambda: _FakeSession()))
+
+    assert seen["calls"] == 1
+    assert seen["corrections"] == 0
+    assert entry["script_attempt"] == 1
+
+
+def test_failed_job_leaves_no_audio_file_behind(monkeypatch, tmp_path):
+    """The give-up path must not strand a temp file in the audio dir."""
+    _wire_generate(monkeypatch, tmp_path, [_PROSE])
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(audio._generate({}, "nb-1", "own", lambda: _FakeSession()))
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_get_job_exposes_script_attempt_to_the_poll():
+    """The retry makes the script phase 2-3x longer; the poll must be able to
+    show that instead of a silently frozen "Writing script…"."""
+    assert "script_attempt" in audio._PUBLIC_JOB_FIELDS
+    audio._active_jobs["j1"] = {
+        "owner": "own", "status": "running", "phase": "script",
+        "script_attempt": 2,
+    }
+    try:
+        snap = audio.get_job("j1", "own")
+        assert snap["script_attempt"] == 2
+    finally:
+        audio._active_jobs.pop("j1", None)
