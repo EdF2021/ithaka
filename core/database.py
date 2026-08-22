@@ -801,6 +801,30 @@ def _migrate_add_notebook_artifact_audio_path_column():
             pass
 
 
+def _migrate_add_notebook_source_url_column():
+    """Add `url` to notebook_sources (web-source provenance). Guarded + idempotent."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(notebook_sources)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "url" not in columns:
+            conn.execute("ALTER TABLE notebook_sources ADD COLUMN url VARCHAR")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'url' to notebook_sources")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"notebook_sources.url migration failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _migrate_add_notebook_artifact_video_path_column():
     """Add `video_path` to notebook_artifacts (video-overview mp4 filename). Guarded + idempotent."""
     import sqlite3
@@ -1790,13 +1814,16 @@ class NotebookSource(TimestampMixin, Base):
     status = Column(String, nullable=False, default="indexed")
     chunk_count = Column(Integer, nullable=False, default=0)
     error = Column(Text, nullable=True)
+    # Provenance for web-added sources (fase 4d): the page URL, null for
+    # file uploads.
+    url = Column(String, nullable=True)
 
     def to_dict(self):
         return {
             "id": self.id, "notebook_id": self.notebook_id,
             "document_id": self.document_id, "filename": self.filename,
             "status": self.status, "chunk_count": self.chunk_count,
-            "error": self.error,
+            "error": self.error, "url": self.url,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -2007,6 +2034,7 @@ def init_db():
     _migrate_add_notebook_artifact_audio_path_column()
     _migrate_add_notebook_artifact_title_column()
     _migrate_add_notebook_artifact_video_path_column()
+    _migrate_add_notebook_source_url_column()
     _migrate_add_last_message_at_column()
     _migrate_add_folder_column()
     _migrate_add_token_columns()

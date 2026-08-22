@@ -1,5 +1,6 @@
 """Notebook routes — CRUD for notebooks + per-notebook source upload/removal."""
 
+import asyncio
 import logging
 import os
 import uuid
@@ -7,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, Body, HTTPException, Request, UploadFile, File
 from fastapi.responses import FileResponse, HTMLResponse
 
 import src.notebook_audio as notebook_audio
@@ -27,7 +28,7 @@ from src.notebook_audio import (
 from src.notebook_flashcards import generate_flashcards
 from src.notebook_infographic import generate_infographic
 from src.notebook_slides import generate_slide_deck
-from src.notebook_ingest import ingest_notebook_file
+from src.notebook_ingest import ingest_notebook_file, ingest_notebook_url
 from src.notebook_report import generate_notebook_artifact_report
 from src.notebook_suggest import suggest_questions
 from src.settings import load_settings
@@ -319,6 +320,60 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             return {"sources": [s.to_dict() for s in results], "failed": failed}
         finally:
             db_session.close()
+
+    # ---- POST /api/notebooks/{id}/sources/url ----
+    @router.post("/api/notebooks/{notebook_id}/sources/url")
+    async def add_source_from_url(request: Request, notebook_id: str,
+                                  body: dict = Body(...)):
+        """Fetch one web page and ingest it as a source (fase 4d).
+
+        One URL per call — the fetch+embed runs synchronously in this
+        request (same cost profile as a file upload), so the frontend adds
+        results one "Toevoegen" click at a time.
+        """
+        user = get_current_user(request)
+        url = (body.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="Ongeldige URL")
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            # The fetch (network I/O, seconds) must not block the event loop.
+            src = await asyncio.to_thread(
+                ingest_notebook_url, nb.id, user, url, rag_manager, db_session
+            )
+            return {"source": src.to_dict()}
+        finally:
+            db_session.close()
+
+    # ---- POST /api/notebooks/{id}/source-search ----
+    @router.post("/api/notebooks/{notebook_id}/source-search")
+    async def search_web_sources(request: Request, notebook_id: str,
+                                 body: dict = Body(...)):
+        """Light web search (configured provider, no page fetches) so the
+        sources panel can offer results to add as sources."""
+        user = get_current_user(request)
+        query = (body.get("query") or "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="Lege zoekopdracht")
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+        try:
+            # Import from services.search (NOT the divergent src/search
+            # duplicate — see the fase-4 design doc's verkenning).
+            from services.search.core import searxng_search_results
+            results = await asyncio.to_thread(searxng_search_results, query)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Zoeken mislukt: {exc}")
+        slim = [
+            {"title": r.get("title") or r.get("url"), "url": r.get("url"),
+             "snippet": (r.get("snippet") or "")[:300]}
+            for r in (results or []) if r.get("url")
+        ][:8]
+        return {"results": slim}
 
     # ---- DELETE /api/notebooks/{id}/sources/{source_id} ----
     @router.delete("/api/notebooks/{notebook_id}/sources/{source_id}")

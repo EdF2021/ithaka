@@ -588,6 +588,11 @@ function _setupUploadZone() {
 
 function _sourcesPanelSkeleton() {
   return `
+    <div class="nbws-web-search">
+      <input type="text" id="nbws-web-search-input" placeholder="Zoek bronnen op internet&hellip;">
+      <button type="button" class="dashboard-action-btn" id="nbws-web-search-btn">Zoek</button>
+    </div>
+    <div id="nbws-web-search-results" hidden></div>
     <div class="notebook-upload-zone" id="nbws-upload-zone">${_ZONE_IDLE}</div>
     <input type="file" id="nbws-file-input" multiple style="display:none">
     <div class="notebook-error" id="nbws-sources-error"></div>
@@ -596,6 +601,86 @@ function _sourcesPanelSkeleton() {
       <span class="nbws-source-count" id="nbws-source-count"></span>
     </div>
     <div id="nbws-source-list"><div class="dashboard-empty">Loading&hellip;</div></div>`;
+}
+
+// ---- Web sources (fase 4d): search + add-as-source ------------------------
+
+function _webResultRow(r, i) {
+  let domain = '';
+  try { domain = new URL(r.url).hostname; } catch (_) { /* leave empty */ }
+  return `
+    <div class="list-item nbws-web-result" data-idx="${i}">
+      <div class="grow nbws-web-result-main">
+        <span class="nbws-web-result-title">${_esc(r.title || r.url)}</span>
+        <span class="dashboard-row-sub nbws-web-result-domain">${_esc(domain)}</span>
+      </div>
+      <button type="button" class="dashboard-action-btn nbws-web-add" data-url="${_esc(r.url)}">${_PLUS_ICON}<span>Toevoegen</span></button>
+    </div>`;
+}
+
+async function _runWebSearch() {
+  if (!_state.notebook) return;
+  const input = document.getElementById('nbws-web-search-input');
+  const box = document.getElementById('nbws-web-search-results');
+  const query = (input?.value || '').trim();
+  if (!query || !box) return;
+  box.hidden = false;
+  box.innerHTML = '<div class="dashboard-empty">Searching&hellip;</div>';
+  let data;
+  try {
+    data = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/source-search`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }) });
+  } catch (e) {
+    box.innerHTML = `<div class="dashboard-empty">Search failed (${_esc(e.message)})</div>`;
+    return;
+  }
+  const results = data.results || [];
+  if (!results.length) {
+    box.innerHTML = '<div class="dashboard-empty">No results.</div>';
+    return;
+  }
+  box.innerHTML = results.map(_webResultRow).join('');
+  box.querySelectorAll('.nbws-web-add').forEach(btn => {
+    btn.addEventListener('click', () => _addWebSource(btn));
+  });
+}
+
+async function _addWebSource(btn) {
+  if (!_state.notebook) return;
+  const url = btn.dataset.url;
+  btn.disabled = true;
+  const label = btn.querySelector('span');
+  const original = label ? label.textContent : null;
+  if (label) label.textContent = 'Adding…';
+  try {
+    const data = await _fetchJson(
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/sources/url`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }) });
+    const failed = data.source && data.source.status !== 'indexed';
+    if (label) label.textContent = failed ? 'Failed' : 'Added';
+    if (failed && btn) btn.disabled = false;
+    await _loadSources();
+  } catch (e) {
+    if (label && original != null) label.textContent = original;
+    btn.disabled = false;
+    _showSourcesError(`Could not add source (${e.message})`);
+  }
+}
+
+function _setupWebSearch() {
+  const btn = document.getElementById('nbws-web-search-btn');
+  const input = document.getElementById('nbws-web-search-input');
+  btn?.addEventListener('click', _runWebSearch);
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); _runWebSearch(); }
+    if (e.key === 'Escape') {
+      const box = document.getElementById('nbws-web-search-results');
+      if (box) { box.hidden = true; box.innerHTML = ''; }
+    }
+  });
 }
 
 // Wired once (dataset-flag guard) — #nbws-sources-body is static chrome that
@@ -608,6 +693,7 @@ function _wireSourcesPanel() {
   body.innerHTML = _sourcesPanelSkeleton();
 
   _setupUploadZone();
+  _setupWebSearch();
 
   document.getElementById('nbws-select-all-cb')?.addEventListener('change', (e) => {
     const checked = !!e.target.checked;
