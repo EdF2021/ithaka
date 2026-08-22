@@ -350,6 +350,21 @@ class ToolIndex:
             {"list_email_accounts", "list_emails", "read_email", "send_email", "reply_to_email", "bulk_email", "delete_email", "archive_email", "mark_email_read", "resolve_contact", "ui_control"},
         frozenset({"calendar", "event", "meeting", "schedule", "appointment"}):
             {"manage_calendar"},
+        # Image generation. Embedding retrieval on the local FastEmbed lane
+        # misses common phrasings ("teken", "maak een plaatje") — measured — so
+        # a native model would never be offered generate_image for them. Keyed
+        # on CREATION verbs + verb-noun phrases (NL + EN), not bare nouns:
+        # bare "afbeelding"/"plaatje" fire on describe-intents ("beschrijf deze
+        # afbeelding"), which want vision, not generation. Additive, so a stray
+        # include only offers the tool — the model still chooses.
+        frozenset({"draw", "teken", "generate an image", "generate a picture",
+                   "create an image", "create a picture", "make an image",
+                   "make a picture", "render an image", "maak een afbeelding",
+                   "maak een plaatje", "maak een tekening", "maak een foto",
+                   "maak een illustratie", "een illustratie", "illustration",
+                   "genereer een afbeelding", "genereer een plaatje",
+                   "genereer een foto", "genereer een tekening"}):
+            {"generate_image"},
         # Detached background `bash` jobs (#!bg): check on / read output / kill.
         frozenset({"background job", "background jobs", "bg job", "bg jobs",
                    "background task", "is the job done", "check the job",
