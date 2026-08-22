@@ -84,6 +84,10 @@ _PASSIVE_PREFIXES = (
 # notebook routes passive.
 _PASSIVE_PATTERNS = (
     re.compile(r"^/api/notebooks/[^/]+/podcast/[^/]+$"),
+    # The video job-status poller (GET /api/notebooks/{id}/video/{job_id},
+    # polled every 2s by static/js/notebookWorkspace.js) — same shape and
+    # reasoning as the podcast pattern above.
+    re.compile(r"^/api/notebooks/[^/]+/video/[^/]+$"),
 )
 
 

@@ -11,6 +11,10 @@ pypdf
 beautifulsoup4
 charset-normalizer
 numpy
+# Slide-frame rendering for the notebook video overview (src/notebook_video.py).
+# Was already present transitively (torch/diffusers chain); pinned direct
+# because the video pipeline depends on it in its own right.
+pillow
 # Vector store + local embeddings for RAG, semantic memory, and tool
 # selection. Used on core agent paths, so installed by default — the app
 # still degrades to keyword fallback if they're ever missing.

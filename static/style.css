@@ -41142,6 +41142,14 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 }
 .nbws-tile--podcast { --nbws-tile-accent: var(--color-brand-blue); }
 .nbws-tile--slide_deck { --nbws-tile-accent: var(--green); }
+.nbws-tile--video { --nbws-tile-accent: var(--color-recording, var(--red)); }
+/* Video artifact panel — same panel chrome as the podcast player; the video
+   element just needs to fill the 320px studio column. */
+.notebook-podcast-panel video {
+  width: 100%;
+  border-radius: 8px;
+  background: var(--bg);
+}
 .nbws-tile--mindmap { --nbws-tile-accent: var(--accent-warm); }
 .nbws-tile--briefing { --nbws-tile-accent: var(--green); }
 .nbws-tile--flashcards { --nbws-tile-accent: var(--color-blind-orange); }
