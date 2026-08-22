@@ -12,6 +12,7 @@ These hints are deterministic string matching — no embeddings — so we can te
 `get_tools_for_query` directly with retrieval stubbed out (no ChromaDB needed).
 """
 
+import pytest
 from src.tool_index import ToolIndex, ALWAYS_AVAILABLE
 
 _EMAIL_TOOLS = {
@@ -63,3 +64,52 @@ def test_plain_tell_request_stays_minimal():
     assert not (_EMAIL_TOOLS & tools)
     # Always-available baseline is still there.
     assert set(ALWAYS_AVAILABLE) <= tools
+
+
+# --- Image-generation intent (issue: images in chat) -----------------------
+#
+# On the local FastEmbed lane (which is what this instance actually runs — the
+# HTTP embedding lane resolves to an empty URL), embedding retrieval MISSES
+# common Dutch generation phrasings: measured, "teken een zeilboot" and "maak
+# een plaatje" returned serve_model/download tools, not generate_image. A
+# native function-calling model would then never be offered the tool. The
+# keyword hint force-includes it deterministically for creation-verb phrasings.
+
+_IMAGE_GEN_PROMPTS = [
+    "teken een zeilboot",
+    "maak een plaatje",
+    "maak een afbeelding van een kat",
+    "generate an image of a sunset",
+    "kun je een illustratie maken",
+    "draw me a cat",
+    "maak een foto van een hond",
+    "genereer een plaatje",
+    "create a picture of a dog",
+    "render an image of a castle",
+]
+
+# Describe/vision intents — must NOT drag in generate_image. Keyed on
+# creation verbs, not bare nouns, precisely so these stay clean.
+_IMAGE_DESCRIBE_PROMPTS = [
+    "beschrijf deze afbeelding",
+    "wat staat er op dit plaatje",
+    "beschrijf deze illustratie",
+    "analyseer deze foto",
+    "lees de tekst voor",
+]
+
+
+@pytest.mark.parametrize("query", _IMAGE_GEN_PROMPTS)
+def test_image_generation_intent_force_includes_generate_image(query):
+    ti = _index_without_embeddings()
+    assert "generate_image" in ti.get_tools_for_query(query), (
+        f"{query!r} is an image-generation request; generate_image must be offered"
+    )
+
+
+@pytest.mark.parametrize("query", _IMAGE_DESCRIBE_PROMPTS)
+def test_describe_intent_does_not_force_generate_image(query):
+    ti = _index_without_embeddings()
+    assert "generate_image" not in ti.get_tools_for_query(query), (
+        f"{query!r} is a describe/vision request; generate_image must not fire"
+    )

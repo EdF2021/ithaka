@@ -96,6 +96,11 @@ PUBLIC_ALLOWED_TOOLS = frozenset({
     "create_session",
     "edit_document",
     "edit_image",
+    # Same class as edit_image: a user-facing image capability, gated at the
+    # route by the can_generate_images privilege and the image_gen_enabled
+    # setting — not admin-only. Now a native tool (added to FUNCTION_TOOL_SCHEMAS
+    # so chat models can generate inline), so it must be classified here.
+    "generate_image",
     "list_cached_models",
     "list_cookbook_servers",
     "list_downloads",
@@ -172,7 +177,7 @@ PLAN_MODE_READONLY_TOOLS = {
 # returns the inverse: every known tool name minus the allowlist.
 #
 # Known tool names come from FUNCTION_TOOL_SCHEMAS, but that source is imperfect:
-# some tools are only XML-invocable (e.g. manage_notes, generate_image) and never
+# some tools are only XML-invocable (e.g. manage_notes) and never
 # appear there, and the import can fail outright. Either gap would drop a mutating
 # tool from the subtraction and silently leave it enabled. This set is the static
 # backstop for both: union it in so known mutators are always subtracted, and so a
