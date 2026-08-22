@@ -273,6 +273,20 @@ def test_infographic_generate_button_exists_with_english_label():
 
 # ── Task: fase-4a studio tiles + flashcards/data_table ───────────────────
 
+def test_web_source_search_zone_registered_client_side():
+    skeleton = _between(_WS, "function _sourcesPanelSkeleton", "\n}\n")
+    assert 'id="nbws-web-search-input"' in skeleton
+    assert 'id="nbws-web-search-btn"' in skeleton
+    assert 'id="nbws-web-search-results"' in skeleton
+    # Search wiring happens once, alongside the upload zone.
+    wire = _between(_WS, "function _wireSourcesPanel", "\n}\n")
+    assert "_setupWebSearch();" in wire
+    # Add-flow posts to the URL-ingest endpoint and refreshes the list.
+    add_fn = _between(_WS, "async function _addWebSource", "\n}\n")
+    assert "/sources/url" in add_fn
+    assert "_loadSources()" in add_fn
+
+
 def test_video_tile_and_job_flow_registered_client_side():
     labels = _between(_WS, "const KIND_LABELS = {", "\n};")
     assert "video: 'Video'," in labels

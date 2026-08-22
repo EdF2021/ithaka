@@ -41143,6 +41143,41 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .nbws-tile--podcast { --nbws-tile-accent: var(--color-brand-blue); }
 .nbws-tile--slide_deck { --nbws-tile-accent: var(--green); }
 .nbws-tile--video { --nbws-tile-accent: var(--color-recording, var(--red)); }
+/* Web-source search (fase 4d) — input + button row above the upload zone,
+   results as .list-item rows with an inline add button. Existing tokens and
+   classes only. */
+.nbws-web-search {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.nbws-web-search input {
+  flex: 1;
+  min-width: 0;
+  background: var(--input-bg, var(--panel));
+  color: var(--fg);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+#nbws-web-search-results { margin-bottom: 8px; }
+.nbws-web-result { display: flex; align-items: center; gap: 8px; }
+.nbws-web-result-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.nbws-web-result-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.nbws-web-result-domain { font-size: 10px; }
+.nbws-web-add { flex-shrink: 0; }
+
 /* Video artifact panel — same panel chrome as the podcast player; the video
    element just needs to fill the 320px studio column. */
 .notebook-podcast-panel video {
