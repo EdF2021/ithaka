@@ -255,12 +255,14 @@ def _user_content(messages):
 
 def test_artifact_kinds_registry_complete():
     assert set(artifacts.ARTIFACT_KINDS) == {
-        "study_guide", "briefing", "faq", "quiz", "mindmap", "infographic"
+        "study_guide", "briefing", "faq", "quiz", "mindmap", "infographic",
+        "flashcards", "data_table",
     }
     labels = {k: v["label"] for k, v in artifacts.ARTIFACT_KINDS.items()}
     assert labels == {
         "study_guide": "Studiegids", "briefing": "Briefing", "faq": "FAQ",
         "quiz": "Quiz", "mindmap": "Mindmap", "infographic": "Infographic",
+        "flashcards": "Flashcards", "data_table": "Gegevenstabel",
     }
     for kind, spec in artifacts.ARTIFACT_KINDS.items():
         assert spec["prompt"].strip(), kind

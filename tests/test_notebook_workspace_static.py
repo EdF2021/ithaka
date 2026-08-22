@@ -271,6 +271,40 @@ def test_infographic_generate_button_exists_with_english_label():
     assert "infographic: 'Infographic'," in labels
 
 
+# ── Task: fase-4a studio tiles + flashcards/data_table ───────────────────
+
+def test_flashcards_and_data_table_kinds_registered_client_side():
+    kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
+    assert "'flashcards'" in kinds
+    assert "'data_table'" in kinds
+    labels = _between(_WS, "const KIND_LABELS = {", "\n};")
+    assert "flashcards: 'Flashcards'," in labels
+    assert "data_table: 'Data table'," in labels
+
+
+def test_studio_tiles_have_per_kind_icon_and_accent_class():
+    # Every generate tile renders as .nbws-tile with a per-kind modifier
+    # class (accent color) and an icon span; the podcast tile is part of
+    # the same grid, listed first, labeled "Audio".
+    skeleton = _between(_WS, "function _studioPanelSkeleton", "\n}\n")
+    assert 'class="nbws-tile notebook-podcast-gen-btn nbws-tile--podcast"' in skeleton
+    assert '<span class="nbws-tile-label">Audio</span>' in skeleton
+    assert 'nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}' in skeleton
+    assert '_KIND_ICONS[kind]' in skeleton
+    icons = _between(_WS, "const _KIND_ICONS = {", "\n};")
+    for kind in ("podcast", "mindmap", "briefing", "flashcards", "quiz",
+                 "infographic", "data_table", "study_guide", "faq"):
+        assert f"{kind}: '<svg" in icons, kind
+
+
+def test_flashcards_and_data_table_are_plain_report_kinds():
+    # Row-click dispatch must not special-case the new kinds: they open via
+    # the same _openArtifactReport(row) path as study_guide/briefing/faq.
+    handler = _between(_WS, "row.addEventListener('click'", "\n    });")
+    assert "flashcards" not in handler
+    assert "data_table" not in handler
+
+
 def test_infographic_is_a_plain_text_artifact_not_a_special_row_kind():
     # Row-click dispatch only special-cases podcast (toggle player) and
     # mindmap (preview); infographic must fall through to the same

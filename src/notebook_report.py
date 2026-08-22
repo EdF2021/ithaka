@@ -27,6 +27,8 @@ ENGLISH_KIND_LABELS = {
     "quiz": "Quiz",
     "mindmap": "Mindmap",
     "infographic": "Infographic",
+    "flashcards": "Flashcards",
+    "data_table": "Data table",
 }
 
 

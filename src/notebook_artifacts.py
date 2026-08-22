@@ -182,6 +182,31 @@ Regels:
 - Elk "key number" en elk bullet-feit moet herleidbaar zijn tot de bronnen; geen verzonnen cijfers of aannames.
 - Houd bullets kort en concreet - geen volledige alinea's.
 - Gebruik uitsluitend de koppen "## Key numbers" en de overige sectiekoppen; geen extra kopniveaus (geen "###").""",
+
+    "flashcards": """Maak 10 tot 15 flashcards waarmee iemand de kernbegrippen uit de bronnen kan oefenen.
+
+Structuur (de renderer parst op deze vorm):
+- "# " met een titel in de taal van de bronnen.
+- Per kaart een "### " met de voorzijde (een vraag of begrip), daaronder de achterzijde als één of twee gewone alinea's.
+
+Regels:
+- De voorzijde is kort: één vraagzin of één begrip, geen opsommingen.
+- De achterzijde is op zichzelf te begrijpen: twee tot vier zinnen, geen verwijzingen als "zie boven".
+- Dek de belangrijkste begrippen, cijfers en verbanden uit de bronnen; geen twee kaarten over hetzelfde.
+- Gebruik uitsluitend "# " en "### " als koppen; geen bullets op de achterzijde, geen HTML.""",
+
+    "data_table": """Maak een gegevenstabel: de concrete feiten, cijfers en kenmerken uit de bronnen als overzichtelijke markdown-tabellen.
+
+Structuur:
+- "# " met een titel in de taal van de bronnen.
+- Eén of meer markdown-tabellen, elk voorafgegaan door een "## " sectiekop die zegt wat de tabel toont.
+- Kies kolommen die bij het brontype passen (bijvoorbeeld indicator/waarde/bron, of begrip/definitie/voorbeeld).
+- Sluit af met één regel gewone tekst die de belangrijkste observatie uit de tabellen benoemt.
+
+Regels:
+- Elke celwaarde moet herleidbaar zijn tot de bronnen; ontbreekt een waarde, schrijf dan een streepje "-", verzin niets.
+- Houd cellen kort: geen volledige zinnen in cellen, toelichting hoort in de sectiekop of de slotregel.
+- Gebruik uitsluitend markdown-tabellen met "|"-syntax; geen HTML-tabellen.""",
 }
 
 _KIND_LABELS = {
@@ -191,6 +216,8 @@ _KIND_LABELS = {
     "quiz": "Quiz",
     "mindmap": "Mindmap",
     "infographic": "Infographic",
+    "flashcards": "Flashcards",
+    "data_table": "Gegevenstabel",
 }
 
 # kind -> {label, prompt}. Insertion order is the order the UI lists them in.

@@ -52,6 +52,8 @@ def test_english_kind_labels_complete():
         "quiz": "Quiz",
         "mindmap": "Mindmap",
         "infographic": "Infographic",
+        "flashcards": "Flashcards",
+        "data_table": "Data table",
     }
 
 
