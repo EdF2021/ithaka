@@ -5,6 +5,9 @@
 > **Status 2026-08-22: alle vier deelprojecten geïmplementeerd en gemerged** —
 > 4a PR #35, 4b PR #37, 4c PR #38, 4d PR #39 (umbrella-issue #36).
 > Sessielog: `docs/sessions/2026-08-22-notebooks-fase4.md`.
+> **Prod-deploy geverifieerd** (2026-08-22 avond): rebuild met ffmpeg-laag; video
+> end-to-end op :7000 (89s mp4, h264+aac), webbron-ingest, mobiel 360px en
+> delete-cleanup-pad allemaal in de browser bevestigd — zie de sessielog.
 
 ## Doel
 

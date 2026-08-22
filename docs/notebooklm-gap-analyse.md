@@ -7,7 +7,14 @@
 > Fase 2 (tekst-artifacts: studiegids/briefing/FAQ/quiz/mindmap) — `docs/sessions/2026-08-16-notebooks-fase2.md`;
 > Fase 3 (audio overview/podcast) — `docs/sessions/2026-08-17-notebooks-fase3.md`;
 > follow-ups (janitor, passieve statuspoll, archief-UI, sessie-hervatting) — `docs/sessions/2026-08-17-notebooks-followups.md`.
-> Video overviews blijven bewust buiten scope (zie "Niet doen" hieronder).
+>
+> **Status 2026-08-22: fase 4 (Gemini-pariteit) geïmplementeerd, gemerged en live op prod** —
+> studio-tegel-grid, flashcards, gegevenstabel, diapresentatie, **video-overview**
+> (diashow: slides + TTS-voice-over → mp4 via ffmpeg — géén generatieve video, die blijft
+> buiten scope) en webbronnen zoeken in het bronnenpaneel. Ontwerp:
+> `docs/superpowers/specs/2026-08-22-notebooks-fase4-design.md`; sessielog:
+> `docs/sessions/2026-08-22-notebooks-fase4.md`. De "Niet doen"-regel hieronder over video
+> gold voor Veo-klasse generatie en is daarmee nog steeds van kracht.
 
 ## Samenvatting
 

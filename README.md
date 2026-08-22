@@ -37,6 +37,7 @@ Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration
 - **Chat + Agents** — local/API models, tools, MCP, files, shell, skills, and memory.
 - **Cookbook** — hardware-aware model recommendations, downloads, and serving.
 - **Deep Research** — multi-step web research with source reading and report generation.
+- **Notebooks** — NotebookLM-style workspaces: upload or web-search sources, chat strictly grounded with citations, and generate study guides, briefings, quizzes, mindmaps, flashcards, slide decks, infographics, data tables, podcasts, and narrated video overviews.
 - **Compare** — blind side-by-side model testing and synthesis.
 - **Documents** — writing-first editor with AI edits, suggestions, Markdown, HTML, CSV, and syntax highlighting.
 - **Email** — IMAP/SMTP inbox with triage, tags, summaries, reminders, and reply drafts.
