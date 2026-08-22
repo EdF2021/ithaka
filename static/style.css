@@ -41106,6 +41106,49 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   gap: 6px;
   margin-bottom: 8px;
 }
+/* Studio tiles — Gemini-Notebook-style generate grid: per-kind accent color
+   (existing theme variables only, mixed into --panel for the tint) with a
+   monochrome icon. --nbws-tile-accent is the single knob; the per-kind
+   modifier classes below only set that variable. */
+.nbws-tile {
+  --nbws-tile-accent: var(--red);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--nbws-tile-accent) 35%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nbws-tile-accent) 10%, var(--panel));
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.nbws-tile:hover {
+  background: color-mix(in srgb, var(--nbws-tile-accent) 22%, var(--panel));
+}
+.nbws-tile:disabled { opacity: 0.55; cursor: default; }
+.nbws-tile-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--nbws-tile-accent);
+}
+.nbws-tile-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nbws-tile--podcast { --nbws-tile-accent: var(--color-brand-blue); }
+.nbws-tile--mindmap { --nbws-tile-accent: var(--accent-warm); }
+.nbws-tile--briefing { --nbws-tile-accent: var(--green); }
+.nbws-tile--flashcards { --nbws-tile-accent: var(--color-blind-orange); }
+.nbws-tile--quiz { --nbws-tile-accent: var(--warn); }
+.nbws-tile--infographic { --nbws-tile-accent: var(--color-save-green); }
+.nbws-tile--data_table { --nbws-tile-accent: var(--color-brand-blue); }
+.nbws-tile--study_guide { --nbws-tile-accent: var(--red); }
+.nbws-tile--faq { --nbws-tile-accent: var(--accent-warm); }
 .notebook-artifact-item {
   display: flex;
   flex-wrap: wrap;
