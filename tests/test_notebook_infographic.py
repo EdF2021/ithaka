@@ -326,3 +326,97 @@ def test_route_podcast_still_404(monkeypatch, ts):
 
     r = c.get(f"/api/notebooks/{nb_id}/artifacts/{art_id}/report")
     assert r.status_code == 404
+
+
+# ---- format-validator (validator-seam in generate_artifact) ------------
+#
+# Drie productie-artifacts (2026-08-23) bewezen dat modellen de vereiste
+# structuur soms volledig negeren (vrije proza/tabellen); zonder validator
+# werd dat opgeslagen en toonde de poster alleen de fallback-"Content"-kaart
+# met ruwe markdown-code. De validator hangt infographic in dezelfde
+# retry-seam als slide_deck (PR #37).
+
+_VALID_INFOGRAPHIC_MD = """# SamenWijzer: slimme hulp voor jouw studiepad
+
+## Key numbers
+- **3 varianten** — digitale gids, voortgangsmonitor, optimale begeleiding
+- **9 personen** — deelnemers vermeld
+
+## Wat is het
+- Digitale studiegids voor mbo-studenten
+- Chat over OER en kwalificatiedossier
+
+> Eén kernboodschap in één zin.
+"""
+
+
+def test_validate_accepts_documented_structure():
+    from src.notebook_infographic import validate_infographic_markdown
+    validate_infographic_markdown(_VALID_INFOGRAPHIC_MD)  # geen exception
+
+
+def test_validate_accepts_missing_takeaway():
+    # De renderer toont zonder takeaway gewoon geen band — niet afkeuren.
+    from src.notebook_infographic import validate_infographic_markdown
+    md = _VALID_INFOGRAPHIC_MD.split("\n>")[0]
+    validate_infographic_markdown(md)
+
+
+def test_validate_rejects_free_prose():
+    # Vorm van de echte productie-failure: beschouwing over de bronnen.
+    from src.notebook_infographic import validate_infographic_markdown
+    with pytest.raises(ValueError):
+        validate_infographic_markdown(
+            "Dit is een extreem uitgebreid en zeer overtuigend document dat "
+            "uw expertise grondig neerzet.\n\nU verkoopt **vertrouwen**."
+        )
+
+
+def test_validate_rejects_missing_title():
+    from src.notebook_infographic import validate_infographic_markdown
+    with pytest.raises(ValueError, match="titel"):
+        validate_infographic_markdown(_VALID_INFOGRAPHIC_MD.replace("# SamenWijzer: slimme hulp voor jouw studiepad\n", ""))
+
+
+def test_validate_accepts_translated_key_numbers_heading():
+    # De parser promoveert een anderstalige kop ("## Cijfers") met strikte
+    # stat-bullets al naar stats — dat rendert goed, dus niet afkeuren.
+    from src.notebook_infographic import validate_infographic_markdown
+    validate_infographic_markdown(_VALID_INFOGRAPHIC_MD.replace("## Key numbers", "## Cijfers"))
+
+
+def test_validate_rejects_missing_key_numbers():
+    from src.notebook_infographic import validate_infographic_markdown
+    md = "\n".join(l for l in _VALID_INFOGRAPHIC_MD.split("\n") if not (
+        l.startswith("## Key numbers") or l.startswith("- **")))
+    with pytest.raises(ValueError, match="Key numbers"):
+        validate_infographic_markdown(md)
+
+
+def test_validate_rejects_key_numbers_without_bold_stats():
+    from src.notebook_infographic import validate_infographic_markdown
+    md = _VALID_INFOGRAPHIC_MD.replace(
+        "- **3 varianten** — digitale gids, voortgangsmonitor, optimale begeleiding", "- drie varianten"
+    ).replace("- **9 personen** — deelnemers vermeld", "- negen personen")
+    with pytest.raises(ValueError, match="\\*\\*"):
+        validate_infographic_markdown(md)
+
+
+def test_validate_rejects_missing_sections():
+    from src.notebook_infographic import validate_infographic_markdown
+    md = "\n".join(l for l in _VALID_INFOGRAPHIC_MD.split("\n") if not l.startswith("## Wat") and l not in (
+        "- Digitale studiegids voor mbo-studenten", "- Chat over OER en kwalificatiedossier"))
+    with pytest.raises(ValueError, match="sectie"):
+        validate_infographic_markdown(md)
+
+
+def test_validate_rejects_h3_headings():
+    from src.notebook_infographic import validate_infographic_markdown
+    with pytest.raises(ValueError, match="###"):
+        validate_infographic_markdown(_VALID_INFOGRAPHIC_MD + "\n### Subkop\n- nog iets\n")
+
+
+def test_infographic_registered_in_kind_validators():
+    from src.notebook_artifacts import _KIND_VALIDATORS
+    from src.notebook_infographic import validate_infographic_markdown
+    assert _KIND_VALIDATORS.get("infographic") is validate_infographic_markdown

@@ -25,6 +25,9 @@ import uuid
 
 from core.database import Document, Notebook, NotebookArtifact, NotebookSource
 from src.event_bus import fire_event
+from src.notebook_flashcards import validate_flashcards_markdown
+from src.notebook_infographic import validate_infographic_markdown
+from src.notebook_mindmap import validate_mindmap_markdown
 from src.notebook_slides import extract_slide_deck
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
 from src.task_endpoint import task_llm_call_async
@@ -251,6 +254,13 @@ _KIND_LABELS = {
 # podcast script-format retry in src/notebook_audio.py.
 _KIND_VALIDATORS = {
     "slide_deck": extract_slide_deck,
+    # Free-prose / wrong-heading model output used to be stored as-is and
+    # then surfaced as raw markdown (infographic fallback card, one-card
+    # flashcard deck, unrendered mindmap) — 2026-08-20..23 production
+    # regressions with format-ignoring models.
+    "infographic": validate_infographic_markdown,
+    "flashcards": validate_flashcards_markdown,
+    "mindmap": validate_mindmap_markdown,
 }
 _VALIDATION_ATTEMPTS = 3
 

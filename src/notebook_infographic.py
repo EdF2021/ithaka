@@ -476,3 +476,41 @@ def generate_infographic(
         notebook_name=html.escape(notebook_name or ""),
         date=html.escape(generated_at.strftime("%B %d, %Y")),
     )
+
+
+# ---------------------------------------------------------------------------
+# Generation-time format validation
+# ---------------------------------------------------------------------------
+
+def validate_infographic_markdown(content: str) -> None:
+    """Raise ValueError (Dutch, fed back to the model on retry) on a format miss.
+
+    Registered in src/notebook_artifacts.py's _KIND_VALIDATORS so
+    generate_artifact retries with the error fed back — same recovery shape
+    as the slide-deck JSON validator. Checks the *outcome the renderer
+    needs* (via _parse_infographic_markdown) rather than literal headings:
+    anything accepted here renders as an actual poster, not as one big
+    fallback "Content" card full of raw markdown — which is exactly what
+    unvalidated free-prose model output used to produce.
+    """
+    parsed = _parse_infographic_markdown(content)
+    problems: List[str] = []
+    if not parsed["title"]:
+        problems.append("geen '# '-titel gevonden")
+    if not parsed["stats"]:
+        problems.append("geen '## Key numbers'-sectie met bullets gevonden")
+    elif all(not label for _num, label in parsed["stats"]):
+        problems.append(
+            "key-number-bullets missen de vorm '- **<getal>** — <label>' "
+            "(vetgedrukt getal, gedachtestreepje, kort label)"
+        )
+    if not any(bullets for _heading, bullets, _extra in parsed["sections"]):
+        problems.append("geen gewone '## <sectiekop>'-sectie met bullet-feiten gevonden")
+    if any(line.lstrip().startswith("###") for line in (content or "").splitlines()):
+        problems.append("'###'-koppen zijn niet toegestaan (alleen '# ' en '## ')")
+    if problems:
+        raise ValueError(
+            "infographic-structuur klopt niet: "
+            + "; ".join(problems)
+            + ". Lever exact de gevraagde markdownstructuur."
+        )

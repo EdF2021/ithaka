@@ -236,3 +236,55 @@ def test_route_data_table_renders_via_generic_report(monkeypatch, ts):
     assert "Slagingspercentage" in r.text
     # Generic editorial template, not the flashcards renderer.
     assert "fc-card" not in r.text
+
+
+# ---- format-validator (validator-seam in generate_artifact) ------------
+#
+# Productie-artifact van 2026-08-22 bewees dat een model het kaartformat kan
+# negeren ("## "-secties, één "### ") — de renderer vond toen maar één kaart.
+# Zelfde retry-seam als slide_deck/infographic.
+
+_VALID_CARDS_MD = """# Kernbegrippen SamenWijzer
+
+### Wat is de digitale gids?
+Een chatomgeving waarin studenten vragen stellen over hun opleiding.
+
+### Wat is een OER?
+De onderwijs- en examenregeling van een opleiding. Die beschrijft toetsing en regels.
+
+### Wat is een kwalificatiedossier?
+Het landelijke document dat beschrijft wat een mbo-student moet kennen en kunnen.
+"""
+
+
+def test_validate_accepts_documented_card_structure():
+    from src.notebook_flashcards import validate_flashcards_markdown
+    validate_flashcards_markdown(_VALID_CARDS_MD)  # geen exception
+
+
+def test_validate_rejects_too_few_cards():
+    from src.notebook_flashcards import validate_flashcards_markdown
+    md = "# Titel\n\n### Enige kaart\nEén achterkant.\n"
+    with pytest.raises(ValueError, match="kaart"):
+        validate_flashcards_markdown(md)
+
+
+def test_validate_rejects_h2_sections():
+    # De vorm van de echte failure: "## "-hoofdstukken i.p.v. "### "-kaarten.
+    from src.notebook_flashcards import validate_flashcards_markdown
+    md = _VALID_CARDS_MD + "\n## 1. Visie & Strategische doelstelling\ntekst\n"
+    with pytest.raises(ValueError, match="##"):
+        validate_flashcards_markdown(md)
+
+
+def test_validate_rejects_card_headings_without_backs():
+    from src.notebook_flashcards import validate_flashcards_markdown
+    md = "# Titel\n\n### Vraag een\n\n### Vraag twee\n\n### Vraag drie\n"
+    with pytest.raises(ValueError, match="achterzijde"):
+        validate_flashcards_markdown(md)
+
+
+def test_flashcards_registered_in_kind_validators():
+    from src.notebook_artifacts import _KIND_VALIDATORS
+    from src.notebook_flashcards import validate_flashcards_markdown
+    assert _KIND_VALIDATORS.get("flashcards") is validate_flashcards_markdown

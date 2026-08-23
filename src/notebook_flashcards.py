@@ -151,3 +151,45 @@ def generate_flashcards(
         hint_html=hint_html,
         cards_html=cards_html,
     )
+
+
+# ---------------------------------------------------------------------------
+# Generation-time format validation
+# ---------------------------------------------------------------------------
+
+_H2_HEADING_RE = re.compile(r"^##\s+\S")
+_MIN_CARDS = 3
+
+
+def validate_flashcards_markdown(markdown: str) -> None:
+    """Raise ValueError (Dutch, fed back to the model on retry) on a format miss.
+
+    Registered in src/notebook_artifacts.py's _KIND_VALIDATORS. A 2026-08-22
+    production artifact showed a model answering with "## " chapters and a
+    single "### " heading — the deck then rendered as one lonely card. The
+    prompt asks for 10-15 cards; the floor here is deliberately lower
+    (_MIN_CARDS) so thin sources still pass, while chapter-prose does not.
+    """
+    problems: list[str] = []
+    parsed = _parse_flashcards_markdown(markdown)
+    headings = sum(1 for line in (markdown or "").splitlines() if _CARD_RE.match(line))
+    if headings < _MIN_CARDS:
+        problems.append(
+            f"slechts {headings} '### '-kaartkoppen gevonden; maak er 10 tot 15, "
+            "elke kaart als '### <voorzijde>' met de achterzijde als alinea's eronder"
+        )
+    elif len(parsed["cards"]) < _MIN_CARDS:
+        problems.append(
+            "kaartkoppen zonder achterzijde: zet onder elke '### <voorzijde>' "
+            "één of twee alinea's met het antwoord"
+        )
+    if any(_H2_HEADING_RE.match(line) for line in (markdown or "").splitlines()):
+        problems.append(
+            "'## '-koppen zijn niet toegestaan; gebruik uitsluitend '# ' voor de "
+            "titel en '### ' per kaart"
+        )
+    if problems:
+        raise ValueError(
+            "flashcards-structuur klopt niet: " + "; ".join(problems)
+            + ". Lever exact de gevraagde markdownstructuur."
+        )
