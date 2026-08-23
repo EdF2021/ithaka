@@ -956,3 +956,50 @@ def test_validate_serve_cmd_rejects_unrelated_subshell_pipelines():
     ]:
         with pytest.raises(HTTPException):
             _validate_serve_cmd(cmd)
+
+
+def test_llama_cpp_prebuilt_resolves_nightly_pointer():
+    """llama.cpp's ``releases/latest`` became a pointer release whose only
+    asset is ``nightly-tag.txt`` — binaries live under the nightly tag it
+    names. The prebuilt fetch must resolve that pointer instead of concluding
+    "no matching prebuilt" on every modern host."""
+    runner_lines = []
+    _append_llama_cpp_linux_accel_build_lines(runner_lines)
+    script = "\n".join(runner_lines)
+
+    assert "nightly-tag\\.txt" in script
+    assert "releases/$1" in script  # shared fetch helper, reused for the tag
+    assert '"tags/$_ithaka_nightly"' in script
+    # latest is fetched first, then the nightly pointer is resolved, and only
+    # after that is the pattern applied to pick an asset.
+    assert script.index("latest") < script.index("tags/$_ithaka_nightly")
+    assert script.index("tags/$_ithaka_nightly") < script.index("_ithaka_pick_asset \"$_ithaka_pat\"")
+
+
+def test_llama_cpp_prebuilt_nvidia_falls_back_to_cpu_asset():
+    """Linux CUDA prebuilts no longer exist upstream; an NVIDIA host whose
+    ``ubuntu.*cuda`` pattern matches nothing must fall back to the plain
+    x64 CPU asset instead of a source build that needs cmake/nvcc."""
+    runner_lines = []
+    _append_llama_cpp_linux_accel_build_lines(runner_lines)
+    script = "\n".join(runner_lines)
+
+    assert '_ithaka_pat="ubuntu.*cuda"' in script  # still preferred if it returns
+    # NB: the script carries ``\\.`` — the shell's double-quote pass turns it
+    # into the ``\.`` regex, same as the pre-existing zip-only pattern did.
+    assert '_ithaka_fallback_pat="ubuntu-x64\\\\.(zip|tar\\\\.gz)"' in script
+    assert '[ -z "$_ithaka_prebuilt_url" ] && _ithaka_prebuilt_url="$(_ithaka_pick_asset "$_ithaka_fallback_pat")"' in script
+
+
+def test_llama_cpp_prebuilt_extracts_tar_gz_and_zip():
+    """Upstream release assets switched from ``.zip`` to ``.tar.gz``; the
+    extractor must handle both, keeping the zip chain for older mirrors."""
+    runner_lines = []
+    _append_llama_cpp_linux_accel_build_lines(runner_lines)
+    script = "\n".join(runner_lines)
+
+    assert '*.tar.gz) _ithaka_archive="llama-cpp.tar.gz"' in script
+    assert 'tar -xzf "$_ithaka_archive" -C build' in script
+    assert "import tarfile" in script  # python fallback for minimal installs
+    assert "unzip -qq -o llama-cpp.zip -d build" in script  # zip path preserved
+    assert 'curl -fsSL --max-time 120 "$_ithaka_prebuilt_url" -o "$_ithaka_archive"' in script
