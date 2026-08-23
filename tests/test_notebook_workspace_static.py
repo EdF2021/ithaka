@@ -166,30 +166,25 @@ def test_open_artifact_report_calls_window_open_with_report_endpoint():
     assert "'_blank'" in fn
 
 
-def test_artifact_click_podcast_toggles_mindmap_previews_others_open_report():
-    """Regression for the two behaviors the design brief calls out most
-    specifically: podcast rows must never open the report tab (Task A 404s
-    that route for podcast) and mindmap rows must keep their existing
-    _openArtifact preview. A bare '"/report" in _WS' substring check would
-    still pass even if the podcast/mindmap guards were dropped or reordered
-    after the report fallthrough — so this asserts the exact guard clauses
-    AND their relative order inside the row click handler. """
+def test_artifact_click_podcast_toggles_others_open_report():
+    """Regression for the row-click behavior: podcast rows must never open
+    the report tab (Task A 404s that route for podcast). Since the
+    interactive mindmap viewer, mindmap rows open the report like every
+    other text kind — the old `_openArtifact` preview guard must stay gone
+    (the raw mermaid document remains reachable via the secondary
+    open-source-document button). The ordering assertion catches a dropped
+    'return' or a guard moved after the fallthrough."""
     handler = _between(
         _WS,
         "row.addEventListener('click', (e) => {",
         "\n  });\n  box.querySelectorAll('.notebook-artifact-del')",
     )
     assert "if (kind === 'podcast') { _togglePodcastPanel(row); return; }" in handler
-    assert "if (kind === 'mindmap') { _openArtifact(row); return; }" in handler
+    assert "if (kind === 'mindmap') { _openArtifact(row); return; }" not in handler
     assert "_openArtifactReport(row);" in handler
     podcast_idx = handler.index("kind === 'podcast'")
-    mindmap_idx = handler.index("kind === 'mindmap'")
     report_idx = handler.index("_openArtifactReport(row);")
-    # Both guards must return before the fallthrough is ever reached —
-    # if either 'return' were dropped, or a guard moved after the
-    # fallthrough call, this ordering assertion catches it even though every
-    # substring above would still individually be present in the file.
-    assert podcast_idx < mindmap_idx < report_idx
+    assert podcast_idx < report_idx
 
 
 def test_studio_panel_labels_are_english_not_dutch():

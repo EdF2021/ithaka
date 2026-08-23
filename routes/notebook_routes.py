@@ -27,6 +27,7 @@ from src.notebook_audio import (
 )
 from src.notebook_flashcards import generate_flashcards
 from src.notebook_infographic import generate_infographic
+from src.notebook_mindmap import generate_mindmap_viewer
 from src.notebook_slides import generate_slide_deck
 from src.notebook_ingest import ingest_notebook_file, ingest_notebook_url
 from src.notebook_report import generate_notebook_artifact_report
@@ -592,6 +593,15 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 # Flip cards are an interaction, not a long-form read — own
                 # compact template, same reasoning as the infographic below.
                 html_content = generate_flashcards(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            elif artifact.kind == "mindmap":
+                # Interactive collapsible-tree viewer over the stored mermaid
+                # markdown — own template, same reasoning as slides/flashcards.
+                html_content = generate_mindmap_viewer(
                     title=artifact.title or document.title,
                     markdown=document.current_content,
                     notebook_name=nb.name,
