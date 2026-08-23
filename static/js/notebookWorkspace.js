@@ -966,8 +966,7 @@ function _artifactRow(a) {
   // A sibling span, not text inside .notebook-artifact-title: that span is
   // nowrap+ellipsis, so text appended inside it would be the first thing
   // clipped on a narrow viewport — and this hint is required, per spec.
-  const hint = a.kind === 'mindmap'
-    ? '<span class="notebook-artifact-hint">(Preview for the mindmap)</span>' : '';
+  const hint = '';
   // Every non-podcast row gets a secondary "open source document" icon
   // button (Task B requirement 3) — it always routes through the existing
   // _openArtifact doc-viewer path, independent of what the row's own click
@@ -1065,10 +1064,10 @@ async function _loadArtifacts() {
       const kind = row.dataset.kind;
       if (kind === 'podcast') { _togglePodcastPanel(row); return; }
       if (kind === 'video') { _toggleVideoPanel(row); return; }
-      // Mindmap keeps its existing preview as the primary click (Task B
-      // requirement 3) — every other kind opens the polished visual report
-      // Task A's backend renders, in a new tab.
-      if (kind === 'mindmap') { _openArtifact(row); return; }
+      // Every text kind opens the visual report the backend renders, in a
+      // new tab — since the interactive mindmap viewer this includes the
+      // mindmap (the raw mermaid document stays reachable via the
+      // secondary open-source-document button).
       _openArtifactReport(row);
     });
   });
