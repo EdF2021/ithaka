@@ -47,3 +47,15 @@ De 5 kapotte artifacts in prod houden hun oude proza-inhoud — verwijderen
 en opnieuw genereren in de UI; de validators bewaken nu het format.
 Mermaid-CDN blijft alleen voor de chat-preview; report-pagina's blijven
 extern-resource-vrij.
+
+## Naschrift (zelfde avond): regeneratie + task-model
+
+De 6 kapotte artifacts zijn verwijderd en vervangen door 4 nieuwe (dubbele
+infographic/mindmap in 'zomaar' niet dubbel geregenereerd); alle 4 renderen
+correct. De mindmap-regeneratie faalde 2× netjes op de validator:
+`gpt-oss:20b` (utility-fallback voor task-calls) krijgt de
+mermaid-inspringing niet voor elkaar — Qwen3-14B deed het in één keer goed.
+Daarom staat **Background Tasks nu vast op
+`hf.co/Qwen/Qwen3-14B-GGUF:Q4_K_M`** (endpoint `6dbf212f`,
+host.docker.internal:11434), op Ed's verzoek; terugdraaien = veld leegmaken
+in Settings → Background Tasks (dan geldt weer de utility→default-keten).
