@@ -22,6 +22,7 @@ import core.database as db
 import routes.notebook_routes as nbr
 from src.notebook_artifacts import ARTIFACT_KINDS
 from src.notebook_flashcards import _parse_flashcards_markdown, generate_flashcards
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_report import ENGLISH_KIND_LABELS
 from tests.helpers.sqlite_db import make_temp_sqlite
 
@@ -51,13 +52,13 @@ _TABLE_MD = """# Kerncijfers
 def test_flashcards_kind_registered_with_dutch_label():
     assert "flashcards" in ARTIFACT_KINDS
     assert ARTIFACT_KINDS["flashcards"]["label"] == "Flashcards"
-    assert "taal van de bronnen" in ARTIFACT_KINDS["flashcards"]["prompt"]
+    assert DUTCH_OUTPUT_RULE in ARTIFACT_KINDS["flashcards"]["prompt"]
 
 
 def test_data_table_kind_registered_with_dutch_label():
     assert "data_table" in ARTIFACT_KINDS
     assert ARTIFACT_KINDS["data_table"]["label"] == "Gegevenstabel"
-    assert "taal van de bronnen" in ARTIFACT_KINDS["data_table"]["prompt"]
+    assert DUTCH_OUTPUT_RULE in ARTIFACT_KINDS["data_table"]["prompt"]
 
 
 def test_new_kinds_in_english_kind_labels():

@@ -64,6 +64,7 @@ from core.database import (
 from src.constants import NOTEBOOK_AUDIO_DIR
 from src.event_bus import fire_event
 from src.notebook_artifacts import _strip_think_blocks, gather_source_text
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
 from src.settings import load_settings
 from src.task_endpoint import task_llm_call_async
@@ -86,15 +87,15 @@ _FALLBACK_VOICES = ("alloy", "onyx")
 # --------------------------------------------------------------------------
 # Prompt
 #
-# Written in Dutch (the project language) but, like the Fase 2 artifact
-# prompts, it orders the model to follow the *sources'* language: a podcast
-# over English sources must be spoken in English.
+# Written in Dutch (the project language) and, per DUTCH_OUTPUT_RULE, always
+# spoken in Dutch regardless of the sources' language: a podcast over English
+# sources is still spoken in Dutch.
 # --------------------------------------------------------------------------
 
-PODCAST_PROMPT = """Je schrijft het script voor een podcastaflevering van twee hosts die samen een vaste set bronnen bespreken.
+PODCAST_PROMPT = f"""Je schrijft het script voor een podcastaflevering van twee hosts die samen een vaste set bronnen bespreken.
 
 Harde regels:
-- Schrijf in de taal van de bronnen, niet in de taal van deze instructie. Zijn de bronnen Engels, schrijf dan Engels; zijn ze Nederlands, schrijf dan Nederlands.
+- {DUTCH_OUTPUT_RULE}
 - Baseer je uitsluitend op de aangeleverde bronnen. Vul niets aan met algemene kennis en presenteer geen aanname als feit.
 - De bronnen zijn gescheiden met koppen van de vorm "=== BRON: bestandsnaam ===". Verwijs in gewone spreektaal naar een bron waar dat de luisteraar helpt; lees die koppen nooit voor.
 

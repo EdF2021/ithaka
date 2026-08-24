@@ -15,7 +15,7 @@ _PROMPT = (
     "You suggest follow-up questions for a study conversation that is strictly "
     "grounded in a fixed set of sources. Given the user's question and the "
     "assistant's answer, propose exactly 3 short follow-up questions (max 12 "
-    "words each, same language as the conversation) that the sources could "
+    "words each, in Dutch) that the sources could "
     "plausibly answer. Reply with ONLY a JSON array of 3 strings."
 )
 

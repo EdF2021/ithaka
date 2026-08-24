@@ -347,6 +347,7 @@ from fastapi import HTTPException
 
 import core.database as cdb
 import src.notebook_audio as audio
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from tests.helpers.sqlite_db import make_temp_sqlite
 
 _TS, _ENGINE, _TMPDB = make_temp_sqlite(cdb.Base.metadata)
@@ -492,7 +493,8 @@ async def _await_job(job_id, owner="own", timeout=10.0):
 
 def test_podcast_prompt_states_the_hard_requirements():
     prompt = audio.PODCAST_PROMPT
-    assert "taal van de bronnen" in prompt          # source language, not Dutch
+    assert DUTCH_OUTPUT_RULE in prompt                    # always Dutch, not source language
+    assert "Schrijf in de taal van de bronnen" not in prompt  # old source-language clause is gone
     assert "S1:" in prompt and "S2:" in prompt      # exact line format
     assert "20" in prompt and "40" in prompt        # 20-40 turns
     assert "400" in prompt                          # <= 400 words per turn
