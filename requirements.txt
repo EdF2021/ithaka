@@ -52,3 +52,6 @@ pytest-asyncio
 # TestClient import when only classic httpx is present. Runtime code keeps
 # using `httpx` above; this is test-client only.
 httpx2
+# Transitive dep (pulled in by the RAG/embedding chain); floor it to the
+# patched release for GHSA-6v7p-g79w-8964 (Unpacker out-of-bounds read).
+msgpack>=1.2.1
