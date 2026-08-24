@@ -56,7 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # /var/run/docker.sock mount). The Debian `docker.io` package ships
 # dockerd but not the client binary on slim, so grab the static client
 # tarball from download.docker.com instead.
-ARG DOCKER_CLI_VERSION=27.5.1
+ARG DOCKER_CLI_VERSION=29.7.2
 RUN ARCH="$(dpkg --print-architecture)" \
     && case "$ARCH" in \
          amd64) DARCH=x86_64 ;; \
@@ -75,7 +75,10 @@ WORKDIR /app
 # are opt-in so the default image stays MIT-core; see requirements-optional.txt.
 ARG INSTALL_OPTIONAL=false
 COPY requirements.txt requirements-optional.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+# The base image ships an old setuptools with known CVEs (e.g. CVE-2025-47273);
+# upgrade it before installing deps so Trivy scans the patched version.
+RUN pip install --no-cache-dir setuptools==84.0.0 \
+    && pip install --no-cache-dir -r requirements.txt \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then pip install --no-cache-dir -r requirements-optional.txt; fi
 
 # python-magic powers content-based MIME sniffing in src/upload_handler.py.
