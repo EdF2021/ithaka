@@ -716,6 +716,30 @@ def _local_mcp_schemas(last_user, mcp_schemas, relevant_tools, disabled_tools):
     return schemas if (wants_mcp and schemas) else []
 
 
+_mcp_reindex_task: Optional["asyncio.Task"] = None
+
+
+def _schedule_mcp_reindex(tool_idx, mcp_mgr, disabled_map):
+    """Kick the MCP tool reindex in the background, deduped to one task.
+
+    Awaiting the reindex under the 1.5s tool-selection cap cost every first
+    request after an MCP (re)connect its MCP tools (issue #62): the cap fired
+    mid-upsert while the old entries were already gone. Retrieval can safely
+    run against the current (possibly one-generation-stale) index, so the
+    request never waits on this. Returns the task, or None when a reindex is
+    already running or the index is current.
+    """
+    global _mcp_reindex_task
+    if _mcp_reindex_task is not None and not _mcp_reindex_task.done():
+        return None
+    if getattr(mcp_mgr, "_generation", 0) == getattr(tool_idx, "_mcp_generation", None):
+        return None
+    _mcp_reindex_task = asyncio.create_task(
+        asyncio.to_thread(tool_idx.index_mcp_tools, mcp_mgr, disabled_map)
+    )
+    return _mcp_reindex_task
+
+
 _ADMIN_SCHEMA_NAMES = frozenset([
     "manage_session", "manage_skills", "manage_tasks",
     "manage_endpoints", "manage_mcp", "manage_webhooks", "manage_tokens",
@@ -2833,16 +2857,7 @@ async def _select_agent_tools(
                 _relevant_tools = set(ALWAYS_AVAILABLE)
             if tool_idx:
                 if mcp_mgr:
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.to_thread(tool_idx.index_mcp_tools, mcp_mgr, _mcp_disabled_map),
-                            timeout=_TOOL_SELECTION_TIMEOUT_SECONDS,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "[tool-rag] MCP tool indexing exceeded %.1fs; continuing without reindex",
-                            _TOOL_SELECTION_TIMEOUT_SECONDS,
-                        )
+                    _schedule_mcp_reindex(tool_idx, mcp_mgr, _mcp_disabled_map)
                 if _retrieval_query:
                     try:
                         _relevant_tools = await asyncio.wait_for(

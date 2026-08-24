@@ -227,31 +227,22 @@ class ToolIndex:
         if gen == self._mcp_generation:
             return
 
-        # Remove old MCP entries
-        for lane in self._lanes:
-            try:
-                existing = lane.collection.get(where={"tool_type": "mcp"})
-                if existing and existing["ids"]:
-                    lane.collection.delete(ids=existing["ids"])
-            except Exception:
-                pass
-
-        # Get current MCP tools
+        # Get current MCP tools. On a transient failure leave the index (and
+        # the generation marker) untouched so the next call retries.
         try:
             all_tools = mcp_mgr.get_tool_descriptions_for_prompt(disabled_map or {})
         except Exception:
-            all_tools = ""
-
-        if not all_tools:
-            self._mcp_generation = gen
             return
 
-        # Parse MCP tool descriptions from the prompt text
+        # Parse first, upsert, then prune stale ids. The old delete-everything-
+        # then-upsert order left a window with NO MCP entries while the slow
+        # embedding upsert ran; a concurrent retrieval in that window silently
+        # lost every MCP tool (issue #62).
         docs = []
         ids = []
         metadatas = []
         current_server = ""
-        for line in all_tools.strip().split("\n"):
+        for line in (all_tools or "").strip().split("\n"):
             line = line.strip()
             # Track which server section we're in (for context in descriptions)
             if line.startswith("**") and line.endswith(":**"):
@@ -270,19 +261,21 @@ class ToolIndex:
                     ids.append(f"mcp_{name}")
                     metadatas.append({"tool_name": name, "tool_type": "mcp"})
 
-        if not docs:
-            self._mcp_generation = gen
-            return
-
         indexed = False
+        keep = set(ids)
         for lane in self._lanes:
             try:
-                lane.collection.upsert(
-                    ids=ids,
-                    documents=docs,
-                    embeddings=lane.encode(docs),
-                    metadatas=metadatas,
-                )
+                if docs:
+                    lane.collection.upsert(
+                        ids=ids,
+                        documents=docs,
+                        embeddings=lane.encode(docs),
+                        metadatas=metadatas,
+                    )
+                existing = lane.collection.get(where={"tool_type": "mcp"})
+                stale = [i for i in (existing.get("ids") or []) if i not in keep] if existing else []
+                if stale:
+                    lane.collection.delete(ids=stale)
                 indexed = True
             except Exception as e:
                 logger.warning("MCP tool indexing failed in %s lane: %s", lane.name, e)
@@ -290,7 +283,8 @@ class ToolIndex:
             logger.warning("MCP tool indexing failed in all embedding lanes")
             return
         self._mcp_generation = gen
-        logger.info(f"Indexed {len(docs)} MCP tools")
+        if docs:
+            logger.info(f"Indexed {len(docs)} MCP tools")
 
     def retrieve(self, query: str, k: int = 8) -> List[str]:
         """Retrieve the top-K most relevant tool names for a query."""
