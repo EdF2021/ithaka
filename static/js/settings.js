@@ -5298,7 +5298,9 @@ async function initUnifiedIntegrations() {
         </div>`;
       // Populate the preset dropdown; selecting one fills the fields below
       // (still editable — nothing is locked).
+      let _ufPresets = [];
       _getMcpPresets().then(presets => {
+        _ufPresets = presets;
         const presetSel = el('uf-mcp-preset');
         if (!presetSel) return;
         presets.forEach((p, i) => {
@@ -5350,6 +5352,13 @@ async function initUnifiedIntegrations() {
         } else {
           fd.append('url', el('uf-mcp-url').value);
         }
+        // Presets with an OAuth config (gmail, google-calendar, google-drive)
+        // need it server-side: it drives the keys file, the Authorize flow,
+        // and where tokens land. Without this the server is saved without any
+        // OAuth wiring and can never connect.
+        const presetIdx = el('uf-mcp-preset') ? el('uf-mcp-preset').value : '';
+        const selPreset = presetIdx !== '' ? _ufPresets[parseInt(presetIdx, 10)] : null;
+        if (selPreset && selPreset.oauth) fd.append('oauth_config', JSON.stringify(selPreset.oauth));
         const saveBtn = el('uf-mcp-save'), cancelBtn = el('uf-mcp-cancel');
         const _origLabel = saveBtn.textContent;
         _setBtnLoading(saveBtn, true, 'Saving…'); if (cancelBtn) cancelBtn.disabled = true;
@@ -5359,6 +5368,16 @@ async function initUnifiedIntegrations() {
           if (r.ok && data.needs_auth) {
             el('uf-mcp-msg').textContent = 'Preparing authorization…';
             _handleMcpAuth(data.id, data.auth_url);
+          } else if (r.ok && data.needs_oauth) {
+            const msgEl = el('uf-mcp-msg');
+            msgEl.textContent = 'Saved — ';
+            const a = document.createElement('a');
+            a.href = '/api/mcp/oauth/authorize/' + encodeURIComponent(data.id);
+            a.target = '_blank';
+            a.textContent = 'Authorize with Google';
+            msgEl.appendChild(a);
+            msgEl.appendChild(document.createTextNode(' to connect.'));
+            await renderList();
           } else if (r.ok && (data.connected || data.status === 'connected')) {
             el('uf-mcp-msg').textContent = `Connected (${data.tool_count || 0} tools)`;
             formEl.style.display = 'none'; await renderList();

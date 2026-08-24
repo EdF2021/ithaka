@@ -2,6 +2,7 @@
 """MCP (Model Context Protocol) server management routes."""
 import json
 import os
+import time
 import uuid
 import urllib.parse
 import html
@@ -65,10 +66,20 @@ def _sanitize_mcp_oauth_config(oauth_cfg):
     return sanitized
 
 
-def _mcp_oauth_token_missing(oauth_cfg, *, strict: bool = True) -> bool:
-    """Check token existence without letting legacy bad paths break listing."""
+def _mcp_oauth_token_missing(oauth_cfg, *, strict: bool = True, env=None) -> bool:
+    """Check token existence without letting legacy bad paths break listing.
+
+    Two storage modes: ``token_file`` (token JSON on disk, e.g. gmail/calendar)
+    and ``token_env`` (tokens injected into the server env after the exchange,
+    e.g. the Drive server's external-token mode). In env mode the token is
+    "present" once the mapped refresh-token variable is non-empty.
+    """
     if not isinstance(oauth_cfg, dict):
         return False
+    token_env = oauth_cfg.get("token_env")
+    if isinstance(token_env, dict) and token_env.get("refresh_token"):
+        refresh_var = token_env["refresh_token"]
+        return not (isinstance(env, dict) and env.get(refresh_var))
     try:
         token_file = _resolve_mcp_oauth_path(oauth_cfg.get("token_file", ""), "token_file")
     except HTTPException:
@@ -80,15 +91,95 @@ def _mcp_oauth_token_missing(oauth_cfg, *, strict: bool = True) -> bool:
 
 
 def _apply_mcp_oauth_env(env: dict, oauth_cfg) -> None:
-    """Pass sanitized Gmail package paths to MCP servers that honor them."""
+    """Pass sanitized OAuth file paths to MCP servers that honor them.
+
+    ``env_map`` in the OAuth config names the env variables the target npm
+    package reads (e.g. GOOGLE_OAUTH_CREDENTIALS for the calendar server);
+    without it the historical Gmail names are used.
+    """
     if not oauth_cfg or not isinstance(env, dict):
+        return
+    env_map = oauth_cfg.get("env_map") or {}
+    if oauth_cfg.get("token_env") and not env_map:
+        # token_env mode: the keys file only feeds Ithaka's own code exchange;
+        # the npm server gets its credentials via the token_env variables, so
+        # no file paths belong in its env.
         return
     keys_file = oauth_cfg.get("keys_file")
     token_file = oauth_cfg.get("token_file")
     if keys_file:
-        env["GMAIL_OAUTH_PATH"] = keys_file
+        env[env_map.get("keys_file", "GMAIL_OAUTH_PATH")] = keys_file
     if token_file:
-        env["GMAIL_CREDENTIALS_PATH"] = token_file
+        env[env_map.get("token_file", "GMAIL_CREDENTIALS_PATH")] = token_file
+
+
+def _write_oauth_tokens(oauth_cfg, tokens: dict) -> None:
+    """Persist exchanged tokens in the format the target MCP package expects.
+
+    Default: the raw Google token response (what the gmail server reads).
+    ``token_format: "multi_account"``: @cocal/google-calendar-mcp's token file
+    keyed by account mode, with ``expiry_date`` (ms epoch) derived from the
+    response's ``expires_in`` so the server can judge freshness.
+    """
+    token_file = oauth_cfg.get("token_file", "")
+    if not token_file:
+        return
+    payload = tokens
+    if oauth_cfg.get("token_format") == "multi_account":
+        inner = {k: v for k, v in tokens.items() if k != "expires_in"}
+        expires_in = tokens.get("expires_in")
+        if isinstance(expires_in, (int, float)):
+            inner["expiry_date"] = int((time.time() + expires_in) * 1000)
+        payload = {"normal": inner}
+    os.makedirs(os.path.dirname(token_file), exist_ok=True)
+    with open(token_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def _tokens_to_env_updates(oauth_cfg, tokens: dict, client_id: str, client_secret: str) -> dict:
+    """Map exchanged tokens onto env variables for token_env-mode servers."""
+    token_env = oauth_cfg.get("token_env")
+    if not isinstance(token_env, dict):
+        return {}
+    values = {
+        "access_token": tokens.get("access_token", ""),
+        "refresh_token": tokens.get("refresh_token", ""),
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    return {var: values[key] for key, var in token_env.items() if key in values}
+
+
+def _ensure_keys_file_from_env(env: dict, oauth_cfg) -> None:
+    """Write the OAuth keys file from GOOGLE_CLIENT_ID/SECRET env fields.
+
+    The preset UI collects client id/secret as plain env fields; Google's npm
+    servers want them as a gcp-oauth.keys.json on disk. Synthesize that file
+    and drop the raw secrets from the stored env.
+    """
+    if not isinstance(oauth_cfg, dict) or not isinstance(env, dict):
+        return
+    keys_file = oauth_cfg.get("keys_file", "")
+    client_id = (env.get("GOOGLE_CLIENT_ID") or "").strip()
+    client_secret = (env.get("GOOGLE_CLIENT_SECRET") or "").strip()
+    if not keys_file or not client_id or not client_secret:
+        return
+    keys_file = _resolve_mcp_oauth_path(keys_file, "keys_file")
+    creds = {
+        "installed": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uris": ["http://localhost"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://accounts.google.com/o/oauth2/token",
+        }
+    }
+    os.makedirs(os.path.dirname(keys_file), exist_ok=True)
+    with open(keys_file, "w", encoding="utf-8") as f:
+        json.dump(creds, f, indent=2)
+    logger.info(f"Wrote OAuth credentials to {keys_file}")
+    env.pop("GOOGLE_CLIENT_ID", None)
+    env.pop("GOOGLE_CLIENT_SECRET", None)
 
 
 def _load_disabled_map():
@@ -131,7 +222,8 @@ def setup_mcp_routes(mcp_manager: McpManager):
                 oauth_cfg = json.loads(srv.oauth_config) if srv.oauth_config else None
                 needs_oauth = False
                 if oauth_cfg:
-                    needs_oauth = _mcp_oauth_token_missing(oauth_cfg, strict=False)
+                    srv_env = json.loads(srv.env) if srv.env else {}
+                    needs_oauth = _mcp_oauth_token_missing(oauth_cfg, strict=False, env=srv_env)
                 disabled_list = json.loads(srv.disabled_tools) if srv.disabled_tools else []
                 total_tools = status.get("tool_count", 0)
                 result.append({
@@ -207,6 +299,7 @@ def setup_mcp_routes(mcp_manager: McpManager):
                 parsed_oauth_config = _sanitize_mcp_oauth_config(json.loads(oauth_config))
             except json.JSONDecodeError:
                 pass
+        _ensure_keys_file_from_env(parsed_env, parsed_oauth_config)
         _apply_mcp_oauth_env(parsed_env, parsed_oauth_config)
 
         # Write OAuth credentials file if provided (for Google MCP servers)
@@ -263,7 +356,7 @@ def setup_mcp_routes(mcp_manager: McpManager):
         # Check if OAuth token already exists — skip connection attempt if not
         needs_oauth = False
         if parsed_oauth_config:
-            needs_oauth = _mcp_oauth_token_missing(parsed_oauth_config)
+            needs_oauth = _mcp_oauth_token_missing(parsed_oauth_config, env=parsed_env)
 
         connected = False
         if not needs_oauth:
@@ -540,7 +633,8 @@ def setup_mcp_routes(mcp_manager: McpManager):
             oauth_cfg = _sanitize_mcp_oauth_config(json.loads(srv.oauth_config))
             keys_file = oauth_cfg.get("keys_file", "")
             token_file = oauth_cfg.get("token_file", "")
-            if not keys_file or not token_file:
+            uses_token_env = isinstance(oauth_cfg.get("token_env"), dict)
+            if not keys_file or not (token_file or uses_token_env):
                 raise HTTPException(400, "OAuth keys/token file not configured")
 
             with open(keys_file, encoding="utf-8") as f:
@@ -571,15 +665,20 @@ def setup_mcp_routes(mcp_manager: McpManager):
             tokens = resp.json()
             logger.info(f"OAuth tokens received for server {server_id}")
 
-            # Save tokens to the file the MCP package expects
-            os.makedirs(os.path.dirname(token_file), exist_ok=True)
-            with open(token_file, "w", encoding="utf-8") as f:
-                json.dump(tokens, f, indent=2)
-            logger.info(f"Saved OAuth tokens to {token_file}")
-
-            # Attempt to connect the MCP server now
             args = json.loads(srv.args) if srv.args else []
             env = json.loads(srv.env) if srv.env else {}
+
+            if uses_token_env:
+                # External-token mode: inject tokens into the server env and
+                # persist so reconnects after restart keep working.
+                env.update(_tokens_to_env_updates(oauth_cfg, tokens, client_id, client_secret))
+                srv.env = json.dumps(env)
+                db.commit()
+                logger.info(f"Stored OAuth tokens in env for server {server_id}")
+            else:
+                # Save tokens to the file the MCP package expects
+                _write_oauth_tokens(oauth_cfg, tokens)
+                logger.info(f"Saved OAuth tokens to {token_file}")
             connected = await mcp_manager.connect_server(
                 server_id=server_id,
                 name=srv.name,
