@@ -77,7 +77,7 @@ ARG INSTALL_OPTIONAL=false
 COPY requirements.txt requirements-optional.txt ./
 # The base image ships an old setuptools with known CVEs (e.g. CVE-2025-47273);
 # upgrade it before installing deps so Trivy scans the patched version.
-RUN pip install --no-cache-dir --upgrade setuptools \
+RUN pip install --no-cache-dir setuptools==84.0.0 \
     && pip install --no-cache-dir -r requirements.txt \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then pip install --no-cache-dir -r requirements-optional.txt; fi
 
