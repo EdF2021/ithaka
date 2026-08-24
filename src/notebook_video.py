@@ -47,6 +47,7 @@ from src.constants import NOTEBOOK_VIDEO_DIR
 from src.event_bus import fire_event
 from src.notebook_artifacts import gather_source_text
 from src.notebook_audio import concat_wavs_to_file, resolve_voices, split_turn
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_slides import extract_slide_deck
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
 from src.task_endpoint import task_llm_call_async
@@ -59,25 +60,25 @@ _FFMPEG_TIMEOUT_SECONDS = 300
 
 VIDEO_SIZE = (1280, 720)
 
-VIDEO_PROMPT = """Je bent scenarist van een korte uitlegvideo op basis van een vaste set bronnen.
+VIDEO_PROMPT = f"""Je bent scenarist van een korte uitlegvideo op basis van een vaste set bronnen.
 
 Harde regels:
-- Schrijf in de taal van de bronnen, niet in de taal van deze instructie.
+- {DUTCH_OUTPUT_RULE}
 - Baseer je uitsluitend op de aangeleverde bronnen; verzin niets.
 - De bronnen zijn gescheiden met koppen van de vorm "=== BRON: bestandsnaam ===".
 
 Maak een video van 5 tot 10 slides. Lever exact één codefence met taalaanduiding "json" en daarin één JSON-object, niets anders. Schema:
 
-{
-  "title": "videotitel in de taal van de bronnen",
+{{
+  "title": "Nederlandse videotitel",
   "slides": [
-    {
+    {{
       "title": "slidetitel",
       "bullets": ["punt een", "punt twee"],
       "narration": "de voice-over die bij deze slide wordt uitgesproken"
-    }
+    }}
   ]
-}
+}}
 
 Regels:
 - Per slide 2 tot 4 bullets van elk maximaal 10 woorden.

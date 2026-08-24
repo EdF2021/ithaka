@@ -19,6 +19,7 @@ import core.database as db
 import routes.notebook_routes as nbr
 import src.notebook_artifacts as artifacts
 from src.notebook_artifacts import ARTIFACT_KINDS
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_slides import extract_slide_deck, generate_slide_deck
 from src.notebook_report import ENGLISH_KIND_LABELS
 from tests.helpers.sqlite_db import make_temp_sqlite
@@ -38,7 +39,7 @@ _DECK_MD = "```json\n" + json.dumps(_DECK, ensure_ascii=False) + "\n```\n"
 def test_slide_deck_kind_registered_with_dutch_label():
     assert "slide_deck" in ARTIFACT_KINDS
     assert ARTIFACT_KINDS["slide_deck"]["label"] == "Diapresentatie"
-    assert "taal van de bronnen" in ARTIFACT_KINDS["slide_deck"]["prompt"]
+    assert DUTCH_OUTPUT_RULE in ARTIFACT_KINDS["slide_deck"]["prompt"]
 
 
 def test_slide_deck_in_english_kind_labels():

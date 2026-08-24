@@ -32,10 +32,21 @@ from starlette.testclient import TestClient
 import core.database as cdb
 import routes.notebook_routes as nbr
 import src.notebook_video as video
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_slides import extract_slide_deck
 from tests.helpers.sqlite_db import make_temp_sqlite
 
 _TS, _ENGINE, _TMPDB = make_temp_sqlite(cdb.Base.metadata)
+
+
+# ── VIDEO_PROMPT ─────────────────────────────────────────────────────────
+
+def test_video_prompt_states_the_hard_requirements():
+    prompt = video.VIDEO_PROMPT
+    assert DUTCH_OUTPUT_RULE in prompt                    # always Dutch, not source language
+    assert "Schrijf in de taal van de bronnen" not in prompt  # old source-language clause is gone
+    assert "Nederlandse videotitel" in prompt       # schema title is Dutch, not source-language
+    assert "{{" not in prompt                       # f-string brace-escaping didn't leak
 
 
 # ── shared fixtures / helpers ────────────────────────────────────────────

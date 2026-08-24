@@ -265,10 +265,17 @@ def test_artifact_kinds_registry_complete():
         "flashcards": "Flashcards", "data_table": "Gegevenstabel",
         "slide_deck": "Diapresentatie",
     }
+    from src.notebook_language import DUTCH_OUTPUT_RULE
+
     for kind, spec in artifacts.ARTIFACT_KINDS.items():
         assert spec["prompt"].strip(), kind
-        # Every prompt defers to the source language, never fixes Dutch.
-        assert "taal van de bronnen" in spec["prompt"], kind
+        # Every prompt forces Dutch output, regardless of the source language.
+        assert DUTCH_OUTPUT_RULE in spec["prompt"], kind
+        # No leftover per-kind "follow the source language" clause outside
+        # the shared rule itself (which legitimately mentions "de taal van
+        # de bronnen" while overriding it).
+        remainder = spec["prompt"].replace(DUTCH_OUTPUT_RULE, "")
+        assert "taal van de bronnen" not in remainder, kind
 
 
 def test_mindmap_prompt_requires_single_mermaid_fence():

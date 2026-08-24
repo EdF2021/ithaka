@@ -13,6 +13,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 import src.chat_processor as cp
+from src.notebook_language import DUTCH_OUTPUT_RULE
 
 
 def _mk_processor(hits):
@@ -96,6 +97,17 @@ def test_document_id_degrades_to_none_when_metadata_lacks_it():
     _, rag_sources, _, _ = _preface(proc, notebook_id="nb-1")
 
     assert rag_sources[0]["document_id"] is None
+
+
+def test_grounding_prompt_carries_dutch_output_rule():
+    """Notebook chat must always answer in Dutch, regardless of source or
+    question language — enforced via the shared DUTCH_OUTPUT_RULE constant."""
+    assert DUTCH_OUTPUT_RULE in cp.NOTEBOOK_GROUNDING_PROMPT
+
+
+def test_no_sources_prompt_carries_dutch_output_rule():
+    """The refusal branch must also stay in Dutch."""
+    assert DUTCH_OUTPUT_RULE in cp.NOTEBOOK_NO_SOURCES_PROMPT
 
 
 def test_notebook_empty_results_injects_refusal_prompt():

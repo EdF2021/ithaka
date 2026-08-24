@@ -15,8 +15,21 @@ from starlette.testclient import TestClient
 
 import core.database as db
 import routes.notebook_routes as nbr
+import src.notebook_suggest as ns
 from src.notebook_suggest import parse_questions
 from tests.helpers.sqlite_db import make_temp_sqlite
+
+
+# ---- _PROMPT language ----
+
+def test_prompt_forces_dutch():
+    """Follow-up suggestions must always be in Dutch, not whatever language
+    the conversation happens to be in."""
+    assert "in Dutch" in ns._PROMPT
+
+
+def test_prompt_no_longer_mirrors_conversation_language():
+    assert "same language" not in ns._PROMPT
 
 
 # ---- parse_questions (pure function) ----

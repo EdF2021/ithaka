@@ -27,6 +27,7 @@ from core.database import Document, Notebook, NotebookArtifact, NotebookSource
 from src.event_bus import fire_event
 from src.notebook_flashcards import validate_flashcards_markdown
 from src.notebook_infographic import validate_infographic_markdown
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_mindmap import validate_mindmap_markdown
 from src.notebook_slides import extract_slide_deck
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
@@ -82,16 +83,17 @@ def _strip_think_blocks(text: str) -> str:
 # --------------------------------------------------------------------------
 # Prompts
 #
-# Written in Dutch (the project language), but every prompt orders the model to
-# follow the *sources'* language - an artifact over English sources must come
-# out in English. The rule is stated first and repeated per kind because a
-# Dutch instruction otherwise nudges the model towards Dutch output.
+# Written in Dutch (the project language). Output is always forced to Dutch
+# via DUTCH_OUTPUT_RULE (src/notebook_language.py), regardless of the
+# sources' language - the rule is stated first and repeated per kind because
+# a per-kind instruction that mentions "the sources' language" would
+# otherwise nudge the model away from Dutch output.
 # --------------------------------------------------------------------------
 
-_BASE_RULES = """Je bent een zorgvuldige redacteur die materiaal samenstelt uit een vaste set bronnen.
+_BASE_RULES = f"""Je bent een zorgvuldige redacteur die materiaal samenstelt uit een vaste set bronnen.
 
 Harde regels:
-- Schrijf in de taal van de bronnen, niet in de taal van deze instructie. Zijn de bronnen Engels, schrijf dan Engels; zijn ze Nederlands, schrijf dan Nederlands. Volg de dominante taal van de bronnen en vertaal citaten niet.
+- {DUTCH_OUTPUT_RULE}
 - Baseer je uitsluitend op de aangeleverde bronnen. Vul niets aan met algemene kennis en presenteer geen aanname als feit.
 - Ontbreekt informatie, benoem dat in één korte zin in plaats van te gokken.
 - Lever pure markdown. Geen inleidende zin, geen afsluitende opmerking, geen meta-tekst over de opdracht: begin direct met de inhoud.
@@ -126,7 +128,7 @@ Schrijf zakelijk en stellig. Vermijd vulwoorden en formuleringen die niets toevo
     "faq": """Stel een FAQ samen van 8 tot 12 vraag-en-antwoordparen die de bronnen daadwerkelijk beantwoorden.
 
 Structuur:
-- "# " met een titel die "veelgestelde vragen" uitdrukt in de taal van de bronnen.
+- "# " met een titel die "veelgestelde vragen" uitdrukt in het Nederlands.
 - Per paar een "### " met de vraag, daaronder het antwoord als gewone alinea van twee tot vijf zinnen.
 
 Regels:
@@ -138,10 +140,10 @@ Regels:
     "quiz": """Maak een toets van 8 tot 10 vragen waarmee iemand kan nagaan of hij de stof beheerst.
 
 Structuur:
-- "# " met een titel die "toets" of "quiz" uitdrukt in de taal van de bronnen.
+- "# " met een titel die "toets" of "quiz" uitdrukt in het Nederlands.
 - Daarna de genummerde vragen, 1 tot en met N, elk als "**1.** vraagtekst".
 - Meerkeuzevragen krijgen de opties eronder als bullets "A) ...", "B) ...", "C) ...", "D) ...".
-- Sluit af met een kop "## " gevolgd door het woord voor "antwoorden" in de taal van de bronnen, met daaronder de genummerde antwoorden, elk met één zin toelichting waarom dat het antwoord is.
+- Sluit af met een kop "## " gevolgd door het woord voor "antwoorden" in het Nederlands, met daaronder de genummerde antwoorden, elk met één zin toelichting waarom dat het antwoord is.
 
 Regels:
 - Varieer tussen meerkeuze en open vragen en toets begrip en toepassing, niet alleen losse feitjes.
@@ -177,7 +179,7 @@ mindmap
     "infographic": """Maak een infographic: een compacte, visueel scanbare pagina met de kern van de bronnen in cijfers en korte feiten.
 
 Structuur, exact in deze volgorde en met exact deze koppen (de renderer parst op deze structuur):
-- "# " met een pakkende titel in de taal van de bronnen.
+- "# " met een pakkende titel in het Nederlands.
 - "## Key numbers": 3 tot 5 bullets, elk exact in de vorm "- **<getal, percentage of korte metric>** — <label van maximaal 8 woorden>". Zijn er geen cijfers in de bronnen, gebruik dan een telwoord of kort feit als "getal" (bijvoorbeeld "3 panelen" of "geen vermeld") - verzin nooit een cijfer dat niet in de bronnen staat.
 - Daarna 3 tot 4 gewone secties, elk "## <sectiekop>" met 2 tot 4 korte bullet-feiten.
 - Afsluitend één blockquote-regel "> " met één kernboodschap in één zin.
@@ -190,7 +192,7 @@ Regels:
     "flashcards": """Maak 10 tot 15 flashcards waarmee iemand de kernbegrippen uit de bronnen kan oefenen.
 
 Structuur (de renderer parst op deze vorm):
-- "# " met een titel in de taal van de bronnen.
+- "# " met een titel in het Nederlands.
 - Per kaart een "### " met de voorzijde (een vraag of begrip), daaronder de achterzijde als één of twee gewone alinea's.
 
 Regels:
@@ -202,7 +204,7 @@ Regels:
     "data_table": """Maak een gegevenstabel: de concrete feiten, cijfers en kenmerken uit de bronnen als overzichtelijke markdown-tabellen.
 
 Structuur:
-- "# " met een titel in de taal van de bronnen.
+- "# " met een titel in het Nederlands.
 - Eén of meer markdown-tabellen, elk voorafgegaan door een "## " sectiekop die zegt wat de tabel toont.
 - Kies kolommen die bij het brontype passen (bijvoorbeeld indicator/waarde/bron, of begrip/definitie/voorbeeld).
 - Sluit af met één regel gewone tekst die de belangrijkste observatie uit de tabellen benoemt.
@@ -217,7 +219,7 @@ Regels:
 Lever exact één codefence met taalaanduiding "json" en daarin één JSON-object, niets anders. Schema:
 
 {
-  "title": "presentatietitel in de taal van de bronnen",
+  "title": "presentatietitel in het Nederlands",
   "slides": [
     {
       "title": "slidetitel",
@@ -228,7 +230,7 @@ Lever exact één codefence met taalaanduiding "json" en daarin één JSON-objec
 }
 
 Regels:
-- Alle tekstvelden in de taal van de bronnen.
+- Alle tekstvelden in het Nederlands.
 - 6 tot 12 slides; de eerste slide introduceert het onderwerp, de laatste vat samen of concludeert.
 - Per slide 2 tot 5 bullets van elk maximaal 12 woorden; geen volledige zinnen met punt erachter.
 - "notes" is de uitgeschreven toelichting die een spreker bij de slide zou vertellen - op zichzelf begrijpelijk.
