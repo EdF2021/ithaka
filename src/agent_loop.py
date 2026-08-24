@@ -693,6 +693,29 @@ _API_HOSTS = frozenset([
 ])
 _MCP_KEYWORDS = frozenset(["mcp", "browse", "browser", "website", "calendar", "event", "email",
                            "gmail", "screenshot", "navigate", "click", "miniflux", "rss", "feed"])
+def _local_mcp_schemas(last_user, mcp_schemas, relevant_tools, disabled_tools):
+    """MCP schemas to offer a *local* model this round.
+
+    Local models get only MCP schemas (built-in tools are prompt-driven).
+    Prefer the tool-RAG selection: it already matched the query against every
+    connected server, and a full catalog (200+ schemas once a big server like
+    Google Drive connects) overwhelms small local models. The keyword gate
+    stays as fallback for when selection produced no MCP hits.
+    """
+    def _name(s):
+        return s.get("function", {}).get("name")
+
+    schemas = mcp_schemas or []
+    if disabled_tools:
+        schemas = [s for s in schemas if _name(s) not in disabled_tools]
+    if relevant_tools:
+        selected = [s for s in schemas if _name(s) in relevant_tools]
+        if selected:
+            return selected
+    wants_mcp = any(kw in (last_user or "").lower() for kw in _MCP_KEYWORDS)
+    return schemas if (wants_mcp and schemas) else []
+
+
 _ADMIN_SCHEMA_NAMES = frozenset([
     "manage_session", "manage_skills", "manage_tasks",
     "manage_endpoints", "manage_mcp", "manage_webhooks", "manage_tokens",
@@ -4229,10 +4252,9 @@ async def stream_agent_loop(
                     and t.get("name") not in disabled_tools
                 ]
         else:
-            # Local: only MCP schemas when message suggests MCP tool usage
-            _last_content = _last_user.lower()
-            _wants_mcp = any(kw in _last_content for kw in _MCP_KEYWORDS)
-            all_tool_schemas = mcp_schemas if (_wants_mcp and mcp_schemas) else []
+            all_tool_schemas = _local_mcp_schemas(
+                _last_user, mcp_schemas, _relevant_tools, disabled_tools
+            )
         agent_stream_timeout = int(get_setting("agent_stream_timeout_seconds", 300) or 300)
 
         _tool_names_sent = [t.get("function", {}).get("name") for t in (all_tool_schemas or []) if t.get("function")]
