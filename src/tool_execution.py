@@ -10,6 +10,7 @@ Extracted from agent_tools.py.
 import asyncio
 import collections
 import contextvars
+import functools
 import json
 import logging
 import os
@@ -81,6 +82,56 @@ _SENSITIVE_BASENAMES_CF: frozenset[str] = frozenset(b.casefold() for b in _SENSI
 _SENSITIVE_FILE_PATTERNS_CF: frozenset[str] = frozenset(p.casefold() for p in _SENSITIVE_FILE_PATTERNS)
 
 
+# ── App-internal credential stores (F2) ──────────────────────────────────
+# DATA_DIR is an allowed tool root, but a handful of files under it ARE the
+# application's own credential stores: sessions.json (live session bearer
+# tokens), vault.json + .app_key (vault contents and the key that decrypts
+# them), settings.json (API keys behind manage_settings masking), auth.json
+# (bcrypt password hashes), app.db and the chroma/ vector store. The basename
+# deny-list above is for OS-level dotfiles; these are matched as ABSOLUTE
+# resolved paths against the named constants in src.constants, so ordinary
+# same-named files elsewhere (e.g. an uploaded settings.json) are not
+# over-blocked, and no relative-path alias can reach the stores.
+
+@functools.lru_cache(maxsize=64)
+def _realpath_normcase(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _protected_app_paths() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(files, dirs) of the app's credential stores as normcased realpaths.
+
+    Read lazily from src.constants at call time (not captured at import) so
+    the constants stay the single source of truth and test monkeypatching of
+    e.g. ``constants.VAULT_FILE`` is honored.
+    """
+    from src import constants as _c
+    files = tuple(_realpath_normcase(p) for p in (
+        _c.SESSIONS_FILE, _c.SETTINGS_FILE, _c.AUTH_FILE,
+        _c.VAULT_FILE, _c.APP_KEY_FILE, _c.APP_DB,
+    ))
+    dirs = tuple(_realpath_normcase(p) for p in (_c.CHROMA_DIR,))
+    return files, dirs
+
+
+def _is_protected_app_path(resolved: str) -> bool:
+    """True when *resolved* is one of the app's own credential/secret stores,
+    or lives under one that is a directory (the Chroma store)."""
+    norm = os.path.normcase(resolved)
+    files, dirs = _protected_app_paths()
+    if norm in files:
+        return True
+    for d in dirs:
+        if norm == d:
+            return True
+        try:
+            if os.path.commonpath([norm, d]) == d:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _is_sensitive_path(resolved: str) -> bool:
     """Return True if *resolved* falls under a sensitive directory or
     matches a sensitive filename — regardless of what root it sits under.
@@ -99,7 +150,12 @@ def _is_sensitive_path(resolved: str) -> bool:
             return True
 
     # Check filename against known sensitive files.
-    return filename in _SENSITIVE_FILE_PATTERNS_CF
+    if filename in _SENSITIVE_FILE_PATTERNS_CF:
+        return True
+
+    # App-internal credential stores (sessions/vault/settings/auth/.app_key/
+    # app.db/chroma under DATA_DIR), matched by absolute resolved path (F2).
+    return _is_protected_app_path(resolved)
 
 
 def _tool_path_roots() -> list[str]:
@@ -176,8 +232,9 @@ def _resolve_tool_path(raw_path: str) -> str:
 
     if _is_sensitive_path(resolved):
         raise ValueError(
-            f"path '{raw_path}' is inside a sensitive directory "
-            f"(e.g. .ssh, .gnupg) or matches a sensitive filename"
+            f"access denied: path '{raw_path}' is inside a sensitive directory "
+            f"(e.g. .ssh, .gnupg), matches a sensitive filename, or is a "
+            f"protected application file"
         )
 
     for root in _tool_path_roots():
@@ -211,8 +268,9 @@ def _resolve_tool_path_in_workspace(workspace: str, raw_path: str) -> str:
     resolved = os.path.realpath(candidate)
     if _is_sensitive_path(resolved):
         raise ValueError(
-            f"path '{raw_path}' is inside a sensitive directory "
-            f"(e.g. .ssh, .gnupg) or matches a sensitive filename"
+            f"access denied: path '{raw_path}' is inside a sensitive directory "
+            f"(e.g. .ssh, .gnupg), matches a sensitive filename, or is a "
+            f"protected application file"
         )
     if resolved != base:
         # normcase so containment holds on case-insensitive filesystems

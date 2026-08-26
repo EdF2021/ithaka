@@ -57,6 +57,14 @@ NON_ADMIN_BLOCKED_TOOLS = BUILTIN_EMAIL_TOOLS | {
     "manage_webhooks",
     "manage_tokens",
     "manage_documents",
+    # XML/fence-only tool (no FUNCTION_TOOL_SCHEMAS entry) that reads and
+    # deletes saved deep-research JSONs on disk. The denylist is
+    # allow-by-omission, so leaving it out made
+    # is_public_blocked_tool("manage_research") False and let any non-admin
+    # call it. do_manage_research is also owner-scoped now
+    # (src/tools/research.py); non-admins keep research access through the
+    # owner-scoped /api/research/* routes and the Library UI.
+    "manage_research",
     "manage_settings",
     "api_call",
     "app_api",
