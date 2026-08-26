@@ -41,17 +41,6 @@ node --check static/js/<changed-file>.js
 
 Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*` (security, routes, services, cli, js, helpers, unit, uncategorized) plus a finer `sub_*` marker, so `-m "area_services and sub_cookbook"` also works. Pytest runs with `asyncio_mode = "auto"` — async test functions need no marker. Testing rules live in `tests/TESTING_STANDARD.md` (policy) and `tests/README.md` (helper reference). There is no linter/formatter configured; the checks are pytest plus the syntax checks above. CI (`.github/workflows/ci.yml`) runs the same things on PRs — full pytest on Python 3.11 and `node --check` over changed JS — plus separate secret-scan/container-scan/dependency-review workflows (see `docs/security-ci.md`).
 
-### Setup (fresh clone)
-
-```bash
-git clone https://github.com/EdF2021/ithaka.git && cd ithaka
-cp .env.example .env
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-docker compose up -d --build
-docker compose logs --tail=20 ithaka   # first admin password appears here
-```
-
 ### UI smoke test (desktop & mobile)
 
 Before merging anything that touches a page, navigation, session state, or file paths: drive the app in a real browser via the chrome-devtools MCP tools at `http://localhost:7000` (or the :7001 smoke instance) — desktop viewport **and** 360 px mobile. Check the flows the change touches plus the console for errors, and paste the full smoke output (commands + result, not just "green") into the PR chat before merging.

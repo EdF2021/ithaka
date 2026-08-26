@@ -21,6 +21,7 @@ import os
 import re
 import tempfile
 import uuid
+from typing import Optional
 
 from core.database import Document, NotebookSource
 
@@ -83,6 +84,42 @@ def _extract_text(filename, content_bytes):
     return content_bytes.decode("utf-8", errors="replace")
 
 
+def _is_heading_like(line: str) -> bool:
+    """Heuristic: does this line look like a heading/section title?
+
+    A line is heading-like if it starts with ``#``, OR ends with ``:`` and is
+    short, OR is predominantly ALL CAPS (≥60% uppercase letters) and short.
+    All checks use a < 80 char length gate so body paragraphs are excluded.
+    """
+    line = line.strip()
+    if not line or len(line) >= 80:
+        return False
+    if line.startswith("#"):
+        return True
+    if line.endswith(":"):
+        return True
+    letters = [c for c in line if c.isalpha()]
+    if letters:
+        upper = sum(1 for c in letters if c.is_upper())
+        if upper / len(letters) >= 0.6:
+            return True
+    return False
+
+
+def _last_heading_before(text: str, offset: int) -> Optional[str]:
+    """Return the stripped text of the last heading-like line before ``offset``.
+
+    Leading ``#`` markers are stripped from the returned hint. Returns ``None``
+    if no heading-like line is found in ``text[:offset]``.
+    """
+    scan = text[:offset] if offset > 0 else ""
+    last_heading = None
+    for line in scan.splitlines():
+        if _is_heading_like(line):
+            last_heading = line.strip().lstrip("#").strip()
+    return last_heading
+
+
 def _cleanup_orphan_chunks(rag_manager, notebook_id, doc_id):
     """Best-effort delete of chunks embedded before a mid-loop failure.
 
@@ -133,13 +170,21 @@ def ingest_notebook_file(notebook_id, owner, filename, content_bytes,
     vector_rag = getattr(rag_manager, "vector_rag", rag_manager)
     chunks = vector_rag._split_into_chunks(text)
     embedded = 0
+    # Track the cumulative character offset so we can derive a section
+    # heading from the text preceding each chunk's start position.
+    char_offset = 0
     try:
         for i, chunk in enumerate(chunks):
+            paragraph_ref = f"¶{i + 1}"
+            section_hint = _last_heading_before(text, char_offset) or filename
             metadata = {"source": filename, "filename": filename, "type": ext,
                         "chunk_id": i, "owner": owner,
-                        "document_id": doc_id, "notebook_id": notebook_id}
+                        "document_id": doc_id, "notebook_id": notebook_id,
+                        "paragraph_ref": paragraph_ref,
+                        "section_hint": section_hint}
             if rag_manager.add_document(chunk, metadata):
                 embedded += 1
+            char_offset += len(chunk)
     except Exception as exc:
         logger.warning("notebook ingest embedding failed for %s: %s", filename, exc)
         _cleanup_orphan_chunks(rag_manager, notebook_id, doc_id)
