@@ -60,3 +60,20 @@ def test_existing_exact_path_still_passive():
 
 def test_existing_prefix_still_passive():
     assert should_track_interactive_request("/api/health/live", "GET") is False
+
+
+# ── fase 4c: video-statuspoll gets the same passive treatment ─────────────
+
+def test_video_status_poll_get_is_not_tracked():
+    path = "/api/notebooks/nb-123/video/job-456"
+    assert should_track_interactive_request(path, "GET") is False
+
+
+def test_video_job_start_post_is_still_tracked():
+    path = "/api/notebooks/nb-123/video"
+    assert should_track_interactive_request(path, "POST") is True
+
+
+def test_similar_but_longer_video_path_is_still_tracked():
+    path = "/api/notebooks/nb-123/video/job-456/extra"
+    assert should_track_interactive_request(path, "GET") is True

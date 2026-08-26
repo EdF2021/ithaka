@@ -3,7 +3,7 @@
 ## Purpose
 
 This document defines *how we write and refactor tests* in Ithaka. It is the
-standard that the incremental test-suite refactor (issue #2523) works toward,
+standard that the incremental test-suite refactor works toward,
 and it applies to both human contributors and coding agents.
 
 It is intentionally split from [`tests/README.md`](./README.md):
@@ -53,7 +53,7 @@ Every new or refactored test should be:
 
 Tests are classified by the categories below. Today the suite is mostly flat
 under `tests/` (the current `area_cli` set has moved to `tests/cli/`); the
-**Target dir** column is the phased layout from #2523 that we move toward
+**Target dir** column is the phased layout that we move toward
 *after* helpers and determinism are stable. Until a category is moved, new
 tests in that category stay in flat `tests/` but should still follow this
 standard.
@@ -152,7 +152,7 @@ Prefer tests that exercise real behavior over tests that inspect source code.
   shapes: fake users, fake sessions, fake requests, fake DB rows, fake LLM
   responses, fake tool calls.
 
-## PR discipline for #2523 refactor slices
+## PR discipline for refactor slices
 
 - Keep each PR small, reviewable, and behavior-preserving - unless the PR's stated
   purpose is to add new coverage.
@@ -209,7 +209,7 @@ in the same PR), with an identical pass set before and after.
 
 ## Related: CI-hardening track (tracked separately)
 
-Making the suite an enforced gate is broader than #2523's organization scope and
+Making the suite an enforced gate is broader than this refactor's organization scope and
 should be tracked as its own effort. The intended sequence:
 
 1. Add non-blocking randomized pytest reporting (`pytest-randomly`) so hidden

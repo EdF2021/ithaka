@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Ithaka is Ed's private fork of `pewdiepie-archdaemon/odysseus` (detached, no upstream remote): a self-hosted AI workspace (chat/agents, cookbook model serving, deep research, documents, email, notes/tasks/calendar) built on FastAPI + a vanilla-JS frontend. AGPL-3.0. Branch model: `dev` is the default working branch, `main` is the curated/stable branch — PRs target `dev`.
+Ithaka is Ed's self-hosted AI workspace (chat/agents, cookbook model serving, deep research, documents, email, notes/tasks/calendar) built on FastAPI + a vanilla-JS frontend, at `EdF2021/ithaka` (public). It started as a fork but is fully detached — no upstream remote; origin and third-party credits live in `ACKNOWLEDGMENTS.md`. AGPL-3.0. Branch model: `dev` is the default working branch, `main` is the curated/stable branch — PRs target `dev`.
 
-Session logs live in `docs/sessions/` — read the most recent one before starting substantial work. Operational guides (setup, backup/restore, security CI, PR-blocker audit) live in `docs/`.
+Session logs live in `docs/sessions/` — read the most recent one before starting substantial work. Operational guides (setup, backup/restore, security CI, PR-blocker audit) live in `docs/`; a deeper runtime/manager inventory lives in `specs/architecture-runtime-inventory.md`.
 
 ## Commands
 
@@ -15,6 +15,7 @@ The local virtualenv is **`.venv`** (repo docs say `./venv` — that's stale; us
 ```bash
 # Docker stack (canonical way to run): app + chromadb + searxng + ntfy + tailscale sidecar
 docker compose up -d --build          # containers ithaka-*, app on http://localhost:7000
+                                      # GPU variants: docker-compose.gpu-nvidia.yml / gpu-amd.yml
 docker compose logs --tail=120 ithaka  # first admin password is printed here on a fresh data volume
 docker compose config                  # validate after compose changes
 
@@ -38,18 +39,32 @@ ITHAKA_DATA_DIR=<fresh-dir> .venv/bin/python -m uvicorn app:app --port 7001
 node --check static/js/<changed-file>.js
 ```
 
-Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*` (security, routes, services, cli, js, helpers, unit, uncategorized) plus a finer `sub_*` marker, so `-m "area_services and sub_cookbook"` also works. Pytest runs with `asyncio_mode = "auto"` — async test functions need no marker. Testing rules live in `tests/TESTING_STANDARD.md` (policy) and `tests/README.md` (helper reference). There is no linter/formatter configured; the checks are pytest plus the syntax checks below.
+Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*` (security, routes, services, cli, js, helpers, unit, uncategorized) plus a finer `sub_*` marker, so `-m "area_services and sub_cookbook"` also works. Pytest runs with `asyncio_mode = "auto"` — async test functions need no marker. Testing rules live in `tests/TESTING_STANDARD.md` (policy) and `tests/README.md` (helper reference). There is no linter/formatter configured; the checks are pytest plus the syntax checks above. CI (`.github/workflows/ci.yml`) runs the same things on PRs — full pytest on Python 3.11 and `node --check` over changed JS — plus separate secret-scan/container-scan/dependency-review workflows (see `docs/security-ci.md`).
+
+### UI smoke test (desktop & mobile)
+
+Before merging anything that touches a page, navigation, session state, or file paths: drive the app in a real browser via the chrome-devtools MCP tools at `http://localhost:7000` (or the :7001 smoke instance) — desktop viewport **and** 360 px mobile. Check the flows the change touches plus the console for errors, and paste the full smoke output (commands + result, not just "green") into the PR chat before merging.
+
+### Gotchas & common pitfalls
+
+- **Tailscale MTU blackhole** — packets > ~1200 B drop silently on the Windows↔WSL sidecar (health checks pass, pages/TLS hang). Fix is baked into `docker-compose.yml` (`TS_DEBUG_MTU=1130`); mirror it in the GPU compose variants. Verify with `tailscale ping --size`.
+- **Trailing-dot host entry** — Windows Chrome doesn't resolve `*.ts.net` (DoH); add a hosts entry via admin PowerShell:
+  ```powershell
+  Add-Content C:\Windows\System32\drivers\etc\hosts "100.72.181.25 ithaka.tailb21d35.ts.net."
+  ```
+- **HF_TOKEN for gated HF repos** — the cookbook reads a stored token via `load_stored_hf_token()` (`src/tools/cookbook.py`), set in Cookbook → Settings or `.env`. Standalone scripts (`diffusion_server.py`, `add_hwfit_models.py`, …) only read the env var and miss the stored token.
+- **`.claude.local.md`** — personal overrides (keybindings, local shortcuts). Git-ignored, merged at runtime.
 
 ## Architecture
 
-- **`app.py`** — slim orchestrator (~1300 lines): loads `.env`, constructs managers/services, then wires ~40 routers via `app.include_router(setup_*_routes(deps...))` factory calls. Routers get their dependencies injected as arguments, not via globals.
+- **`app.py`** — slim orchestrator (~1300 lines): loads `.env`, constructs managers/services, then wires ~48 routers via `app.include_router(setup_*_routes(deps...))` factory calls. Routers get their dependencies injected as arguments, not via globals.
 - **`routes/`** — HTTP layer only, one module per feature (`chat_routes.py`, `cookbook_routes.py`, `email_routes.py`, …) plus `_validators.py` and per-feature helper modules.
-- **`src/`** — the bulk of the logic: agent loop (`agent_loop.py`, `tool_execution.py`, `tool_policy.py`, `tool_schemas.py`), chat pipeline (`chat_handler.py`, `chat_processor.py`, `llm_core.py`), RAG (`rag_manager.py`, `chroma_client.py`, `embeddings.py`), MCP (`mcp_manager.py`), task scheduler, security helpers (`prompt_security.py`, `url_safety.py`, `tool_security.py`).
+- **`src/`** — the bulk of the logic: agent loop (`agent_loop.py`, `tool_execution.py`, `tool_policy.py`, `tool_schemas.py`, `tool_index.py` — RAG-based tool selection: tool descriptions live in a Chroma collection, top-K retrieved per message instead of all-in-prompt), chat pipeline (`chat_handler.py`, `chat_processor.py`, `llm_core.py`), RAG (`rag_manager.py`, `chroma_client.py`, `embeddings.py`), MCP (`mcp_manager.py`, `mcp_presets.py` — server-side catalog of connector presets incl. Google Calendar/Drive via in-app OAuth), task scheduler, security helpers (`prompt_security.py`, `url_safety.py`, `tool_security.py`).
 - **`services/`** — subsystem packages: `research/`, `search/`, `shell/`, `stt/`, `tts/`, `memory/`, `hwfit/`, `docs/`, `faces/`, `youtube/`.
 - **`core/`** — auth (`AuthManager`), database, middleware, session manager. `core/constants.py` only re-exports `src/constants.py` for backward compatibility.
 - **`static/`** — vanilla JS ES modules, no framework, no build step. `static/index.html` loads the scripts; `static/js/` holds 65+ modules (`MODULE_SUMMARY.md` there is a partial, historical overview).
 - **`scripts/`** — CLI entry points (`ithaka`, `ithaka-backup`, `ithaka-cookbook`, …) and maintenance scripts.
-- **Notebooks** (NotebookLM-style, cross-cutting): `routes/notebook_routes.py` + `src/notebook_ingest.py` + `static/js/notebooks.js`. Sources are indexed per notebook via a `notebook_id` metadata filter in the RAG layer (`rag_manager.py` / `rag_vector.py`); notebook chat runs strictly grounded with `[n]` citations and a server-side tool lockdown (all tools + MCP disabled). Text artifacts (study guide/briefing/FAQ/quiz/mindmap) live in `src/notebook_artifacts.py`; the podcast pipeline (LLM dialogue script → per-turn TTS → streaming WAV concat, async job mirroring `research_handler.py`) in `src/notebook_audio.py`, which also hosts the hourly janitor for orphaned audio files (wired in `app.py`). The podcast status poll is on the passive list in `src/interactive_gate.py` (`_PASSIVE_PATTERNS`). Datamodel incl. `NotebookArtifact` (with `audio_path`) lives in `core/database.py`. **Gotcha:** a synchronous LLM call inside a tracked request self-deadlocks on two background gates (`wait_for_interactive_quiet` + the `_local_model_slot` workload gate) — pass `wait_for_quiet=False, workload="foreground"`, or better: use an async job like the podcast does. Regression test: `tests/test_notebooks_gate_seam.py`. Design docs: `docs/notebooklm-gap-analyse.md` (status header lists all phase session logs) and `docs/superpowers/specs/` (fase 2 + fase 3).
+- **Notebooks** (NotebookLM-style, cross-cutting): `routes/notebook_routes.py` + `src/notebook_ingest.py` + `static/js/notebooks.js`. Sources are indexed per notebook via a `notebook_id` metadata filter in the RAG layer (`rag_manager.py` / `rag_vector.py`); notebook chat runs strictly grounded with `[n]` citations and a server-side tool lockdown (all tools + MCP disabled). Text artifacts (study guide/briefing/FAQ/quiz/mindmap/flashcards/data table) live in `src/notebook_artifacts.py`, with a validator-retry seam: slide decks validate against a JSON schema, and infographic/flashcards/mindmap each have a format validator (`validate_*_markdown` in their module) that triggers regeneration on malformed output; renderers in `src/notebook_flashcards.py`, `src/notebook_slides.py` (slide-JSON schema + standalone viewer), `src/notebook_infographic.py`, `src/notebook_mindmap.py` (mermaid mindmap parser + interactive collapsible viewer in `notebookWorkspace.js`). The podcast pipeline (LLM dialogue script → per-turn TTS → streaming WAV concat, async job mirroring `research_handler.py`) lives in `src/notebook_audio.py`; the video pipeline (slide JSON + narration → Pillow PNG frames → per-slide TTS → ffmpeg mp4; ffmpeg + fonts-dejavu-core are in the Docker image) in `src/notebook_video.py`, served via `/api/notebook-video/{fn}`. Both host hourly janitors for orphaned media files (wired in `app.py`). Web sources: search bar in the sources panel → SearXNG → `POST .../sources/url` → `ingest_notebook_url` (fetch via `services/search/content.py`, never the divergent `src/search/` duplicate). Podcast and video status polls are on the passive list in `src/interactive_gate.py` (`_PASSIVE_PATTERNS`). All generated notebook output (chat, artifacts, podcast, video, question suggestions) is forced to Dutch: every generation prompt embeds `DUTCH_OUTPUT_RULE` from `src/notebook_language.py` — new generators must include it, and the rule is changed there, never inline. Datamodel incl. `NotebookArtifact` (with `audio_path`/`video_path`) and `NotebookSource.url` lives in `core/database.py`. **Gotcha:** a synchronous LLM call inside a tracked request self-deadlocks on two background gates (`wait_for_interactive_quiet` + the `_local_model_slot` workload gate) — pass `wait_for_quiet=False, workload="foreground"`, or better: use an async job like the podcast does. Regression test: `tests/test_notebooks_gate_seam.py`. Design docs: `docs/notebooklm-gap-analyse.md` (status header lists all phase session logs) and `docs/superpowers/specs/` (fase 2, 3 en 4).
 
 ### Constants rule (enforced in review)
 
@@ -64,5 +79,5 @@ Tests are auto-tagged at collection by filename (`tests/_taxonomy.py`): `area_*`
 
 ## Deployment specifics of this fork
 
-- Remote access runs through a Tailscale sidecar (`tailscale` service in compose): bare `tailscaled --tun=userspace-networking`, node `ithaka.tailb21d35.ts.net`, app reachable on port 7000 within the tailnet. Do **not** switch it back to containerboot — without `TS_AUTHKEY` containerboot regenerates the nodekey in a loop and auth URLs expire instantly; the fix is bare `tailscaled` + a one-time `docker exec ithaka-tailscale-1 tailscale up --accept-dns=false`.
+- Remote access runs through a Tailscale sidecar (`tailscale` service in compose): bare `tailscaled --tun=userspace-networking`, node `ithaka.tailb21d35.ts.net`, app reachable on port 7000 within the tailnet (HTTPS via `tailscale serve` → https://ithaka.tailb21d35.ts.net). Do **not** switch it back to containerboot — without `TS_AUTHKEY` containerboot regenerates the nodekey in a loop and auth URLs expire instantly; the fix is bare `tailscaled` + a one-time `docker exec ithaka-tailscale-1 tailscale up --accept-dns=false`.
 - `.env` uses `APP_BIND=0.0.0.0` (WSL NAT shields the LAN). The API-token prefix `ody_` is intentionally kept from upstream for existing tokens.

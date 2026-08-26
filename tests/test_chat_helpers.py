@@ -570,3 +570,108 @@ async def test_build_chat_context_keeps_cookie_user_owner_scope(monkeypatch):
     # (regression guard: this used to be read off a shared chat_processor
     # instance attribute that concurrent/back-to-back calls could overwrite).
     assert ctx.used_memories == [{"text": "bob's memory", "category": "fact", "type": "pinned"}]
+
+
+async def _build_context_source_ids_probe(monkeypatch, *, notebook_id, source_ids):
+    """Drives build_chat_context far enough to observe what it hands the
+    chat_processor for source_ids/notebook_id, without the owner-scope
+    plumbing of _build_context_owner_probe above.
+    """
+    captured = {"source_ids": "UNSET", "notebook_id": "UNSET"}
+
+    async def fake_preprocess(chat_handler, message, att_ids, sess, **kwargs):
+        return PreprocessedMessage(
+            enhanced_message=message,
+            user_content=message,
+            text_for_context=message,
+            youtube_transcripts=[],
+            attachment_meta=[],
+        )
+
+    def fake_extract_preset(chat_handler, preset_id):
+        return PresetInfo(
+            temperature=0.7,
+            max_tokens=1024,
+            system_prompt=None,
+            character_name=None,
+        )
+
+    def fake_add_user_message(sess, chat_handler, preprocessed, incognito=False):
+        sess.messages.append({"role": "user", "content": preprocessed.user_content})
+
+    def fake_load_prefs(owner):
+        return {"memory_enabled": True, "skills_enabled": True}
+
+    def fake_build_context_preface(**kwargs):
+        captured["source_ids"] = kwargs.get("source_ids")
+        captured["notebook_id"] = kwargs.get("notebook_id")
+        return [], [], [], []
+
+    async def fake_maybe_compact(sess, endpoint_url, model, messages, headers, owner=None):
+        return messages, 8192, False
+
+    monkeypatch.setattr(chat_helpers, "preprocess", fake_preprocess)
+    monkeypatch.setattr(chat_helpers, "extract_preset", fake_extract_preset)
+    monkeypatch.setattr(chat_helpers, "add_user_message", fake_add_user_message)
+    monkeypatch.setattr(chat_helpers, "load_prefs_for_user", fake_load_prefs)
+    monkeypatch.setattr(chat_helpers, "_normalize_model_id_from_cache", lambda sess: None)
+    monkeypatch.setattr(chat_helpers, "normalize_model_id", lambda endpoint_url, model, **kwargs: None)
+    monkeypatch.setattr(chat_helpers, "maybe_compact", fake_maybe_compact)
+    monkeypatch.setattr(chat_helpers, "trim_for_context", lambda messages, context_length: messages)
+
+    import src.user_time as user_time
+
+    monkeypatch.setattr(
+        user_time,
+        "current_datetime_context_message",
+        lambda now_utc=None: {"role": "user", "content": "[Context - current date/time]"},
+        raising=False,
+    )
+
+    sess = SimpleNamespace(
+        endpoint_url="http://model.local/v1/chat/completions",
+        model="test-model",
+        headers={},
+        history=[],
+        messages=[],
+        notebook_id=notebook_id,
+    )
+    sess.get_context_messages = lambda: list(sess.messages)
+
+    request = SimpleNamespace(state=SimpleNamespace(api_token=False, current_user="carol"))
+    await build_chat_context(
+        sess=sess,
+        request=request,
+        chat_handler=SimpleNamespace(),
+        chat_processor=SimpleNamespace(build_context_preface=fake_build_context_preface),
+        message="hello",
+        session_id="session-1",
+        incognito=True,
+        source_ids=source_ids,
+    )
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_build_chat_context_drops_source_ids_outside_notebook(monkeypatch):
+    """Plan-mandated invariant: outside a notebook, source_ids must have zero
+    effect. build_chat_context (routes/chat_helpers.py) is the sole
+    enforcement point: ``source_ids=source_ids if notebook_id else None``.
+    A plain (non-notebook) session with a populated source_ids must still
+    reach chat_processor.build_context_preface with source_ids=None.
+    """
+    captured = await _build_context_source_ids_probe(
+        monkeypatch, notebook_id=None, source_ids=["d1"],
+    )
+    assert captured["notebook_id"] is None
+    assert captured["source_ids"] is None
+
+
+@pytest.mark.asyncio
+async def test_build_chat_context_passes_source_ids_inside_notebook(monkeypatch):
+    """Mirror case: inside a notebook, source_ids passes through unchanged."""
+    captured = await _build_context_source_ids_probe(
+        monkeypatch, notebook_id="nb-1", source_ids=["d1"],
+    )
+    assert captured["notebook_id"] == "nb-1"
+    assert captured["source_ids"] == ["d1"]

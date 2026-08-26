@@ -92,6 +92,37 @@ def _reject_compact_during_active_run(session_id: str) -> None:
         raise HTTPException(409, "Session has an active run; try compacting after it finishes")
 
 
+# Bearer ``ody_`` API tokens: chat sessions are the "chat" surface of the
+# scope taxonomy (routes/api_token_routes.py ALLOWED_SCOPES), so owner-scoped
+# session routes require the "chat" scope BEFORE effective_user() resolves the
+# token to its owner. Mirrors the enforcement in routes/codex_routes.py
+# (_scope_owner) and routes/model_routes.py (GET /api/models); without it, a
+# token scoped only to e.g. todos:read could read/delete the owner's entire
+# chat history (security finding F3). Cookie/browser sessions are untouched —
+# the gate no-ops when no bearer token is present.
+CHAT_TOKEN_SCOPES = {"chat"}
+
+
+def _require_chat_scope_for_token(request: Request) -> None:
+    """Reject bearer API tokens that lack the ``chat`` scope."""
+    state = getattr(request, "state", None)
+    if not getattr(state, "api_token", False):
+        return
+    scopes = set(getattr(state, "api_token_scopes", []) or [])
+    if not scopes.intersection(CHAT_TOKEN_SCOPES):
+        raise HTTPException(403, "API token is not scoped for chat")
+    if not getattr(state, "api_token_owner", None):
+        raise HTTPException(403, "API token has no owner")
+
+
+def _session_user(request: Request):
+    """``effective_user`` plus the bearer-token chat-scope gate, for
+    owner-scoped session routes that don't go through
+    ``_verify_session_owner``."""
+    _require_chat_scope_for_token(request)
+    return effective_user(request)
+
+
 def _verify_session_owner(request: Request, session_id: str, session_manager=None):
     """Verify the current user owns the session, honoring single-user modes.
 
@@ -99,8 +130,10 @@ def _verify_session_owner(request: Request, session_id: str, session_manager=Non
     auth is disabled and no user is present, treat the app as single-user mode:
     verify that the session exists, but do not compare its stored owner. This
     keeps QA/dev instances with AUTH_ENABLED=false from rejecting owner-stamped
-    rows created while auth was previously enabled.
+    rows created while auth was previously enabled. Bearer API tokens must
+    additionally carry the ``chat`` scope (see _require_chat_scope_for_token).
     """
+    _require_chat_scope_for_token(request)
     user = effective_user(request)
     if not user and not _auth_disabled():
         raise HTTPException(401, "Authentication required")
@@ -213,7 +246,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
     
     @router.get("/sessions")
     def list_sessions(request: Request):
-        user = effective_user(request)
+        user = _session_user(request)
         # Lazy purge: incognito sessions are ephemeral by design — wipe leftovers
         # from the DB and session_manager so they vanish on the next page refresh.
         # BUT: skip sessions that were created within the last 10 minutes.
@@ -333,7 +366,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
         notebook_id: str = Form(None),
     ):
         skip_val = str(skip_validation).lower() == "true"
-        user = effective_user(request)
+        user = _session_user(request)
         endpoint_api_key = ""
         endpoint_base_url = ""
         _reject_raw_endpoint_url_for_non_admin(request, user, endpoint_id, endpoint_url)
@@ -557,6 +590,9 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
     @router.post("/sessions/bulk-delete")
     async def bulk_delete_sessions(request: Request):
         """Delete multiple sessions (for compare cleanup via sendBeacon)."""
+        # Gate up front: the per-sid loop below swallows exceptions, which
+        # would silently downgrade an unscoped token's 403 to {"deleted": 0}.
+        _require_chat_scope_for_token(request)
         from core.database import ChatMessage as _CM
         try:
             body = await request.json()
@@ -711,7 +747,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
     @router.get("/sessions/archived")
     def list_archived_sessions(request: Request, search: str = "", offset: int = 0, limit: int = 20, sort: str = "recent", model: str = ""):
         """List archived sessions for the archive browser."""
-        user = effective_user(request)
+        user = _session_user(request)
         db = SessionLocal()
         try:
             q = db.query(DbSession).filter(DbSession.archived == True)
@@ -853,7 +889,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
     
     @router.post("/sessions/save")
     def sessions_save_now(request: Request):
-        user = effective_user(request)
+        user = _session_user(request)
         if not user:
             raise HTTPException(401, "Not authenticated")
         session_manager.save_sessions()
@@ -869,7 +905,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
         if not OPENAI_API_KEY:
             raise HTTPException(400, "Server missing OPENAI_API_KEY")
         sid = str(uuid.uuid4())
-        user = effective_user(request)
+        user = _session_user(request)
         session = session_manager.create_session(
             session_id=sid,
             name="",
@@ -1011,7 +1047,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
         users can clean junk without spending tokens.
         """
         from src.llm_core import llm_call
-        user = effective_user(request)
+        user = _session_user(request)
         single_user_mode = not user and _auth_disabled()
         user_sessions = session_manager.get_sessions_for_user(user)
 

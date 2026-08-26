@@ -20,6 +20,7 @@ import chatRenderer from './js/chatRenderer.js';
 import sessionModule from './js/sessions.js';
 import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
+import voiceMode from './js/voiceMode.js';
 import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js?v=20260630tasksactivity';
@@ -52,6 +53,7 @@ window.themeModule = themeModule;
 window.sessionModule = sessionModule;
 window.uiModule = uiModule;
 window.adminModule = adminModule;
+window.voiceMode = voiceMode;
 window.cookbookModule = cookbookModule;
 
 function _isMobileChatInput() {
@@ -2397,6 +2399,54 @@ function initializeEventListeners() {
       const s = loadToggleState(); s.ttsMode = isActive; saveToggleState(s);
       updatePlusDot();
     });
+  })();
+
+  // Voice Mode toggle — continuous voice conversation (STT → send → TTS → re-arm)
+  (function initVoiceModeToggle() {
+    const vmBtn = document.getElementById('overflow-voice-btn');
+    const vmIndicator = document.getElementById('voice-mode-indicator-btn');
+    if (!vmBtn) return;
+
+    voiceMode.init(function vmStateChange(state) {
+      const { active, armed, busy } = state;
+      vmBtn.classList.toggle('active', active);
+      updatePlusDot();
+      if (vmIndicator) {
+        vmIndicator.style.display = active ? '' : 'none';
+        vmIndicator.classList.toggle('active', active);
+        vmIndicator.title = active
+          ? (busy ? 'Voice mode — AI responding…' : armed ? 'Voice mode — listening…' : 'Voice mode active — click to deactivate')
+          : 'Voice mode';
+      }
+      if (active) {
+        if (window.aiTTSManager) window.aiTTSManager.autoPlay = true;
+      }
+      if (window._updateSendBtnIcon) window._updateSendBtnIcon();
+    });
+
+    // Restore persisted state
+    try {
+      const st = loadToggleState();
+      if (st.voiceMode) {
+        voiceMode.activate();
+      }
+    } catch(e) {}
+
+    vmBtn.addEventListener('click', () => {
+      voiceMode.toggle();
+      const s = loadToggleState();
+      s.voiceMode = voiceMode.isActive;
+      saveToggleState(s);
+    });
+
+    if (vmIndicator) {
+      vmIndicator.addEventListener('click', () => {
+        voiceMode.deactivate();
+        const s = loadToggleState();
+        s.voiceMode = false;
+        saveToggleState(s);
+      });
+    }
   })();
 
 

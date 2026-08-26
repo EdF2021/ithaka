@@ -45,6 +45,20 @@ async def do_manage_research(content: str, owner: Optional[str] = None) -> Dict:
         except Exception:
             return None
 
+    def _visible_to_owner(d) -> bool:
+        # SECURITY: mirror of the HTTP research routes' ownership gate
+        # (routes/research/research_routes.py: research_library /
+        # research_detail / research_delete all enforce
+        # ``d.get("owner") != user``). Without this the chat-reachable tool
+        # let any user — or prompt injection in a victim's chat — enumerate,
+        # read and delete EVERY user's saved research by id. A falsy owner is
+        # single-user / auth-disabled / legacy-caller mode and stays
+        # unscoped, same convention as src/tools/notes.py's
+        # ``_note_visible_to_owner``.
+        if not owner:
+            return True
+        return (d or {}).get("owner") == owner
+
     if action in ("read", "open", "view", "get"):
         if not rid:
             return {"error": "Provide the research id (from action='list')."}
@@ -52,6 +66,11 @@ async def do_manage_research(content: str, owner: Optional[str] = None) -> Dict:
         if not p.exists():
             return {"error": f"Research '{rid}' not found."}
         d = _load(p) or {}
+        # SECURITY: same not-found answer as a missing id, so another user's
+        # research existence can't be probed (the routes 404 for the same
+        # reason — never 403).
+        if not _visible_to_owner(d):
+            return {"error": f"Research '{rid}' not found."}
         summary = d.get("result") or d.get("raw_report") or d.get("summary") or d.get("report") or "(no report body)"
         srcs = d.get("sources", []) or []
         out = f"# {d.get('query', '(untitled)')}\n\n{summary}"
@@ -66,6 +85,11 @@ async def do_manage_research(content: str, owner: Optional[str] = None) -> Dict:
             return {"error": "Provide the research id to delete (from action='list')."}
         p = data_dir / f"{rid}.json"
         if p.exists():
+            # SECURITY: verify ownership BEFORE unlinking — mirrors
+            # DELETE /api/research/{session_id}. Not-found (not forbidden)
+            # so the mismatch doesn't confirm the file exists.
+            if not _visible_to_owner(_load(p)):
+                return {"error": f"Research '{rid}' not found."}
             try:
                 p.unlink()
             except Exception as e:
@@ -80,6 +104,11 @@ async def do_manage_research(content: str, owner: Optional[str] = None) -> Dict:
         for p in data_dir.glob("*.json"):
             d = _load(p)
             if not d:
+                continue
+            # SECURITY: only list this owner's research — mirrors
+            # GET /api/research/library (legacy owner-less JSONs stay hidden
+            # from authenticated owners there too).
+            if not _visible_to_owner(d):
                 continue
             q = d.get("query", "")
             if search and search not in q.lower():

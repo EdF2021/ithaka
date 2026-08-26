@@ -1,15 +1,18 @@
 """Notebook routes — CRUD for notebooks + per-notebook source upload/removal."""
 
+import asyncio
 import logging
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Body, HTTPException, Request, UploadFile, File
+from fastapi.responses import FileResponse, HTMLResponse
 
 import src.notebook_audio as notebook_audio
+import src.notebook_video as notebook_video
 from core.database import Document, SessionLocal, Notebook, NotebookArtifact, NotebookSource
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
@@ -22,7 +25,13 @@ from src.notebook_audio import (
     set_synthesizer,
     start_podcast_job,
 )
-from src.notebook_ingest import ingest_notebook_file
+from src.notebook_flashcards import generate_flashcards
+from src.notebook_infographic import generate_infographic
+from src.notebook_mindmap import generate_mindmap_viewer
+from src.notebook_slides import generate_slide_deck
+from src.notebook_ingest import ingest_notebook_file, ingest_notebook_url
+from src.notebook_report import generate_notebook_artifact_report
+from src.notebook_suggest import suggest_questions
 from src.settings import load_settings
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES, format_byte_limit
 
@@ -67,6 +76,36 @@ def _unlink_podcast_audio(audio_path: Optional[str]) -> None:
         logger.warning("Could not remove podcast audio %s: %s", audio_path, exc)
 
 
+def _unlink_video_file(video_path: Optional[str]) -> None:
+    """Best-effort removal of a video artifact's mp4. Never raises.
+
+    Same shape and reasoning as _unlink_podcast_audio above, against
+    notebook_video's whitelist regex and directory attribute.
+    """
+    if not isinstance(video_path, str) or not notebook_video.NOTEBOOK_VIDEO_RE.fullmatch(video_path):
+        return
+    try:
+        directory = Path(notebook_video.NOTEBOOK_VIDEO_DIR)
+        root = directory.resolve()
+        path = (directory / video_path).resolve()
+        if os.path.commonpath([str(root), str(path)]) != str(root):
+            return
+        path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Could not remove notebook video %s: %s", video_path, exc)
+
+
+def _artifact_dict_with_title(artifact, document_title):
+    """Enrich an artifact's to_dict() with the effective title: the
+    artifact's own (renamable) title if set, else the linked Document's
+    title. `document_title` may be None (see test_list_artifacts_title_none_
+    safe_when_document_missing) — that stays a safe fallback to None, same
+    as before this column existed."""
+    d = artifact.to_dict()
+    d["title"] = artifact.title or document_title
+    return d
+
+
 def _get_owned_notebook(db_session, notebook_id, user):
     nb = db_session.query(Notebook).filter_by(id=notebook_id).first()
     if nb is None or nb.owner != user:
@@ -90,6 +129,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
     # know whether a TTSService exists at all.
     if tts_service is not None:
         set_synthesizer(tts_service.synthesize_voice)
+        notebook_video.set_synthesizer(tts_service.synthesize_voice)
 
     def _remove_notebook_chunks(notebook_id, document_id=None):
         try:
@@ -117,11 +157,23 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
     @router.post("/api/notebooks")
     async def create_notebook(request: Request):
         user = get_current_user(request)
-        body = await request.json()
-        name = (body.get("name") or "").strip()
+        # Same body posture as create_artifact/rename_artifact: malformed JSON
+        # and non-string field types are client errors (400), not 500s. Without
+        # the isinstance guards, {"name": 123} raises AttributeError on .strip()
+        # and a dict/list description reaches SQLite as an unbindable type.
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
+        name = body.get("name")
+        name = name.strip() if isinstance(name, str) else ""
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
         description = body.get("description")
+        if description is not None and not isinstance(description, str):
+            raise HTTPException(status_code=400, detail="description must be a string")
         db_session = SessionLocal()
         try:
             nb = Notebook(id=str(uuid.uuid4()), owner=user, name=name, description=description)
@@ -136,17 +188,28 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
     @router.patch("/api/notebooks/{notebook_id}")
     async def update_notebook(request: Request, notebook_id: str):
         user = get_current_user(request)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
         db_session = SessionLocal()
         try:
             nb = _get_owned_notebook(db_session, notebook_id, user)
             if "name" in body:
-                name = (body.get("name") or "").strip()
+                name = body.get("name")
+                name = name.strip() if isinstance(name, str) else ""
                 if not name:
                     raise HTTPException(status_code=400, detail="name cannot be empty")
                 nb.name = name
             if "description" in body:
-                nb.description = body.get("description")
+                description = body.get("description")
+                if description is not None and not isinstance(description, str):
+                    raise HTTPException(
+                        status_code=400, detail="description must be a string"
+                    )
+                nb.description = description
             if "archived" in body:
                 nb.archived = bool(body.get("archived"))
             db_session.commit()
@@ -181,11 +244,13 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # entirely; the relationship cascade below then finds nothing
             # left to do.
             artifact_rows = (
-                db_session.query(NotebookArtifact.document_id, NotebookArtifact.audio_path)
+                db_session.query(NotebookArtifact.document_id, NotebookArtifact.audio_path,
+                                 NotebookArtifact.video_path)
                 .filter_by(notebook_id=nb.id).all()
             )
-            artifact_doc_ids = [doc_id for (doc_id, _audio_path) in artifact_rows]
-            artifact_audio_paths = [audio_path for (_doc_id, audio_path) in artifact_rows if audio_path]
+            artifact_doc_ids = [doc_id for (doc_id, _audio_path, _video_path) in artifact_rows]
+            artifact_audio_paths = [audio_path for (_doc_id, audio_path, _video_path) in artifact_rows if audio_path]
+            artifact_video_paths = [video_path for (_doc_id, _audio_path, video_path) in artifact_rows if video_path]
             if artifact_doc_ids:
                 (db_session.query(NotebookArtifact)
                  .filter_by(notebook_id=nb.id)
@@ -205,6 +270,8 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 pass
             for audio_path in artifact_audio_paths:
                 _unlink_podcast_audio(audio_path)
+            for video_path in artifact_video_paths:
+                _unlink_video_file(video_path)
             return {"success": True}
         finally:
             db_session.close()
@@ -255,6 +322,60 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         finally:
             db_session.close()
 
+    # ---- POST /api/notebooks/{id}/sources/url ----
+    @router.post("/api/notebooks/{notebook_id}/sources/url")
+    async def add_source_from_url(request: Request, notebook_id: str,
+                                  body: dict = Body(...)):
+        """Fetch one web page and ingest it as a source (fase 4d).
+
+        One URL per call — the fetch+embed runs synchronously in this
+        request (same cost profile as a file upload), so the frontend adds
+        results one "Toevoegen" click at a time.
+        """
+        user = get_current_user(request)
+        url = (body.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="Ongeldige URL")
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            # The fetch (network I/O, seconds) must not block the event loop.
+            src = await asyncio.to_thread(
+                ingest_notebook_url, nb.id, user, url, rag_manager, db_session
+            )
+            return {"source": src.to_dict()}
+        finally:
+            db_session.close()
+
+    # ---- POST /api/notebooks/{id}/source-search ----
+    @router.post("/api/notebooks/{notebook_id}/source-search")
+    async def search_web_sources(request: Request, notebook_id: str,
+                                 body: dict = Body(...)):
+        """Light web search (configured provider, no page fetches) so the
+        sources panel can offer results to add as sources."""
+        user = get_current_user(request)
+        query = (body.get("query") or "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="Lege zoekopdracht")
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+        try:
+            # Import from services.search (NOT the divergent src/search
+            # duplicate — see the fase-4 design doc's verkenning).
+            from services.search.core import searxng_search_results
+            results = await asyncio.to_thread(searxng_search_results, query)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Zoeken mislukt: {exc}")
+        slim = [
+            {"title": r.get("title") or r.get("url"), "url": r.get("url"),
+             "snippet": (r.get("snippet") or "")[:300]}
+            for r in (results or []) if r.get("url")
+        ][:8]
+        return {"results": slim}
+
     # ---- DELETE /api/notebooks/{id}/sources/{source_id} ----
     @router.delete("/api/notebooks/{notebook_id}/sources/{source_id}")
     async def delete_source(request: Request, notebook_id: str, source_id: str):
@@ -292,11 +413,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 .order_by(NotebookArtifact.created_at.desc())
                 .all()
             )
-            artifacts = []
-            for artifact, title in rows:
-                d = artifact.to_dict()
-                d["title"] = title
-                artifacts.append(d)
+            artifacts = [_artifact_dict_with_title(artifact, title) for artifact, title in rows]
             return {"artifacts": artifacts}
         finally:
             db_session.close()
@@ -310,6 +427,12 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         except Exception:
             body = None
         kind = body.get("kind") if isinstance(body, dict) else None
+        # ARTIFACT_KINDS is a dict, so an unhashable `kind` (a list or dict
+        # from the request body) raises TypeError on the membership test
+        # below — a 500 where the client sent bad input. Same isinstance
+        # posture as rename_artifact's title check.
+        if not isinstance(kind, str):
+            raise HTTPException(status_code=400, detail=f"Onbekend artifact-type: {kind!r}")
         if kind not in ARTIFACT_KINDS:
             raise HTTPException(status_code=400, detail=f"Onbekend artifact-type: {kind}")
         db_session = SessionLocal()
@@ -369,6 +492,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # cache — audio_path deserves its own explicit local, not that.
             document_id = artifact.document_id
             audio_path = artifact.audio_path
+            video_path = artifact.video_path
             db_session.delete(artifact)
             db_session.flush()
             if doc is not None:
@@ -383,9 +507,149 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             except Exception:
                 pass
             _unlink_podcast_audio(audio_path)
+            _unlink_video_file(video_path)
             return {"success": True}
         finally:
             db_session.close()
+
+    # ---- PATCH /api/notebooks/{id}/artifacts/{artifact_id} (rename) ----
+    @router.patch("/api/notebooks/{notebook_id}/artifacts/{artifact_id}")
+    async def rename_artifact(request: Request, notebook_id: str, artifact_id: str):
+        user = get_current_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        title = body.get("title") if isinstance(body, dict) else None
+        if not isinstance(title, str):
+            raise HTTPException(status_code=400, detail="title is verplicht")
+        title = title.strip()
+        if not title or len(title) > 200:
+            raise HTTPException(
+                status_code=400, detail="title moet 1-200 tekens zijn (na strip)"
+            )
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            # Outerjoin (not the report endpoint's inner join): an artifact
+            # whose Document was hard-deleted must still be renamable, it
+            # just keeps falling back to None for the enriched title, same
+            # as list_artifacts.
+            row = (
+                db_session.query(NotebookArtifact, Document.title)
+                .outerjoin(Document, Document.id == NotebookArtifact.document_id)
+                .filter(NotebookArtifact.id == artifact_id, NotebookArtifact.notebook_id == nb.id)
+                .first()
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            artifact, document_title = row
+            artifact.title = title
+            db_session.commit()
+            db_session.refresh(artifact)
+            return _artifact_dict_with_title(artifact, document_title)
+        finally:
+            db_session.close()
+
+    # ---- GET /api/notebooks/{id}/artifacts/{artifact_id}/report ----
+    @router.get("/api/notebooks/{notebook_id}/artifacts/{artifact_id}/report")
+    async def get_artifact_report(request: Request, notebook_id: str, artifact_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            # Inner join: an artifact whose Document has been hard-deleted
+            # (data inconsistency, see test_list_artifacts_title_none_safe_
+            # when_document_missing) has nothing to render, so it 404s the
+            # same as an unknown artifact id rather than 500ing.
+            row = (
+                db_session.query(NotebookArtifact, Document)
+                .join(Document, Document.id == NotebookArtifact.document_id)
+                .filter(NotebookArtifact.id == artifact_id, NotebookArtifact.notebook_id == nb.id)
+                .first()
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            artifact, document = row
+            # Podcasts have no markdown (audio_path, not current_content) —
+            # nothing for the visual-report template to render.
+            if artifact.kind in ("podcast", "video"):
+                # Media artifacts render through their player panel; their
+                # readable script/transcript opens via the linked Document.
+                raise HTTPException(status_code=404, detail="No visual report for media artifacts")
+            # Infographic gets its own compact poster renderer instead of
+            # the shared long-form editorial template — see
+            # src/notebook_infographic.py's module docstring for why.
+            if artifact.kind == "slide_deck":
+                # Slides are an interaction (navigate, notes toggle) — own
+                # viewer template, same reasoning as flashcards/infographic.
+                html_content = generate_slide_deck(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            elif artifact.kind == "flashcards":
+                # Flip cards are an interaction, not a long-form read — own
+                # compact template, same reasoning as the infographic below.
+                html_content = generate_flashcards(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            elif artifact.kind == "mindmap":
+                # Interactive collapsible-tree viewer over the stored mermaid
+                # markdown — own template, same reasoning as slides/flashcards.
+                html_content = generate_mindmap_viewer(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            elif artifact.kind == "infographic":
+                html_content = generate_infographic(
+                    title=artifact.title or document.title,
+                    markdown=document.current_content,
+                    notebook_name=nb.name,
+                    generated_at=datetime.now(),
+                )
+            else:
+                html_content = generate_notebook_artifact_report(
+                    notebook_name=nb.name,
+                    kind=artifact.kind,
+                    document_title=artifact.title or document.title,
+                    document_content=document.current_content,
+                )
+            return HTMLResponse(content=html_content)
+        finally:
+            db_session.close()
+
+    # ---- POST /api/notebooks/{id}/suggest_questions ----
+    @router.post("/api/notebooks/{notebook_id}/suggest_questions")
+    async def suggest_notebook_questions(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        question = body.get("question") if isinstance(body, dict) else None
+        answer = body.get("answer") if isinstance(body, dict) else None
+        if not question or not answer:
+            raise HTTPException(status_code=400, detail="question en answer zijn verplicht")
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+        try:
+            questions = await suggest_questions(question, answer, user)
+        except Exception:
+            # Best-effort: suggesties zijn nice-to-have, nooit een 5xx
+            # richting de chat-flow.
+            logger.info("suggest_questions failed for notebook %s", notebook_id, exc_info=True)
+            questions = []
+        return {"questions": questions}
 
     # ---- POST /api/notebooks/{id}/podcast ----
     @router.post("/api/notebooks/{notebook_id}/podcast")
@@ -473,5 +737,82 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             db_session.close()
 
         return FileResponse(str(path), media_type="audio/wav", headers=NOTEBOOK_AUDIO_HEADERS)
+
+    # ---- POST /api/notebooks/{id}/video ----
+    @router.post("/api/notebooks/{notebook_id}/video")
+    async def create_video(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            # Same validation order as create_podcast: owner-404, then the
+            # user-facing TTS-400, ahead of the job start (which re-checks
+            # owner/bronnen/synthesizer/ffmpeg itself).
+            _get_owned_notebook(db_session, notebook_id, user)
+            if _current_tts_provider() in ("disabled", "browser"):
+                raise HTTPException(status_code=400, detail=_TTS_NOT_CONFIGURED_DETAIL)
+        finally:
+            db_session.close()
+
+        try:
+            job_id = notebook_video.start_video_job(notebook_id, user)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"job_id": job_id, "status": "running"}
+
+    # ---- GET /api/notebooks/{id}/video/{job_id} ----
+    @router.get("/api/notebooks/{notebook_id}/video/{job_id}")
+    async def get_video_status(request: Request, notebook_id: str, job_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+
+        job = notebook_video.get_job(job_id, user)
+        if job is None or job.get("notebook_id") != notebook_id:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        status = job.get("status")
+        error = job.get("error")
+        if status == "cancelled":
+            status = "error"
+            error = error or "Generatie afgebroken"
+        return {
+            "status": status,
+            "phase": job.get("phase"),
+            "segment": job.get("segment"),
+            "total": job.get("total"),
+            "script_attempt": job.get("script_attempt"),
+            "error": error,
+            "artifact": job.get("artifact"),
+        }
+
+    # ---- GET /api/notebook-video/{filename} ----
+    @router.get("/api/notebook-video/{filename}")
+    async def serve_notebook_video(request: Request, filename: str):
+        user = get_current_user(request)
+        path = notebook_video.resolve_notebook_video_path(filename)
+        db_session = SessionLocal()
+        try:
+            row = (
+                db_session.query(Notebook.owner)
+                .join(NotebookArtifact, NotebookArtifact.notebook_id == Notebook.id)
+                .filter(NotebookArtifact.video_path == filename)
+                .first()
+            )
+            if row is None or row[0] != user:
+                raise HTTPException(status_code=404, detail="Video not found")
+        finally:
+            db_session.close()
+
+        # FileResponse serves Range/206 natively, so the <video> element can
+        # seek without any extra work here.
+        return FileResponse(
+            str(path), media_type="video/mp4",
+            headers=notebook_video.NOTEBOOK_VIDEO_HEADERS,
+        )
 
     return router

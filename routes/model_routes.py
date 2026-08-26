@@ -174,6 +174,46 @@ def _disable_stale_cookbook_local_endpoints(db) -> int:
     return len(stale)
 
 
+def _session_uses_endpoint_url(session_url: str, base_url: str) -> bool:
+    """Whether a session's stored endpoint URL points at this endpoint."""
+    if not session_url or not base_url:
+        return False
+    sess = session_url.rstrip("/")
+    base = _normalize_base(base_url).rstrip("/")
+    variants = {
+        base,
+        base + "/chat/completions",
+        build_chat_url(base).rstrip("/"),
+    }
+    return sess in variants or sess.startswith(base + "/")
+
+
+def _detach_session_rows_for_deleted_endpoint(rows, base_url: str, other_base_urls) -> int:
+    """Detach sessions from an endpoint that is being deleted.
+
+    Stored auth always goes. The session's endpoint URL and model are also
+    cleared unless another enabled endpoint still serves the same URL (an
+    in-place replacement). Leaving them in place kept /api/sessions
+    advertising the dead endpoint, which the frontend's new-chat fallback
+    (app.js `_createDirectChatFromPreferredModel`) cloned into every fresh
+    chat — each first send then 400'd with "Selected model endpoint was
+    removed" until the user re-picked a model manually (issue #12).
+    """
+    detached = 0
+    for row in rows:
+        session_url = getattr(row, "endpoint_url", "") or ""
+        if not _session_uses_endpoint_url(session_url, base_url):
+            continue
+        row.headers = {}
+        if not any(_session_uses_endpoint_url(session_url, other) for other in other_base_urls):
+            row.endpoint_url = ""
+            row.model = ""
+        if hasattr(row, "updated_at"):
+            row.updated_at = datetime.utcnow()
+        detached += 1
+    return detached
+
+
 def _clear_user_pref_endpoint_refs(all_prefs: dict, ep_id: str) -> int:
     """Remove endpoint references from scoped or legacy-flat user preferences."""
     if not isinstance(all_prefs, dict):
@@ -2433,37 +2473,28 @@ def setup_model_routes(model_discovery):
             logger.warning("Failed to clear user prefs for endpoint %s: %s", ep_id, e)
             return 0
 
-    def _session_uses_endpoint_url(session_url: str, base_url: str) -> bool:
-        if not session_url or not base_url:
-            return False
-        sess = session_url.rstrip("/")
-        base = _normalize_base(base_url).rstrip("/")
-        variants = {
-            base,
-            base + "/chat/completions",
-            build_chat_url(base).rstrip("/"),
-        }
-        return sess in variants or sess.startswith(base + "/")
+    def _other_enabled_base_urls(db, ep_id: str) -> list:
+        """Base URLs of enabled endpoints other than the one being deleted."""
+        rows = (
+            db.query(ModelEndpoint)
+            .filter(ModelEndpoint.is_enabled == True)  # noqa: E712
+            .filter(ModelEndpoint.id != ep_id)
+            .all()
+        )
+        return [row.base_url or "" for row in rows if row.base_url]
 
-    def _clear_sessions_for_endpoint(db, base_url: str) -> int:
-        """Drop stored auth for sessions using an endpoint being deleted.
+    def _clear_sessions_for_endpoint(db, base_url: str, other_base_urls) -> int:
+        """Detach DB sessions from an endpoint being deleted (issue #12).
 
-        Keep the session's endpoint URL and model intact. If the admin is
-        replacing an endpoint with the same URL, clearing those fields leaves
-        the UI looking selected while chat requests arrive with an empty model.
-        The chat-time orphan guard still clears truly dead endpoints when no
-        matching enabled endpoint exists.
+        Sessions that still resolve to another enabled endpoint with the same
+        URL keep their selection (in-place replacement); otherwise the
+        endpoint URL and model are cleared so /api/sessions stops advertising
+        the dead endpoint and new chats fall into the clean no-model flow.
         """
-        cleared = 0
         rows = db.query(DbSession).filter(DbSession.endpoint_url.isnot(None)).all()
-        for row in rows:
-            if _session_uses_endpoint_url(row.endpoint_url or "", base_url):
-                row.headers = {}
-                row.updated_at = datetime.utcnow()
-                cleared += 1
-        return cleared
+        return _detach_session_rows_for_deleted_endpoint(rows, base_url, other_base_urls)
 
-    def _clear_loaded_sessions_for_endpoint(base_url: str) -> int:
+    def _clear_loaded_sessions_for_endpoint(base_url: str, other_base_urls) -> int:
         try:
             from src.ai_interaction import get_session_manager
             manager = get_session_manager()
@@ -2471,15 +2502,11 @@ def setup_model_routes(model_discovery):
             manager = None
         if not manager:
             return 0
-        cleared = 0
         try:
-            for sess in list(getattr(manager, "sessions", {}).values()):
-                if _session_uses_endpoint_url(getattr(sess, "endpoint_url", "") or "", base_url):
-                    sess.headers = {}
-                    cleared += 1
+            rows = list(getattr(manager, "sessions", {}).values())
+            return _detach_session_rows_for_deleted_endpoint(rows, base_url, other_base_urls)
         except Exception:
-            return cleared
-        return cleared
+            return 0
 
     @router.get("/model-endpoints/{ep_id}/dependents")
     def get_endpoint_dependents(ep_id: str, request: Request):
@@ -2498,8 +2525,9 @@ def setup_model_routes(model_discovery):
             # Clean up any settings that reference this endpoint
             cleared = _clear_settings_for_endpoint(ep_id)
             cleared_user_preferences = _clear_user_prefs_for_endpoint(ep_id)
-            cleared_sessions = _clear_sessions_for_endpoint(db, ep.base_url)
-            cleared_loaded_sessions = _clear_loaded_sessions_for_endpoint(ep.base_url)
+            _other_bases = _other_enabled_base_urls(db, ep_id)
+            cleared_sessions = _clear_sessions_for_endpoint(db, ep.base_url, _other_bases)
+            cleared_loaded_sessions = _clear_loaded_sessions_for_endpoint(ep.base_url, _other_bases)
             auth_id = getattr(ep, "provider_auth_id", None)
             db.delete(ep)
             cleared_provider_auth = _delete_orphaned_provider_auth(db, auth_id, exclude_ep_id=ep_id)

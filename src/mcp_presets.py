@@ -103,23 +103,72 @@ _PRESETS: List[Dict[str, Any]] = [
         "google-calendar", "Google Calendar", "stdio",
         command="npx",
         args=["-y", "@cocal/google-calendar-mcp"],
-        env={"GOOGLE_OAUTH_CREDENTIALS": ""},
+        env={"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""},
+        oauth={
+            "provider": "google",
+            "keys_file": "google-calendar/gcp-oauth.keys.json",
+            "token_file": "google-calendar/tokens.json",
+            # @cocal/google-calendar-mcp keys its token file by account mode
+            # ("normal" by default) — see its tokenManager.
+            "token_format": "multi_account",
+            "env_map": {
+                "keys_file": "GOOGLE_OAUTH_CREDENTIALS",
+                "token_file": "GOOGLE_CALENDAR_MCP_TOKEN_PATH",
+            },
+            "scopes": [
+                "https://www.googleapis.com/auth/calendar",
+                "https://www.googleapis.com/auth/calendar.events",
+            ],
+        },
         help="""Setup:
-1. Go to console.cloud.google.com > create/select a project
-2. APIs & Services > Library > enable Google Calendar API
-3. APIs & Services > Credentials > + Create Credentials > OAuth Client ID
-4. Application type: Desktop App > Create
-5. Click "Download JSON" on the credential you just created
-6. Set Google Oauth Credentials to the full path of the downloaded JSON file""",
+1. Go to console.cloud.google.com > create or select a project
+2. APIs & Services > Library > search "Google Calendar API" > Enable
+3. APIs & Services > OAuth consent screen > set up (External is fine)
+4. Under Audience, add your Google address as a test user
+5. APIs & Services > Credentials > + Create Credentials > OAuth Client ID
+6. Application type: Desktop App > Create
+7. Copy the Client ID and Client Secret into the fields above
+8. Click Add Server, then click the Authorize button
+9. Sign in with Google, copy the URL from the error page, paste it back""",
         tags=["calendar", "google", "oauth"],
     ),
     _preset(
         "google-drive", "Google Drive", "stdio",
         command="npx",
-        args=["-y", "@modelcontextprotocol/server-gdrive"],
-        env={},
-        help="Google Drive uses browser-based OAuth on first run. "
-             "No env vars needed — just click Add and authorize when prompted.",
+        # Maintained replacement for the archived
+        # @modelcontextprotocol/server-gdrive, whose plain start constructs an
+        # OAuth2 client without client credentials and therefore can never
+        # refresh an expired access token. This package's external-token mode
+        # takes tokens straight from env — no browser needed in the container.
+        args=["-y", "@piotr-agier/google-drive-mcp"],
+        env={"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""},
+        oauth={
+            "provider": "google",
+            "keys_file": "google-drive/gcp-oauth.keys.json",
+            "token_env": {
+                "access_token": "GOOGLE_DRIVE_MCP_ACCESS_TOKEN",
+                "refresh_token": "GOOGLE_DRIVE_MCP_REFRESH_TOKEN",
+                "client_id": "GOOGLE_DRIVE_MCP_CLIENT_ID",
+                "client_secret": "GOOGLE_DRIVE_MCP_CLIENT_SECRET",
+            },
+            "scopes": [
+                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/documents",
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/presentations",
+            ],
+        },
+        help="""Setup:
+1. Go to console.cloud.google.com > create or select a project
+2. APIs & Services > Library > enable the Google Drive API (plus Docs/Sheets/
+   Slides APIs if you want those tools)
+3. APIs & Services > OAuth consent screen > set up (External is fine)
+4. Under Audience, add your Google address as a test user
+5. APIs & Services > Credentials > + Create Credentials > OAuth Client ID
+6. Application type: Desktop App > Create
+7. Copy the Client ID and Client Secret into the fields above
+8. Click Add Server, then click the Authorize button
+9. Sign in with Google, copy the URL from the error page, paste it back""",
         tags=["storage", "google", "oauth"],
     ),
     _preset(

@@ -8,6 +8,7 @@ import tempfile
 import types
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -70,7 +71,9 @@ def test_list_sessions_excludes_other_users_sessions(monkeypatch):
                     if getattr(r, "path", "") == "/api/sessions"
                     and "GET" in getattr(r, "methods", set()))
 
-    result = endpoint(request=MagicMock())
+    # A cookie-session request: the bearer-token scope gate must no-op, so the
+    # stub carries api_token=False rather than a truthy MagicMock attribute.
+    result = endpoint(request=MagicMock(state=SimpleNamespace(api_token=False)))
     returned_ids = {s["id"] for s in result}
     assert alice_id in returned_ids
     assert bob_id not in returned_ids
@@ -123,7 +126,7 @@ def test_auto_sort_skip_llm_cleans_owner_stamped_sessions_when_auth_disabled(mon
                     if getattr(r, "path", "") == "/api/sessions/auto-sort"
                     and "POST" in getattr(r, "methods", set()))
 
-    result = endpoint(request=MagicMock(), skip_llm=True)
+    result = endpoint(request=MagicMock(state=SimpleNamespace(api_token=False)), skip_llm=True)
 
     assert result["deleted_throwaway"] == 1
     db = _TS()

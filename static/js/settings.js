@@ -16,6 +16,13 @@ let _authPolicy = { password_min_length: 8 };
 
 function el(id) { return document.getElementById(id); }
 function esc(s) { return uiModule.esc(s); }
+// Mirrors admin.js's _friendlyAdminError: the Integrations tab (issue #13)
+// stays visible to non-admins, but its save handler hits the admin-only
+// POST /api/auth/integrations — translate the raw 403 detail so a
+// non-admin sees why the save didn't take instead of a bare "Admin only".
+function friendlyAdminError(detail) {
+  return detail === 'Admin only' ? 'Only an admin can change this. Ask your admin.' : (detail || 'Save failed');
+}
 function safeRasterDataUrl(raw) {
   const value = String(raw || '').trim();
   return /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i.test(value) ? value : '';
@@ -23,6 +30,29 @@ function safeRasterDataUrl(raw) {
 
 /* ── Tab switching ── */
 const ADMIN_TABS = new Set(['services', 'integrations', 'tools', 'users', 'system']);
+
+/* ── Admin-managed-but-visible tabs (issue #13) ──
+   Unlike 'tools'/'users'/'system' (hidden outright via the .admin-only CSS
+   class), these tabs stay visible to non-admins yet every field on them
+   persists through an admin-only backend: POST /api/auth/settings
+   (routes/auth_routes.py ~646) 403s for non-admins, and DEFAULT_SETTINGS
+   (src/settings.py) covers 'ai'/'search'/'reminders'/'shortcuts' (keybinds)
+   in full. 'services' (Add Models) and 'integrations' post to their own
+   admin-only endpoints (/api/model-endpoints, /api/auth/integrations) — see
+   admin.js. Without a marker, a non-admin edits a field, "saves", and either
+   gets a raw "Admin only" error or (worse) a false "Saved" toast because most
+   of these save handlers never check res.ok.
+   - ADMIN_MANAGED_DISABLE_TABS: static panels present in the DOM at page
+     load, so we can safely disable every field for non-admins.
+   - services/integrations are intentionally excluded from disabling: their
+     content is rebuilt asynchronously by admin.js after the tab opens
+     (loadEndpoints/renderList/etc.), so a one-shot disable pass here would
+     race the re-render. They still get the nav-item pill; the raw-error
+     side is handled by the friendly-message translation in admin.js. */
+const ADMIN_MANAGED_DISABLE_TABS = new Set(['ai', 'search', 'reminders', 'shortcuts']);
+const ADMIN_MANAGED_MARK_ONLY_TABS = new Set(['services', 'integrations']);
+const ADMIN_MANAGED_TABS = new Set([...ADMIN_MANAGED_DISABLE_TABS, ...ADMIN_MANAGED_MARK_ONLY_TABS]);
+const ADMIN_MANAGED_EXPLAINER = 'These settings are managed by an admin — ask your admin to change them.';
 
 function initTabs() {
   modalEl.querySelectorAll('[data-settings-tab]').forEach(btn => {
@@ -2899,7 +2929,7 @@ async function initReminderSettings() {
             new Notification('Test Reminder', {
               body: data.synthesis || 'This is a test reminder.',
               tag: 'reminder-test',
-              icon: '/static/favicon.ico',
+              icon: '/static/icons/icon-192.png',
             });
           } catch {}
         }
@@ -3545,7 +3575,7 @@ async function initIntegrations() {
         notifyIntegrationsChanged();
       } else {
         const err = await res.json().catch(() => ({}));
-        statusEl.textContent = err.detail || 'Save failed';
+        statusEl.textContent = friendlyAdminError(err.detail);
         statusEl.style.color = 'var(--red)';
       }
     } catch (e) {
@@ -5268,7 +5298,9 @@ async function initUnifiedIntegrations() {
         </div>`;
       // Populate the preset dropdown; selecting one fills the fields below
       // (still editable — nothing is locked).
+      let _ufPresets = [];
       _getMcpPresets().then(presets => {
+        _ufPresets = presets;
         const presetSel = el('uf-mcp-preset');
         if (!presetSel) return;
         presets.forEach((p, i) => {
@@ -5320,6 +5352,13 @@ async function initUnifiedIntegrations() {
         } else {
           fd.append('url', el('uf-mcp-url').value);
         }
+        // Presets with an OAuth config (gmail, google-calendar, google-drive)
+        // need it server-side: it drives the keys file, the Authorize flow,
+        // and where tokens land. Without this the server is saved without any
+        // OAuth wiring and can never connect.
+        const presetIdx = el('uf-mcp-preset') ? el('uf-mcp-preset').value : '';
+        const selPreset = presetIdx !== '' ? _ufPresets[parseInt(presetIdx, 10)] : null;
+        if (selPreset && selPreset.oauth) fd.append('oauth_config', JSON.stringify(selPreset.oauth));
         const saveBtn = el('uf-mcp-save'), cancelBtn = el('uf-mcp-cancel');
         const _origLabel = saveBtn.textContent;
         _setBtnLoading(saveBtn, true, 'Saving…'); if (cancelBtn) cancelBtn.disabled = true;
@@ -5329,6 +5368,16 @@ async function initUnifiedIntegrations() {
           if (r.ok && data.needs_auth) {
             el('uf-mcp-msg').textContent = 'Preparing authorization…';
             _handleMcpAuth(data.id, data.auth_url);
+          } else if (r.ok && data.needs_oauth) {
+            const msgEl = el('uf-mcp-msg');
+            msgEl.textContent = 'Saved — ';
+            const a = document.createElement('a');
+            a.href = '/api/mcp/oauth/authorize/' + encodeURIComponent(data.id);
+            a.target = '_blank';
+            a.textContent = 'Authorize with Google';
+            msgEl.appendChild(a);
+            msgEl.appendChild(document.createTextNode(' to connect.'));
+            await renderList();
           } else if (r.ok && (data.connected || data.status === 'connected')) {
             el('uf-mcp-msg').textContent = `Connected (${data.tool_count || 0} tools)`;
             formEl.style.display = 'none'; await renderList();
@@ -5852,6 +5901,57 @@ function syncAdminVisibility() {
   const isAdmin = !!window._isAdmin;
   modalEl.querySelectorAll('.admin-only').forEach(el => {
     el.style.display = isAdmin ? '' : 'none';
+  });
+  syncAdminManagedTabs(isAdmin);
+}
+
+/* Marks the admin-managed-but-visible tabs (see ADMIN_MANAGED_TABS above)
+   for non-admins: a small "Admin" pill on the nav item everywhere, plus a
+   banner + disabled fields on the tabs whose panel DOM is static. Reuses
+   .admin-badge (existing red pill, e.g. admin.js endpoint status badges)
+   and .admin-toggle-sub (existing muted helper-text style) — no new colors
+   or components. Idempotent: safe to call on every open(). */
+function syncAdminManagedTabs(isAdmin) {
+  if (!modalEl) return;
+  ADMIN_MANAGED_TABS.forEach(tab => {
+    const navBtn = modalEl.querySelector(`.settings-nav-item[data-settings-tab="${tab}"]`);
+    if (!navBtn) return;
+    let pill = navBtn.querySelector('.admin-managed-pill');
+    if (!isAdmin) {
+      if (!pill) {
+        pill = document.createElement('span');
+        pill.className = 'admin-badge admin-managed-pill';
+        pill.textContent = 'Admin';
+        pill.title = ADMIN_MANAGED_EXPLAINER;
+        navBtn.appendChild(pill);
+      }
+    } else if (pill) {
+      pill.remove();
+    }
+  });
+
+  ADMIN_MANAGED_DISABLE_TABS.forEach(tab => {
+    const panel = modalEl.querySelector(`[data-settings-panel="${tab}"]`);
+    if (!panel) return;
+    let banner = panel.querySelector(':scope > .admin-managed-banner');
+    if (!isAdmin) {
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.className = 'admin-card admin-managed-banner';
+        banner.innerHTML = '<div class="settings-row" style="align-items:center;gap:8px;">'
+          + '<span class="admin-badge">Admin</span>'
+          + `<span class="admin-toggle-sub" style="margin:0;">${esc(ADMIN_MANAGED_EXPLAINER)}</span>`
+          + '</div>';
+        panel.insertBefore(banner, panel.firstChild);
+      }
+      panel.querySelectorAll('input, select, textarea, button').forEach(field => {
+        if (field.closest('.admin-managed-banner')) return;
+        field.disabled = true;
+      });
+    } else {
+      if (banner) banner.remove();
+      panel.querySelectorAll('input, select, textarea, button').forEach(field => { field.disabled = false; });
+    }
   });
 }
 

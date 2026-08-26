@@ -52,6 +52,25 @@ def test_every_schema_tool_is_classified():
     )
 
 
+def test_every_xml_only_mutating_tool_is_blocked_for_non_admins():
+    """XML/fence-only tools never appear in FUNCTION_TOOL_SCHEMAS, so the
+    schema partition above cannot see them — and NON_ADMIN_BLOCKED_TOOLS is a
+    denylist, so an unclassified XML-only mutating tool is allowed-by-omission
+    for public/non-admin users. That is exactly how manage_research escaped
+    (is_public_blocked_tool("manage_research") was False while it could read
+    and delete any user's saved research). Use the hand-maintained plan-mode
+    mutator backstop as the inventory of known mutating tool names: every one
+    without a native schema must be explicitly in NON_ADMIN_BLOCKED_TOOLS."""
+    from src.tool_security import _PLAN_MODE_KNOWN_MUTATORS
+
+    xml_only_mutators = set(_PLAN_MODE_KNOWN_MUTATORS) - _schema_tool_names()
+    unblocked = xml_only_mutators - NON_ADMIN_BLOCKED_TOOLS
+    assert unblocked == set(), (
+        f"XML-only mutating tool(s) reachable by non-admin users — add to "
+        f"NON_ADMIN_BLOCKED_TOOLS in src/tool_security.py: {sorted(unblocked)}"
+    )
+
+
 def test_public_allowed_tools_are_real_schema_names():
     # Catches the opposite drift: a name lingering in PUBLIC_ALLOWED_TOOLS
     # after its schema was removed/renamed (dead weight, not a vulnerability,

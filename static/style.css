@@ -1920,6 +1920,10 @@ body.bg-pattern-dageraad-gloed {
     }
     @media (max-height: 380px) {
       #welcome-screen { opacity: 0; pointer-events: none; }
+      /* .welcome-actions re-enables pointer-events (see its rule below) —
+         reassert none here so the buttons don't become invisible-but-
+         clickable phantoms while the screen itself is opacity:0. */
+      #welcome-screen .welcome-actions { pointer-events: none; }
     }
     #welcome-screen.hidden { display:none; }
     #welcome-screen.kb-hidden {
@@ -1927,6 +1931,7 @@ body.bg-pattern-dageraad-gloed {
       pointer-events: none;
       transform: translate(-50%, -50%) scale(0.95);
     }
+    #welcome-screen.kb-hidden .welcome-actions { pointer-events: none; }
     @media (max-width: 768px) {
       #welcome-screen { top: 42%; }
       #welcome-screen .welcome-name { margin-bottom: 2px; }
@@ -2008,6 +2013,36 @@ body.bg-pattern-dageraad-gloed {
       font-weight: 500;
       letter-spacing: 0.3px;
     }
+    /* First-run action row (Connect a model / Take the tour / Help) on the
+       welcome screen — issue #11. Row is always flex once JS has run
+       (welcomeActions.js's _setWelcomeFirstRun() only toggles the individual
+       Connect/Tour buttons — #welcome-screen itself owns overall
+       show/hide); markup starts display:none only to avoid a flash before
+       that first paint. #welcome-screen itself is pointer-events:none (it's
+       a centered overlay), so re-enable pointer events here same as
+       .incognito-btn does — see the companion `.welcome-actions {
+       pointer-events:none }` rules wherever #welcome-screen goes
+       opacity:0, so this override doesn't leave invisible clickable
+       buttons floating above the composer. */
+    .welcome-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+      pointer-events: auto;
+    }
+    .welcome-actions .dashboard-action-btn.welcome-action-primary {
+      border-color: var(--accent-primary, var(--red));
+      color: var(--accent-primary, var(--red));
+    }
+    .welcome-actions .dashboard-action-btn.welcome-action-primary:hover {
+      background: color-mix(in srgb, var(--accent-primary, var(--red)) 12%, var(--bg));
+    }
+    /* Tours are desktop-only (see tourAutoplay.js) */
+    @media (max-width: 768px) {
+      #welcome-tour-btn { display: none; }
+    }
     /* When welcome is active, push input bar up toward center */
     .chat-container .chat-input-bar {
       transition: margin 0.3s ease, max-width 0.3s ease;
@@ -2034,6 +2069,13 @@ body.bg-pattern-dageraad-gloed {
         opacity: 0;
         pointer-events: none;
         transform: translate(-50%, -58%) scale(0.96);
+      }
+      /* Same phantom-button guard as the two rules above: .welcome-actions's
+         own pointer-events:auto would otherwise win over the opacity:0
+         #welcome-screen's inherited none. */
+      .chat-container.welcome-active:has(.chat-input-bar:focus-within) #welcome-screen .welcome-actions,
+      .chat-container.welcome-active:has(textarea#message:not(:placeholder-shown)) #welcome-screen .welcome-actions {
+        pointer-events: none;
       }
       .chat-container.welcome-active:has(.input-icon-btn.expanded) #welcome-screen,
       .chat-container.welcome-active:has(.send-btn.newchat-expanded) #welcome-screen,
@@ -7027,12 +7069,6 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
         background-clip: padding-box;
         animation: none;
       }
-      .memory-modal-content .close-btn,
-      .memory-modal-content .modal-close,
-      .settings-modal-content .close-btn,
-      .settings-modal-content .modal-close {
-        display: none !important;
-      }
       .memory-modal-content,
       .settings-modal-content {
         touch-action: pan-y;
@@ -7142,13 +7178,10 @@ pre { background: var(--code-bg, var(--hl-bg, #282c34)) !important; }
         border-bottom: 6px solid transparent;
         background-clip: padding-box;
       }
-      /* Hide close X on mobile — swipe down to dismiss */
-      .modal-content .close-btn,
-      .modal-content .modal-close,
-      #theme-popup .close-btn {
-        display: none !important;
-      }
-      /* Hide the auto-injected minimize (_) button on mobile — the dock
+      /* NOTE: the close X stays visible on mobile (no hide rule anywhere in
+         this block, including for memory/settings sheets). Swipe-down also
+         dismisses, but the gesture is undiscoverable on its own.
+         Hide only the auto-injected minimize (_) button on mobile — the dock
          chip already represents the minimized state, and the swipe-down
          gesture is the canonical minimize action. */
       .modal-minimize-btn,
@@ -23446,6 +23479,14 @@ body:not(.welcome-ready) .welcome-name {
    from fully-visible to the animation's hidden first frame. */
 body:not(.welcome-ready) #welcome-screen {
   opacity: 0;
+}
+/* Same phantom-button guard as the pointer-events:none states above: JS can
+   set #welcome-actions to display:flex (and show Connect/Tour) before fonts
+   are ready / this page has settled, while the splash itself is still
+   opacity:0 here — without this, .welcome-actions's own pointer-events:auto
+   would leave invisible-but-clickable buttons floating over the composer. */
+body:not(.welcome-ready) #welcome-screen .welcome-actions {
+  pointer-events: none;
 }
 @keyframes welcome-name-reveal {
   from {
@@ -40507,6 +40548,89 @@ body.theme-frosted .modal {
   cursor: pointer;
 }
 .dashboard-action-btn:hover { border-color: var(--fg); }
+/* Help panel (static/js/helpPanel.js) — issue #11. Plain .modal/.modal-content
+   markup; sections reuse the .admin-card h2 look without the card chrome. */
+.help-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.help-section h2 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+}
+.help-tour-list,
+.help-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.help-tour-item {
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+.help-tour-item:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.help-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.help-command-chip {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--accent-primary, var(--red));
+  font-size: 12px;
+  cursor: pointer;
+}
+.help-command-chip:hover {
+  background: color-mix(in srgb, var(--accent-primary, var(--red)) 10%, transparent);
+}
+.help-command-desc {
+  color: var(--fg);
+  opacity: 0.6;
+  font-size: 12px;
+}
+.help-tours-mobile-note {
+  display: none;
+  color: var(--fg);
+  opacity: 0.5;
+  font-size: 12px;
+}
+/* Tours are desktop-only (see tourAutoplay.js header comment): swap the
+   tours list for a plain-text note below 768px. Pure CSS so it stays
+   reactive on resize without a JS listener (was helpPanel.js's
+   _renderResponsiveState(), computed only on open()). */
+@media (max-width: 768px) {
+  #help-tours-section { display: none; }
+  #help-tours-mobile-note { display: block; }
+}
+.help-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.help-model-line {
+  color: var(--fg);
+  opacity: 0.7;
+  font-size: 13px;
+}
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -40931,21 +41055,6 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .notebook-archived-toggle { margin-bottom: 8px; width: fit-content; }
 
 /* Detail view */
-.notebook-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.notebook-open-chat-btn { border-color: var(--fg); }
-.notebook-detail-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: bold;
-  margin-bottom: 4px;
-}
-.notebook-detail-desc { max-width: 100%; margin-bottom: 8px; }
 .notebook-upload-zone {
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -40986,16 +41095,104 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
    kind pill and item rows. Buttons reuse .dashboard-action-btn, delete reuses
    .notebook-src-del/.notebook-confirm-armed, rows reuse .list-item; only the
    layout/pill/hint bits below have no existing equivalent. */
-.notebook-artifact-head {
-  font-weight: bold;
-  margin: 2px 0 6px;
-}
+/* Two-column grid (not flex-wrap) so the Generate buttons line up
+   tidily in a 320px-wide panel instead of ragged-wrapping by label length —
+   consolidated here (single declaration) rather than left as a second,
+   non-adjacent override further down that only won on `display` via cascade
+   order. */
 .notebook-artifact-btns {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
   margin-bottom: 8px;
 }
+/* Studio tiles — Gemini-Notebook-style generate grid: per-kind accent color
+   (existing theme variables only, mixed into --panel for the tint) with a
+   monochrome icon. --nbws-tile-accent is the single knob; the per-kind
+   modifier classes below only set that variable. */
+.nbws-tile {
+  --nbws-tile-accent: var(--red);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--nbws-tile-accent) 35%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--nbws-tile-accent) 10%, var(--panel));
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.nbws-tile:hover {
+  background: color-mix(in srgb, var(--nbws-tile-accent) 22%, var(--panel));
+}
+.nbws-tile:disabled { opacity: 0.55; cursor: default; }
+.nbws-tile-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--nbws-tile-accent);
+}
+.nbws-tile-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nbws-tile--podcast { --nbws-tile-accent: var(--color-brand-blue); }
+.nbws-tile--slide_deck { --nbws-tile-accent: var(--green); }
+.nbws-tile--video { --nbws-tile-accent: var(--color-recording, var(--red)); }
+/* Web-source search (fase 4d) — input + button row above the upload zone,
+   results as .list-item rows with an inline add button. Existing tokens and
+   classes only. */
+.nbws-web-search {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.nbws-web-search input {
+  flex: 1;
+  min-width: 0;
+  background: var(--input-bg, var(--panel));
+  color: var(--fg);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+#nbws-web-search-results { margin-bottom: 8px; }
+.nbws-web-result { display: flex; align-items: center; gap: 8px; }
+.nbws-web-result-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.nbws-web-result-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.nbws-web-result-domain { font-size: 10px; }
+.nbws-web-add { flex-shrink: 0; }
+
+/* Video artifact panel — same panel chrome as the podcast player; the video
+   element just needs to fill the 320px studio column. */
+.notebook-podcast-panel video {
+  width: 100%;
+  border-radius: 8px;
+  background: var(--bg);
+}
+.nbws-tile--mindmap { --nbws-tile-accent: var(--accent-warm); }
+.nbws-tile--briefing { --nbws-tile-accent: var(--green); }
+.nbws-tile--flashcards { --nbws-tile-accent: var(--color-blind-orange); }
+.nbws-tile--quiz { --nbws-tile-accent: var(--warn); }
+.nbws-tile--infographic { --nbws-tile-accent: var(--color-save-green); }
+.nbws-tile--data_table { --nbws-tile-accent: var(--color-brand-blue); }
+.nbws-tile--study_guide { --nbws-tile-accent: var(--red); }
+.nbws-tile--faq { --nbws-tile-accent: var(--accent-warm); }
 .notebook-artifact-item {
   display: flex;
   flex-wrap: wrap;
@@ -41020,6 +41217,9 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Keep the title readable: below this the trailing controls wrap to the
+     next line (the row is flex-wrap) instead of squeezing the title away. */
+  min-width: 96px;
 }
 .notebook-artifact-hint { color: var(--color-muted); }
 .notebook-artifact-date { flex-shrink: 0; }
@@ -41136,4 +41336,462 @@ body.notebook-session #rag-indicator-btn {
 }
 .notebook-podcast-links a {
   color: var(--fg);
+}
+
+/* ── Notebooks workspace (Task 3) — NotebookLM-style 3-panel fullscreen shell
+   around the existing chat. CSS-primary: #chat-container itself is never
+   moved or reparented (see static/index.html and notebookWorkspace.js) — all
+   of this only lays fixed chrome around it, driven by one body class. */
+body.notebook-workspace-open #nbws-root { display: flex; }
+#nbws-root {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10005;
+  pointer-events: none;
+  --nbws-topbar-h: 44px;
+}
+#nbws-root .nbws-panel { pointer-events: auto; background: var(--panel); border-color: var(--border); }
+#nbws-topbar {
+  pointer-events: auto;
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: var(--nbws-topbar-h);
+  /* Without an explicit z-index here, #nbws-sources/#nbws-studio (both also
+     position:absolute, top:0, z-index:auto) paint OVER the topbar's left/
+     right ends in DOM-order — auto-z-index positioned siblings stack by tree
+     order, so the later-in-DOM side panels covered #nbws-back-btn entirely
+     (unclickable behind #nbws-sources) even though it read fine in an a11y
+     snapshot. Any explicit positive z-index moves an element to its own
+     later paint step ahead of the z-index:auto siblings, which is all this
+     needs — found live while smoke-testing Task 6's studio panel (close
+     button, unrelated to that task's own work, but real regardless). */
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+#nbws-sources {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 280px;
+  border-right: 1px solid var(--border);
+  padding-top: var(--nbws-topbar-h);
+  overflow-y: auto;
+  transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
+}
+#nbws-studio {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 320px;
+  border-left: 1px solid var(--border);
+  padding-top: var(--nbws-topbar-h);
+  overflow-y: auto;
+  transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
+}
+/* Collapse toggle (per-panel button in .nbws-panel-head) — narrows to a slim
+   strip that still shows the collapse/expand button, rather than width:0.
+   The button lives inside the very <aside> it collapses, so zeroing the
+   whole panel (an earlier version of this rule did) would clip the button
+   itself away with it, leaving no way to re-expand on desktop (the mobile
+   tabbar that could otherwise reach it is display:none there). */
+#nbws-sources.nbws-collapsed,
+#nbws-studio.nbws-collapsed {
+  width: 32px;
+  overflow: hidden;
+}
+#nbws-sources.nbws-collapsed .nbws-panel-title,
+#nbws-studio.nbws-collapsed .nbws-panel-title,
+#nbws-sources.nbws-collapsed #nbws-sources-body,
+#nbws-studio.nbws-collapsed #nbws-studio-body {
+  display: none;
+}
+#nbws-sources.nbws-collapsed .nbws-panel-head,
+#nbws-studio.nbws-collapsed .nbws-panel-head {
+  justify-content: center;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+.nbws-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.nbws-panel-title { font-weight: 600; }
+#nbws-sources-body,
+#nbws-studio-body { padding: 12px; }
+.nbws-back-btn,
+.nbws-collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.nbws-back-btn:hover,
+.nbws-collapse-btn:hover { background: var(--border); }
+.nbws-notebook-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40vw;
+}
+.nbws-session-select {
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  max-width: 200px;
+}
+/* Mobile tabbar (Task 7 wires the switching behaviour + media query below
+   700px) — hidden on desktop by default. */
+.nbws-tabbar { display: none; gap: 4px; }
+.nbws-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.nbws-tab.nbws-tab-active { color: var(--fg); border-color: var(--fg); }
+
+/* The workspace hides whichever of .sidebar / .icon-rail is currently the
+   left nav (they're mutually exclusive — see the .icon-rail comment,
+   sidebar-layout.js:57) and reflows the (untouched, never reparented) chat
+   between the two fixed panels instead. Hiding .icon-rail matters beyond
+   looks: body is `display:flex` (style.css:106) with #chat-container as a
+   `flex:1` sibling, so a still-in-flow 48px rail would shift the chat's real
+   left edge 48px past #nbws-sources's right edge (280px), opening a dead
+   strip of bare body background between them. It also stops the rail's own
+   buttons from being clickable (and popping modals at z-index ~1000, well
+   under #nbws-root's 10005) once the sources panel is collapsed. */
+body.notebook-workspace-open .sidebar,
+body.notebook-workspace-open .icon-rail { display: none; }
+body.notebook-workspace-open #chat-container {
+  margin-left: 280px;
+  margin-right: 320px;
+  padding-top: var(--nbws-topbar-h, 44px);
+  transition: margin 0.18s ease;
+}
+/* 32px matches #nbws-sources.nbws-collapsed/#nbws-studio.nbws-collapsed's
+   collapsed width above — the two must be kept in sync by hand (same
+   sibling-vs-descendant reasoning as --nbws-topbar-h's fallback usage). */
+body.notebook-workspace-open.nbws-sources-collapsed #chat-container { margin-left: 32px; }
+body.notebook-workspace-open.nbws-studio-collapsed #chat-container { margin-right: 32px; }
+
+/* Sources panel (Task 4) — rows/upload-zone/error line reuse the exact
+   .notebook-source-row/.notebook-status/.notebook-upload-zone/.notebook-error/
+   .notebook-src-del/.notebook-confirm-armed shapes already defined above for
+   notebooks.js's (now-dead) detail view; per-row checkboxes reuse the app's
+   existing .memory-select-cb dot styling. Only the select-all row and the two
+   n/m counters (panel header + topbar badge) have no existing equivalent. */
+.nbws-select-all-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+.nbws-source-count {
+  color: var(--color-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+/* Topbar badge — same pill shape as .notebook-status, sized for the fixed
+   chrome bar rather than a list row. */
+.nbws-source-badge {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.nbws-source-badge[hidden] { display: none; }
+
+/* Follow-up chips (Task 5) — a fixed strip floating just above the
+   chat-input-bar, inside #nbws-root (position:fixed inset:0,
+   pointer-events:none) so it overlays the untouched #chat-container instead
+   of living inside it. left/right mirror #chat-container's own
+   margin-left/margin-right (and their collapsed-panel variants) above so the
+   strip always spans exactly the visible chat column. The 92px bottom offset
+   is an approximation of the input bar's typical height + gap — not
+   dynamically measured, same trade-off the badge/topbar chrome above makes. */
+#nbws-chips {
+  position: absolute;
+  left: 280px;
+  right: 320px;
+  bottom: 92px;
+  z-index: 10006;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px;
+  pointer-events: none;
+  transition: left 0.18s ease, right 0.18s ease;
+}
+#nbws-chips:empty { display: none; }
+body.notebook-workspace-open.nbws-sources-collapsed #nbws-chips { left: 32px; }
+body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
+.nbws-chip {
+  pointer-events: auto;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nbws-chip:hover { background: var(--border); }
+
+/* Studio panel (Task 6) — generate-button row, artifact list and podcast
+   player all reuse the exact .notebook-artifact-(kind|title|item)
+   .notebook-podcast-(panel|links), .notebook-error, .notebook-src-del and
+   .notebook-confirm-armed shapes already defined above for notebooks.js's
+   (now fully removed) detail view; the shared #nbws-studio-body padding
+   rule earlier in this block covers layout, so nothing studio-specific is
+   new here. */
+
+/* Studio panel redesign (Task B, notebooks-studio-design) — the flat button
+   row directly above the artifact list read as one undifferentiated group
+   (user feedback: unclear which elements generate something vs. which ARE
+   generated files). Fixed with two headed sections instead of relying on
+   button-vs-row styling alone. */
+.nbws-studio-section + .nbws-studio-section { margin-top: 14px; }
+.nbws-studio-section-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.notebook-artifact-gen-btn,
+.notebook-podcast-gen-btn { justify-content: flex-start; }
+.notebook-artifact-gen-btn svg,
+.notebook-podcast-gen-btn svg { flex-shrink: 0; color: var(--red); }
+/* File icon on each Files row — muted so it reads as metadata, not another
+   action, and never eats space from the truncating title next to it. */
+.notebook-artifact-file-icon { flex-shrink: 0; color: var(--color-muted); }
+/* Secondary "open source document" icon button — same shape/tokens as
+   .notebook-src-del (delete) but non-destructive, so it hovers to --fg
+   instead of --red, matching .notebook-archive-btn's convention above. */
+.notebook-artifact-opendoc {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 4px;
+  color: var(--color-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.notebook-artifact-opendoc:hover { color: var(--fg); border-color: var(--border); }
+
+/* _openArtifact (notebookWorkspace.js) opens the document viewer WITHOUT
+   closing the workspace, so .doc-editor-pane (base z-index: 1, style.css
+   ~12251) must render above #nbws-root (z-index 10005, above in this same
+   block). The <=768px media query already boosts body.doc-view
+   .doc-editor-pane to the same 10010 for its own (email-front) stacking
+   case — this mirrors that value for the workspace case, at every viewport
+   width, so the class-combo specificity (3 classes) clears #nbws-root's
+   10005 without needing !important. */
+body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
+
+/* ── Mobile tabs (Task 7, <=700px) — replaces the side-by-side
+   sources/chat/studio columns with ONE full-width "page" at a time, switched
+   by #nbws-tabbar's three buttons (wired in notebookWorkspace.js's
+   _setActiveTab, which toggles .nbws-tab-active on the active tab button AND
+   on the matching panel — reusing the same class .nbws-tab already defines
+   for the button's own active look, per the task brief). Desktop rules above
+   are untouched outside this query. */
+@media (max-width: 700px) {
+  .nbws-tabbar { display: flex; }
+
+  /* Collapse is a desktop-only affordance — tabs already give every panel
+     the full screen when active, so the collapse button (and the narrow
+     32px strip it produces) has no useful meaning here. Hiding the button
+     stops it from ever being tapped on mobile; _onMobileBreakpointChange in
+     notebookWorkspace.js additionally clears any .nbws-collapsed state left
+     over from a desktop session the moment the viewport crosses this
+     breakpoint, so a panel collapsed on desktop still shows its full content
+     the instant its tab becomes active on mobile (rather than rendering the
+     collapsed 32px strip's hidden-title/hidden-body state at 100% width). */
+  .nbws-collapse-btn { display: none; }
+
+  /* Topbar wrap (fix wave finding 3): at a genuine 360px viewport the
+     single-row topbar (back-btn + name + session-select + 3-tab tabbar)
+     doesn't fit — the tabbar's rect measured left:250,right:450 in a 360px
+     viewport and the Studio tab was unreachable (overflow-x: visible, no
+     wrap, no scroll). Wrap the tabbar onto its own full-width second row and
+     grow --nbws-topbar-h to match, so every offset that already reads that
+     var (topbar's own height, plus #nbws-sources/#nbws-studio's inset and
+     padding-top just below — both descendants of #nbws-root and so already
+     inheriting the new value) grows with it automatically. #chat-container
+     is declared OUTSIDE #nbws-root's subtree (see the "32px ... kept in sync
+     by hand" comment above) so its padding-top can't see this var override
+     and needs its own matching value here. */
+  #nbws-root { --nbws-topbar-h: 84px; }
+  #nbws-topbar {
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 6px;
+    padding: 6px 12px;
+  }
+  .nbws-tabbar {
+    flex: 0 0 100%;
+    width: 100%;
+  }
+  .nbws-tab { flex: 1; text-align: center; }
+  body.notebook-workspace-open #chat-container { padding-top: 84px; }
+
+  #nbws-sources,
+  #nbws-studio {
+    display: none;
+    position: fixed;
+    inset: var(--nbws-topbar-h) 0 0 0;
+    width: 100% !important;
+    border: none;
+  }
+  #nbws-sources.nbws-tab-active,
+  #nbws-studio.nbws-tab-active { display: block; }
+
+  /* Chat fills the screen behind the (now display:none-by-default) panels
+     when its own tab is active — margins collapse to 0 (no side panels to
+     leave room for) and it's hidden outright while a side panel's tab owns
+     the screen, so no focusable/scrollable chat content sits underneath a
+     full-width panel. */
+  body.notebook-workspace-open #chat-container {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  body.notebook-workspace-open.nbws-mobile-tab-sources #chat-container,
+  body.notebook-workspace-open.nbws-mobile-tab-studio #chat-container {
+    display: none;
+  }
+
+  /* Follow-up chips (Task 5) float above the chat composer — full width to
+     match the now-marginless chat column, and hidden along with chat itself
+     on the sources/studio tabs (see #chat-container above). */
+  #nbws-chips {
+    left: 0;
+    right: 0;
+  }
+  body.notebook-workspace-open.nbws-mobile-tab-sources #nbws-chips,
+  body.notebook-workspace-open.nbws-mobile-tab-studio #nbws-chips {
+    display: none;
+  }
+
+  /* The topbar (back-btn + name + badge + session-select + tabbar) is tight
+     at 360px — trim the notebook-name and session-select ceilings the
+     desktop values above set so the tabbar itself never gets pushed off
+     the right edge. */
+  .nbws-notebook-name { max-width: 22vw; }
+  .nbws-session-select { max-width: 84px; }
+}
+
+/* Later notebooks-workspace CSS belongs ABOVE this line — the marker comment
+   right below is the end-of-block anchor the static test scans up to, so
+   anything appended after it falls outside that scan. */
+/* nbws-end */
+
+/* ── Voice Mode ── */
+.voice-mode-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--accent-primary, var(--red, #e74c3c));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  animation: voice-mode-pulse 2s infinite;
+}
+
+@keyframes voice-mode-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(231, 76, 60, 0); }
+}
+
+/* Voice mode armed state — mic is listening */
+.send-btn.voice-armed {
+  background: var(--red) !important;
+  color: #fff !important;
+  animation: voice-armed-pulse 1.5s infinite;
+}
+
+@keyframes voice-armed-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Voice mode overlay banner */
+.voice-mode-banner {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 100;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  animation: voice-mode-pulse 2s infinite;
+}
+
+.voice-mode-banner .voice-mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff3b30;
+  animation: voice-dot-pulse 1s infinite;
+}
+
+@keyframes voice-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* Voice mode listening state on indicator */
+#voice-mode-indicator-btn.active {
+  color: var(--red, #e74c3c);
+}
+
+#voice-mode-indicator-btn.active .tool-indicator-x {
+  display: none;
 }

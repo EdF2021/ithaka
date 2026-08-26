@@ -425,7 +425,7 @@ FUNCTION_TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ui_control",
-            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), open_email_reply (open an email reply draft document; DOES NOT send. For 'write/draft a reply saying X', include body with the drafted reply), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, cyberpunk, retrowave, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, cute), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
+            "description": "Control the user interface. Actions: toggle (turn tools on/off), open_panel (open a modal: documents/library, gallery, email, sessions, notes, memories/brain, skills, settings, cookbook), open_email_reply (open an email reply draft document; DOES NOT send. For 'write/draft a reply saying X', include body with the drafted reply), set_mode, switch_model, set_theme (built-in presets: dark, light, midnight, paper, minimal, sunset, forest, ocean, ume, copper, terminal, organs, lavender, gpt, claude, dageraad), create_theme (CREATE any custom theme with a name + colors object — pick distinctive, evocative hex colors that match the requested aesthetic, NOT generic defaults. The theme auto-applies after creation). When a user asks for ANY theme not in the built-in preset list, ALWAYS use create_theme.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1000,6 +1000,33 @@ FUNCTION_TOOL_SCHEMAS = [
                     "scale": {"type": "number", "description": "For upscale: scale factor (default 2)"},
                 },
                 "required": ["image_id", "action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            # Executed via the builtin image_gen MCP server, which
+            # get_all_openai_schemas skips (builtin Python servers use the
+            # code-block format). Native function-calling models therefore never
+            # saw this tool unless it was listed here, so a normal chat with
+            # GPT/Claude/Gemini could not generate an image inline. The property
+            # MUST be named `prompt`: function_call_to_tool_block json.dumps the
+            # args and _build_mcp_args only decodes them because `prompt` is in
+            # _MCP_JSON_PRIMARY_KEYS["generate_image"] — any other name falls
+            # through to the line parser, which would treat the whole JSON blob
+            # as the prompt.
+            "name": "generate_image",
+            "description": "Generate an AI image from a text prompt (art, illustrations, photos, logos, posters). Use this whenever the user asks you to draw, make, create, or generate a picture/image/illustration. The image renders inline in the chat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "What to depict — describe the image in detail."},
+                    "model": {"type": "string", "description": "Optional image model (e.g. gpt-image-1). Defaults to the admin-configured / auto-detected model."},
+                    "size": {"type": "string", "description": "Optional WxH, e.g. 1024x1024, 1536x1024, 1024x1536. Default 1024x1024."},
+                    "quality": {"type": "string", "enum": ["low", "medium", "high", "auto"], "description": "Optional render quality. Default medium (or the admin setting)."},
+                },
+                "required": ["prompt"]
             }
         }
     },

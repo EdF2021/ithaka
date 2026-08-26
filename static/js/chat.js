@@ -435,6 +435,43 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
   // API key pattern for the guard in handleChatSubmit
   const API_KEY_RE = /^(sk-[a-zA-Z0-9_\-]{20,}|gsk_[a-zA-Z0-9]{20,}|AIza[a-zA-Z0-9_\-]{30,}|xai-[a-zA-Z0-9]{20,})$/;
 
+  // Extract a human-readable message from an HTTP error body. FastAPI's
+  // HTTPException uses "detail" (a string, or a list for 422s), providers
+  // nest under "message"/"error.message". Structured parse first — a regex
+  // garbles bodies with escaped quotes. Returns null when nothing readable
+  // was found (caller keeps its generic "Error <status>" text); never
+  // returns raw JSON.
+  function _parseErrorBodyMessage(errBody) {
+    try {
+      const parsed = JSON.parse(errBody);
+      if (typeof parsed?.detail === 'string') return parsed.detail;
+      if (typeof parsed?.message === 'string') return parsed.message;
+      if (typeof parsed?.error?.message === 'string') return parsed.error.message;
+      return null;
+    } catch {}
+    const m = errBody.match(/"message"\s*:\s*"([^"]+)"/);
+    if (m) return m[1].replace(/\\"/g, '"');
+    if (errBody.length < 200 && !errBody.trimStart().startsWith('{')) return errBody;
+    return null;
+  }
+
+  // Shown when a message is sent before any AI model is connected. The typed
+  // message stays in the input so the user can retry after connecting.
+  // Role-aware: connecting endpoints is admin-only, so a regular user gets
+  // "ask your admin" instead of a dead-end '+' button (mirrors models.js).
+  function _noModelConnectedHelp() {
+    const intro = 'No AI model is connected yet — your message is still in the box below.\n\n';
+    if (!(typeof window !== 'undefined' && window._isAdmin)) {
+      return intro +
+        '- Ask an admin to connect a model\n' +
+        '- Then click `Select model` in the chat box and pick it';
+    }
+    return intro +
+      '- Click `Select model` in the chat box and pick a model\n' +
+      '- No models listed? Use the `+` button there to connect one\n' +
+      '- Or type `/setup` for a guided setup';
+  }
+
   const _queuedAgentRequests = [];
   let _queuedDrainTimer = null;
   let _queuedPromoteTimer = null;
@@ -790,12 +827,51 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       }
     }
 
+    // Notebook workspace source filter — block sends with zero sources
+    // selected, before anything renders (user bubble, input clear) or any
+    // session work starts. getSourceIdsForChat() contract (notebookWorkspace.js):
+    // null = no filter (workspace closed, or every source is checked),
+    // string[] = a checked subset, [] = nothing checked (must not send).
+    // Computed once here and reused unchanged at the fd.append site below —
+    // not recomputed, so a mid-send checkbox change can't desync the guard
+    // from what actually gets sent.
+    let _nbwsSourceIds = null;
+    if (window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen()) {
+      _nbwsSourceIds = window.notebookWorkspace.getSourceIdsForChat ? window.notebookWorkspace.getSourceIdsForChat() : null;
+      if (Array.isArray(_nbwsSourceIds) && _nbwsSourceIds.length === 0) {
+        uiModule.showError(window.notebookWorkspace.EMPTY_SELECTION_MESSAGE || 'Select at least one source');
+        _releaseSendFlag();
+        return;
+      }
+    }
+
     // Materialize pending session (deferred from model click) on first message
     if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {
       _sendPerf.mark('pending_session_begin');
       const ok = await sessionModule.materializePendingSession();
       _sendPerf.mark('pending_session_done');
       if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
+
+      // Fail-closed vangnet (issue #22): the notebook workspace is open right
+      // now, but the session just materialized without a notebook binding —
+      // sending would let RAG grounding silently drop while the notebook UI
+      // still implies grounded answers. The primary fix is
+      // materializePendingSession reading the open workspace's notebook id
+      // live at materialize time; this only catches a bypassed path.
+      if (window.notebookWorkspace?.isNotebookWorkspaceOpen?.() &&
+          !(sessionModule.getLastMaterializedNotebookId && sessionModule.getLastMaterializedNotebookId())) {
+        const box = document.getElementById('chat-history');
+        if (box) {
+          const errHolder = document.createElement('div');
+          // chat-error: same inert semantic marker as the other error/timeout
+          // render sites in this file — no styling/behavior attached.
+          errHolder.className = 'msg msg-ai chat-error';
+          errHolder.innerHTML = '<div class="body"><i style="color: var(--color-error);">Notebook session could not be bound — retry from the workspace</i></div>';
+          box.appendChild(errHolder);
+        }
+        _releaseSendFlag();
+        return;
+      }
     }
 
     if (!sessionModule.getCurrentSessionId()) {
@@ -834,24 +910,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           _sendPerf.mark('direct_chat_materialize_done');
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         } else {
-          el('message').value = '';
-          if (uiModule.autoResize) uiModule.autoResize(el('message'));
-          addMessage('assistant',
-            'No chat session active. You can:\n\n' +
-            '- Open the model picker in the chat box and pick a model\n' +
-            '- Use the `+` button in the model picker to add a model endpoint\n' +
-            '- Use `/help` to see all available commands');
+          // Keep the user's typed message in the input — losing it on a
+          // config problem is hostile to first-time users.
+          addMessage('assistant', _noModelConnectedHelp());
           _releaseSendFlag();
           return;
         }
       } catch (e) {
-        el('message').value = '';
-        if (uiModule.autoResize) uiModule.autoResize(el('message'));
-        addMessage('assistant',
-          'No chat session active. You can:\n\n' +
-          '- Open the model picker in the chat box and pick a model\n' +
-          '- Use the `+` button in the model picker to add a model endpoint\n' +
-          '- Use `/help` to see all available commands');
+        addMessage('assistant', _noModelConnectedHelp());
         _releaseSendFlag();
         return;
       }
@@ -1167,6 +1233,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       fd.append('message', _finalMsgWithInject);
       fd.append('session', streamSessionId);
       if (ids.length) fd.append('attachments', JSON.stringify(ids));
+      // Notebook workspace source filter — same JSON-string-in-a-form-field
+      // shape as `attachments` above, since this whole request is FormData,
+      // not a JSON body. `_nbwsSourceIds` was computed once at the top of
+      // this handler (see the send guard there); null means no filter.
+      if (Array.isArray(_nbwsSourceIds)) fd.append('source_ids', JSON.stringify(_nbwsSourceIds));
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && activeDocIdForSend) {
         try {
@@ -1370,10 +1441,8 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
         let errText = `Error ${res.status}`;
         try {
           const errBody = await res.text();
-          // Parse nested JSON error if present
-          const m = errBody.match(/"message"\s*:\s*"([^"]+)"/);
-          if (m) errText = m[1].replace(/\\"/g, '"');
-          else if (errBody.length < 200) errText = errBody;
+          const parsedMsg = _parseErrorBodyMessage(errBody);
+          if (parsedMsg) errText = parsedMsg;
         } catch {}
         // Auto-switch to chat mode for tool-related errors
         if (errText.includes('tool') || errText.includes('auto')) {
@@ -1413,6 +1482,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       // Streaming TTS: synthesize sentence-by-sentence during streaming
       const streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
       if (streamingTTS) window.aiTTSManager.streamingStart();
+      if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onStreamStart();
       // Multi-bubble agent tracking
       let roundHolder = holder;       // Current AI text bubble (changes per round)
       let roundText = '';             // Text accumulated for current round
@@ -3158,6 +3228,24 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
             }
           }
         }
+        // Voice mode: re-arm mic after TTS playback finishes (or immediately if no TTS)
+        if (window.voiceMode && window.voiceMode.isActive) {
+          if (window.aiTTSManager && (window.aiTTSManager.isPlaying || window.aiTTSManager._processing)) {
+            let _vmPollCount = 0;
+            const _vmPollTTS = setInterval(() => {
+              _vmPollCount++;
+              if (_vmPollCount > 150) { // 30s safety timeout
+                clearInterval(_vmPollTTS);
+                window.voiceMode.onResponseComplete();
+              } else if (!window.aiTTSManager.isPlaying && !window.aiTTSManager._processing) {
+                clearInterval(_vmPollTTS);
+                window.voiceMode.onResponseComplete();
+              }
+            }, 200);
+          } else {
+            window.voiceMode.onResponseComplete();
+          }
+        }
         if (metrics) {
           displayMetrics(_metricsTargetForTurn() || footerTarget, metrics);
         }
@@ -3231,6 +3319,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       } else {
         // Stop streaming TTS on any error/abort
         if (streamingTTS && window.aiTTSManager) window.aiTTSManager.stop();
+        if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onResponseComplete();
 
         if (currentAbort && currentAbort.signal.aborted) {
           const abortReason = currentAbort._reason || '';
@@ -3385,6 +3474,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                 errMsg += '\n\nThis model may not support tools — try switching to Chat mode.';
               }
               typewriterInto(errorHolder, errMsg);
+              // Semantic marker (inert — no styling/behavior attached) so
+              // consumers like notebookWorkspace.js's follow-up chips can
+              // reliably tell "this bubble is a failed exchange" apart from
+              // a normal answer, instead of sniffing inline color/text.
+              errorHolder.closest('.msg-ai')?.classList.add('chat-error');
             }
           }
         }
@@ -3393,6 +3487,12 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       clearResponseTimeout();
       clearProcessingProbe();
       clearFirstTokenWaitTimers();
+      // Unconditional end-of-stream hook (success, error, foreground or
+      // backgrounded) — a plain CustomEvent dispatch with no other behavior
+      // change, so the regular (non-notebook) chat is unaffected whether or
+      // not anything is listening. notebookWorkspace.js's follow-up chips
+      // (Task 5) is the only current consumer.
+      chatStream.notifyChatStreamDone(streamSessionId);
       // Streaming done — let screen readers announce the settled response.
       const _chatLogDone = document.getElementById('chat-history');
       if (_chatLogDone) _chatLogDone.setAttribute('aria-busy', 'false');
@@ -3463,7 +3563,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
             var _box = document.getElementById('chat-history');
             if (_box && sessionModule.getCurrentSessionId() === _timeoutSessionId) {
               var _timeoutMsg = document.createElement('div');
-              _timeoutMsg.className = 'msg msg-ai';
+              // chat-error: same inert semantic marker as the other two
+              // error/timeout render sites (see the comment at the
+              // typewriterInto call above) — no styling/behavior attached.
+              _timeoutMsg.className = 'msg msg-ai chat-error';
               _timeoutMsg.innerHTML = '<div class="role">Ithaka</div><div class="body" style="opacity:0.6;font-style:italic;">Research clarification timed out. Toggle research again to start over.</div>';
               _box.appendChild(_timeoutMsg);
               uiModule.scrollHistory();
@@ -3923,7 +4026,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       var box = document.getElementById('chat-history');
       if (box) {
         var errHolder = document.createElement('div');
-        errHolder.className = 'msg msg-ai';
+        // chat-error: same inert semantic marker as the other two
+        // error/timeout render sites — no styling/behavior attached.
+        errHolder.className = 'msg msg-ai chat-error';
         errHolder.innerHTML = '<div class="body"><i style="color: var(--color-error);">[Background stream encountered an error]</i></div>';
         box.appendChild(errHolder);
       }

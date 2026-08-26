@@ -54,6 +54,8 @@ with preserve_import_state("core.database", "src.database", "core.session_manage
         _endpoint_settings_using_endpoint,
         _clear_endpoint_settings_for_endpoint,
         _clear_user_pref_endpoint_refs,
+        _session_uses_endpoint_url,
+        _detach_session_rows_for_deleted_endpoint,
         _default_endpoint_needs_assignment,
         _PROVIDER_CURATED,
     )
@@ -153,6 +155,61 @@ def test_endpoint_cleanup_updates_scoped_and_legacy_user_prefs():
     }
     assert _clear_user_pref_endpoint_refs(legacy, "dead") == 1
     assert legacy["default_model_fallbacks"] == []
+
+
+# ── session detach on endpoint delete (issue #12) ──
+#
+# Deleting an endpoint used to keep endpoint_url/model on sessions; the
+# frontend's new-chat fallback then cloned the dead endpoint from the most
+# recent session into every fresh chat, which 400'd with "Selected model
+# endpoint was removed" until the user re-picked a model manually.
+
+_DEAD_BASE = "http://127.0.0.1:9999/v1"
+
+
+def _session_row(url="http://127.0.0.1:9999/v1/chat/completions", model="test-model-1"):
+    return SimpleNamespace(
+        endpoint_url=url,
+        model=model,
+        headers={"Authorization": "Bearer x"},
+        updated_at=None,
+    )
+
+
+def test_session_url_matcher_accepts_chat_completions_variant():
+    assert _session_uses_endpoint_url("http://127.0.0.1:9999/v1/chat/completions", _DEAD_BASE)
+    assert _session_uses_endpoint_url("http://127.0.0.1:9999/v1", _DEAD_BASE)
+    assert not _session_uses_endpoint_url("http://other:1234/v1/chat/completions", _DEAD_BASE)
+    assert not _session_uses_endpoint_url("", _DEAD_BASE)
+
+
+def test_detach_clears_url_model_and_headers_when_endpoint_gone():
+    row = _session_row()
+    assert _detach_session_rows_for_deleted_endpoint([row], _DEAD_BASE, []) == 1
+    assert row.headers == {}
+    assert row.endpoint_url == ""
+    assert row.model == ""
+    assert row.updated_at is not None
+
+
+def test_detach_keeps_url_and_model_when_replacement_serves_same_url():
+    # Another enabled endpoint still serves this URL (in-place replacement):
+    # only stored auth is dropped, the session keeps its selection.
+    row = _session_row()
+    assert _detach_session_rows_for_deleted_endpoint(
+        [row], _DEAD_BASE, ["http://127.0.0.1:9999/v1"]
+    ) == 1
+    assert row.headers == {}
+    assert row.endpoint_url == "http://127.0.0.1:9999/v1/chat/completions"
+    assert row.model == "test-model-1"
+
+
+def test_detach_ignores_sessions_on_other_endpoints():
+    row = _session_row(url="http://elsewhere:8080/v1/chat/completions")
+    assert _detach_session_rows_for_deleted_endpoint([row], _DEAD_BASE, []) == 0
+    assert row.headers == {"Authorization": "Bearer x"}
+    assert row.endpoint_url == "http://elsewhere:8080/v1/chat/completions"
+    assert row.model == "test-model-1"
 
 
 # ── _default_endpoint_needs_assignment (add-endpoint auto-default) ──

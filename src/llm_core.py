@@ -1265,7 +1265,7 @@ def _provider_headers(provider: str, headers: Optional[Dict] = None) -> Dict[str
     if isinstance(headers, dict):
         h.update(headers)
     if provider == "openrouter":
-        h.setdefault("HTTP-Referer", "https://github.com/pewdiepie-archdaemon/ithaka")
+        h.setdefault("HTTP-Referer", "https://github.com/EdF2021/ithaka")
         h.setdefault("X-OpenRouter-Title", "Ithaka")
     if provider == "copilot":
         # Ensure the Copilot-required headers are present even when the caller
@@ -1428,7 +1428,7 @@ def _format_upstream_error(status: int, body: bytes | str, url: str) -> str:
             msg = f"{provider} denied access (403)"
         if detail:
             msg += f" — {detail}"
-        msg += ". Check Model Endpoints → {} and re-paste the key.".format(provider)
+        msg += ". Open Settings → Add Models and paste a fresh {} API key.".format(provider)
         return msg
     if status == 404:
         return f"{provider} returned 404 — check the base URL and model name." + (f" ({detail})" if detail else "")

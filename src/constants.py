@@ -49,6 +49,7 @@ DEEP_RESEARCH_DIR = os.path.join(DATA_DIR, "deep_research")
 MCP_OAUTH_DIR = os.path.join(DATA_DIR, "mcp_oauth")
 GENERATED_IMAGES_DIR = os.path.join(DATA_DIR, "generated_images")
 NOTEBOOK_AUDIO_DIR = os.path.join(DATA_DIR, "notebook_audio")
+NOTEBOOK_VIDEO_DIR = os.path.join(DATA_DIR, "notebook_video")
 TTS_CACHE_DIR = os.path.join(DATA_DIR, "tts_cache")
 EMAIL_URGENCY_CACHE_DIR = os.path.join(DATA_DIR, "email_urgency_cache")
 SKILLS_DIR = os.path.join(DATA_DIR, "skills")
@@ -65,6 +66,10 @@ PLUGINS_DIR = os.path.join(DATA_DIR, "plugins")
 # crash import — an unwritable path should degrade, not take the app down.
 try:
     os.makedirs(NOTEBOOK_AUDIO_DIR, exist_ok=True)
+except OSError:
+    pass
+try:
+    os.makedirs(NOTEBOOK_VIDEO_DIR, exist_ok=True)
 except OSError:
     pass
 

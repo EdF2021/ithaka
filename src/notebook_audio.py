@@ -64,6 +64,7 @@ from core.database import (
 from src.constants import NOTEBOOK_AUDIO_DIR
 from src.event_bus import fire_event
 from src.notebook_artifacts import _strip_think_blocks, gather_source_text
+from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
 from src.settings import load_settings
 from src.task_endpoint import task_llm_call_async
@@ -86,15 +87,15 @@ _FALLBACK_VOICES = ("alloy", "onyx")
 # --------------------------------------------------------------------------
 # Prompt
 #
-# Written in Dutch (the project language) but, like the Fase 2 artifact
-# prompts, it orders the model to follow the *sources'* language: a podcast
-# over English sources must be spoken in English.
+# Written in Dutch (the project language) and, per DUTCH_OUTPUT_RULE, always
+# spoken in Dutch regardless of the sources' language: a podcast over English
+# sources is still spoken in Dutch.
 # --------------------------------------------------------------------------
 
-PODCAST_PROMPT = """Je schrijft het script voor een podcastaflevering van twee hosts die samen een vaste set bronnen bespreken.
+PODCAST_PROMPT = f"""Je schrijft het script voor een podcastaflevering van twee hosts die samen een vaste set bronnen bespreken.
 
 Harde regels:
-- Schrijf in de taal van de bronnen, niet in de taal van deze instructie. Zijn de bronnen Engels, schrijf dan Engels; zijn ze Nederlands, schrijf dan Nederlands.
+- {DUTCH_OUTPUT_RULE}
 - Baseer je uitsluitend op de aangeleverde bronnen. Vul niets aan met algemene kennis en presenteer geen aanname als feit.
 - De bronnen zijn gescheiden met koppen van de vorm "=== BRON: bestandsnaam ===". Verwijs in gewone spreektaal naar een bron waar dat de luisteraar helpt; lees die koppen nooit voor.
 
@@ -111,6 +112,22 @@ Inhoud en lengte:
 - Bouw daarna op van de hoofdlijn naar de details, en benoem waar de bronnen elkaar aanvullen of tegenspreken.
 - De laatste beurt vat samen wat de luisteraar heeft gehoord en sluit de aflevering af.
 - Het is gesproken tekst: volledige zinnen, geen opsommingen, geen verwijzingen naar "hierboven" of "dit document"."""
+
+
+# How many times the script call may be made before the job gives up. The
+# first attempt is the plain prompt; every later one carries the correction
+# below. Three is the ceiling because each attempt re-sends the full 60k-char
+# source context, and a model that misses the format three times running is
+# not going to hit it on the fourth.
+_SCRIPT_FORMAT_ATTEMPTS = 3
+
+_SCRIPT_FORMAT_CORRECTION = (
+    "Je vorige antwoord bevatte geen enkele regel die met \"S1: \" of \"S2: \" "
+    "begint, dus het is onbruikbaar als podcastscript. Geef het script opnieuw "
+    "en houd je exact aan het formaat: elke regel begint met \"S1: \" of "
+    "\"S2: \", afwisselend, en verder staat er niets in je antwoord — geen "
+    "inleiding, geen samenvatting, geen kopjes, geen markdown."
+)
 
 
 # --------------------------------------------------------------------------
@@ -509,6 +526,9 @@ _JOB_EVICT_AFTER_SECONDS = 1800
 _PUBLIC_JOB_FIELDS = (
     "status", "phase", "segment", "total", "error", "artifact",
     "notebook_id", "started_at",
+    # A retried script phase is otherwise a silent 2-3x longer "Writing
+    # script…"; the poll surfaces the attempt so the UI can show it.
+    "script_attempt",
 )
 
 
@@ -674,10 +694,44 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
     # workload="foreground" tells the local-model slot in src/llm_core.py the
     # same thing, so a local endpoint does not wait on has_foreground_activity()
     # either. Same semantics as deep research and as Fase 2's generate_artifact.
-    script = await task_llm_call_async(
-        messages, owner=owner, wait_for_quiet=False, workload="foreground"
-    )
-    turns = parse_dialogue(script or "")
+    #
+    # The format is strict (every line must start with "S1: " or "S2: ") but
+    # the model's compliance is not: with 60k characters of source text ahead
+    # of it, a weaker model — or whichever model the endpoint fallback chain
+    # lands on when the primary errors — sometimes answers with a prose summary
+    # instead of a dialogue. Measured on a real notebook: one attempt returned
+    # 0 speaker lines, the very next returned 38. Failing the whole job on a
+    # single bad roll wastes the user's wait for a retry the job can do itself,
+    # so give it a corrective nudge and try again. The nudge carries the failed
+    # output back so the model can see what it did wrong.
+    turns: list[tuple[str, str]] = []
+    last_error: Optional[RuntimeError] = None
+    attempt_messages = list(messages)
+    for attempt in range(_SCRIPT_FORMAT_ATTEMPTS):
+        entry["script_attempt"] = attempt + 1
+        script = await task_llm_call_async(
+            attempt_messages, owner=owner, wait_for_quiet=False, workload="foreground"
+        )
+        try:
+            turns = parse_dialogue(script or "")
+            break
+        except RuntimeError as exc:
+            last_error = exc
+            if attempt == _SCRIPT_FORMAT_ATTEMPTS - 1:
+                break
+            logger.warning(
+                "Podcast script attempt %d/%d had no S1:/S2: lines; retrying "
+                "with a format correction",
+                attempt + 1, _SCRIPT_FORMAT_ATTEMPTS,
+            )
+            attempt_messages = messages + [
+                {"role": "assistant", "content": (script or "")[:2000]},
+                {"role": "user", "content": _SCRIPT_FORMAT_CORRECTION},
+            ]
+    if not turns:
+        raise last_error or RuntimeError(
+            "Het model leverde geen bruikbaar dialoogscript op"
+        )
 
     # ── phase: tts ──
     voice_a, voice_b = resolve_voices()
@@ -722,10 +776,18 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
                 # off the event loop it goes, or the whole app stalls for the
                 # job's duration.
                 data = await asyncio.to_thread(synthesize, chunk, voice)
-                writer.add_segment(index, data)
+                # add_segment parses the segment and writes its frames straight
+                # to disk (megabytes per segment, tens of segments per job), so
+                # it stalls the loop for the same reason the synthesize call
+                # above does. Sequential awaits, so no two threads ever touch
+                # the writer's state at once.
+                await asyncio.to_thread(writer.add_segment, index, data)
                 entry["segment"] = index
         finally:
-            writer.close()
+            # close() rewrites the WAV header (seek + write), so it belongs off
+            # the loop too. Kept inside `finally` so a failed segment still
+            # closes the handle before the temp file is unlinked below.
+            await asyncio.to_thread(writer.close)
         if writer.total_frames == 0:
             raise RuntimeError("TTS leverde geen audio (0 frames)")
 
@@ -767,6 +829,7 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
             notebook_id=notebook.id,
             document_id=document_id,
             kind="podcast",
+            title=f"{notebook.name} — Podcast",
             audio_path=filename,
         )
         session.add(artifact)

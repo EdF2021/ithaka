@@ -861,9 +861,23 @@ def _append_llama_cpp_linux_accel_build_lines(runner_lines: list[str]) -> None:
     runner_lines.append('      elif _ithaka_has_vkdev_inline && _ithaka_has_vk_inline; then')
     runner_lines.append('        _ithaka_pat="ubuntu.*vulkan"')
     runner_lines.append('      else')
-    runner_lines.append('        _ithaka_pat="ubuntu-x64\\\\.zip"')
+    runner_lines.append('        _ithaka_pat="ubuntu-x64\\\\.(zip|tar\\\\.gz)"')
     runner_lines.append('      fi')
-    runner_lines.append('      _ithaka_prebuilt_url="$(curl -fsSL --max-time 15 https://api.github.com/repos/ggml-org/llama.cpp/releases/latest 2>/dev/null | grep \'"browser_download_url"\' | cut -d\'"\' -f4 | grep -iE "$_ithaka_pat" | grep -iv "arm\\|aarch64" | head -1)"')
+    # Upstream stopped shipping Linux CUDA prebuilts; when the accel-specific
+    # pattern matches nothing, fall back to the plain x64 CPU asset — a
+    # working CPU binary beats a source build that needs cmake/nvcc.
+    runner_lines.append('      _ithaka_fallback_pat="ubuntu-x64\\\\.(zip|tar\\\\.gz)"')
+    runner_lines.append('      _ithaka_fetch_assets() { curl -fsSL --max-time 15 "https://api.github.com/repos/ggml-org/llama.cpp/releases/$1" 2>/dev/null | grep \'"browser_download_url"\' | cut -d\'"\' -f4; }')
+    runner_lines.append('      _ithaka_assets="$(_ithaka_fetch_assets latest)"')
+    # llama.cpp's "latest" release became a pointer whose only asset is
+    # nightly-tag.txt; the binaries live under the nightly tag it names.
+    runner_lines.append('      if echo "$_ithaka_assets" | grep -q \'nightly-tag\\.txt\'; then')
+    runner_lines.append('        _ithaka_nightly="$(curl -fsSL --max-time 15 "$(echo "$_ithaka_assets" | grep \'nightly-tag\\.txt\' | head -1)" 2>/dev/null | tr -d \'[:space:]\')"')
+    runner_lines.append('        [ -n "$_ithaka_nightly" ] && _ithaka_assets="$(_ithaka_fetch_assets "tags/$_ithaka_nightly")"')
+    runner_lines.append('      fi')
+    runner_lines.append('      _ithaka_pick_asset() { echo "$_ithaka_assets" | grep -iE "$1" | grep -iv "arm\\|aarch64" | head -1; }')
+    runner_lines.append('      _ithaka_prebuilt_url="$(_ithaka_pick_asset "$_ithaka_pat")"')
+    runner_lines.append('      [ -z "$_ithaka_prebuilt_url" ] && _ithaka_prebuilt_url="$(_ithaka_pick_asset "$_ithaka_fallback_pat")"')
     runner_lines.append('    fi')
     # Accept any of unzip / bsdtar / python3 -m zipfile as the extractor.
     # python3 is essentially always present on modern Linux, so this lets
@@ -871,10 +885,15 @@ def _append_llama_cpp_linux_accel_build_lines(runner_lines: list[str]) -> None:
     runner_lines.append('    if [ -n "$_ithaka_prebuilt_url" ] && (command -v unzip >/dev/null 2>&1 || command -v bsdtar >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1); then')
     runner_lines.append('      echo "[ithaka] Found prebuilt llama-server: $_ithaka_prebuilt_url"')
     runner_lines.append('      mkdir -p ~/bin "$HOME/.cache/ithaka/llama-cpp-prebuilt" && cd "$HOME/.cache/ithaka/llama-cpp-prebuilt"')
-    runner_lines.append('      rm -f llama-cpp.zip')
-    runner_lines.append('      if curl -fsSL --max-time 120 "$_ithaka_prebuilt_url" -o llama-cpp.zip && [ -s llama-cpp.zip ]; then')
+    # Upstream assets switched from .zip to .tar.gz; keep the zip chain for
+    # older mirrors and pick the archive name (and extractor) by extension.
+    runner_lines.append('      case "$_ithaka_prebuilt_url" in *.tar.gz) _ithaka_archive="llama-cpp.tar.gz" ;; *) _ithaka_archive="llama-cpp.zip" ;; esac')
+    runner_lines.append('      rm -f llama-cpp.zip llama-cpp.tar.gz')
+    runner_lines.append('      if curl -fsSL --max-time 120 "$_ithaka_prebuilt_url" -o "$_ithaka_archive" && [ -s "$_ithaka_archive" ]; then')
     runner_lines.append('        rm -rf build && mkdir -p build')
-    runner_lines.append('        if command -v unzip >/dev/null 2>&1; then unzip -qq -o llama-cpp.zip -d build; elif command -v bsdtar >/dev/null 2>&1; then bsdtar -xf llama-cpp.zip -C build; else python3 -c "import zipfile; zipfile.ZipFile(\\"llama-cpp.zip\\").extractall(\\"build\\")"; fi')
+    runner_lines.append('        if [ "$_ithaka_archive" = "llama-cpp.tar.gz" ]; then')
+    runner_lines.append('          if command -v tar >/dev/null 2>&1; then tar -xzf "$_ithaka_archive" -C build; elif command -v bsdtar >/dev/null 2>&1; then bsdtar -xf "$_ithaka_archive" -C build; else python3 -c "import tarfile; tarfile.open(\\"llama-cpp.tar.gz\\").extractall(\\"build\\")"; fi')
+    runner_lines.append('        elif command -v unzip >/dev/null 2>&1; then unzip -qq -o llama-cpp.zip -d build; elif command -v bsdtar >/dev/null 2>&1; then bsdtar -xf llama-cpp.zip -C build; else python3 -c "import zipfile; zipfile.ZipFile(\\"llama-cpp.zip\\").extractall(\\"build\\")"; fi')
     runner_lines.append('        _ithaka_extracted="$(find build -type f -name llama-server 2>/dev/null | head -1)"')
     runner_lines.append('        if [ -n "$_ithaka_extracted" ]; then')
     runner_lines.append('          chmod +x "$_ithaka_extracted"')

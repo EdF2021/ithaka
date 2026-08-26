@@ -39,14 +39,61 @@ KEYWORD_WEIGHT = 0.3
 
 COLLECTION_NAME = "ithaka_rag"
 
+# ── Keyword-score tokenizer ──
+# Dutch + English stopwords. Dutch sources dominate this project, so the Dutch
+# set is the larger half. Kept compact (~40 words) — only the highest-frequency
+# function words that add noise to keyword overlap.
+_KW_STOPWORDS = frozenset(
+    # Dutch
+    "de het een en van te dat die in op voor met is was aan ook als nog "
+    "maar zich bij of deze toe dit wij jullie zij hun hem haar ons u "
+    # English
+    "the a an and or of to in on for with is was at by it this that "
+    "these those from be been are were has have had do does did not".split()
+)
 
-def _generate_doc_id(text: str, owner: str = "") -> str:
+# Common suffixes to strip for a light stemming pass. Order matters: longer
+# suffixes first so we don't strip "-e" off a word that should lose "-en".
+_KW_SUFFIX_RE = re.compile(r'(?:en|ing|ed|est|er|e)$')
+
+
+def _tokenize_for_keyword_score(text: str) -> Set[str]:
+    """Tokenize text for keyword-overlap scoring.
+
+    Lowercases, splits on non-alphanumeric chars, drops stopwords, and applies
+    a light suffix-stripping pass (not a full stemmer) so that Dutch -en/-e
+    and English -ing/-ed variants collapse onto the same token.
+    """
+    tokens: Set[str] = set()
+    for raw in re.findall(r'\w+', text.lower()):
+        if raw in _KW_STOPWORDS or len(raw) < 2:
+            continue
+        stemmed = _KW_SUFFIX_RE.sub('', raw)
+        # Re-check length: stripping can shorten a 3-char word to 1 char
+        # (e.g. "ten" -> "t"); fall back to the unstemmed form in that case.
+        if len(stemmed) < 2:
+            stemmed = raw
+        tokens.add(stemmed)
+    return tokens
+
+
+def _generate_doc_id(
+    text: str,
+    owner: str = "",
+    notebook_id: Optional[str] = None,
+    document_id: Optional[str] = None,
+) -> str:
     # Owner-scope the id so two owners can index byte-identical chunks
     # without the second one's add early-returning on the first's id and
     # being silently dropped from their owner-filtered search results.
-    # Empty owner reproduces the legacy text-only id so the unowned/base
-    # index keeps its existing ids and isn't re-churned.
-    key = f"{owner}\x00{text}" if owner else text
+    # notebook_id and document_id further scope the id so the same chunk
+    # uploaded to two different notebooks (or as two different documents
+    # within the same notebook) gets distinct ids and is stored for each
+    # notebook rather than silently deduped to the first one's metadata.
+    # When none of the scoping values are set the legacy text-only id is
+    # preserved so the unowned/base index keeps its existing ids.
+    parts = [p for p in (owner, notebook_id, document_id) if p]
+    key = "\x00".join(parts + [text]) if parts else text
     return f"doc_{hashlib.sha256(key.encode('utf-8')).hexdigest()[:16]}"
 
 
@@ -183,7 +230,12 @@ class VectorRAG:
         if not metadata or not isinstance(metadata, dict):
             return False
 
-        doc_id = _generate_doc_id(text, metadata.get("owner") or "")
+        doc_id = _generate_doc_id(
+            text,
+            metadata.get("owner") or "",
+            notebook_id=metadata.get("notebook_id"),
+            document_id=metadata.get("document_id"),
+        )
         wrote = False
         for lane in self._lanes:
             try:
@@ -219,7 +271,15 @@ class VectorRAG:
         attempted_new = False
         write_failed = False
         for lane in self._lanes:
-            all_ids = [_generate_doc_id(t, m.get("owner") or "") for t, m in valid]
+            all_ids = [
+                _generate_doc_id(
+                    t,
+                    m.get("owner") or "",
+                    notebook_id=m.get("notebook_id"),
+                    document_id=m.get("document_id"),
+                )
+                for t, m in valid
+            ]
             try:
                 existing = lane.collection.get(ids=all_ids)
                 existing_ids = set(existing.get("ids") or [])
@@ -346,6 +406,7 @@ class VectorRAG:
         k: int = 5,
         owner: Optional[str] = None,
         notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if not self.healthy:
             return []
@@ -360,13 +421,15 @@ class VectorRAG:
                 conditions.append({"owner": owner})
             if notebook_id:
                 conditions.append({"notebook_id": notebook_id})
+            if source_ids:
+                conditions.append({"document_id": {"$in": list(source_ids)}})
             if len(conditions) > 1:
                 where_filter = {"$and": conditions}
             elif conditions:
                 where_filter = conditions[0]
             else:
                 where_filter = None
-            query_words = set(query.lower().split())
+            query_words = _tokenize_for_keyword_score(query)
             candidates = []
 
             for lane, results in query_lanes(
@@ -388,7 +451,7 @@ class VectorRAG:
                     meta = results["metadatas"][0][idx]
 
                     vector_sim = 1.0 - distance
-                    doc_words = set(doc_text.lower().split())
+                    doc_words = _tokenize_for_keyword_score(doc_text)
                     overlap = len(query_words & doc_words)
                     keyword_score = overlap / len(query_words) if query_words else 0.0
                     hybrid_score = (VECTOR_WEIGHT * vector_sim) + (KEYWORD_WEIGHT * keyword_score)
@@ -411,7 +474,9 @@ class VectorRAG:
 
         except Exception as e:
             logger.error(f"search failed: {e}")
-            return self._keyword_search_fallback(query, k, owner=owner, notebook_id=notebook_id)
+            return self._keyword_search_fallback(
+                query, k, owner=owner, notebook_id=notebook_id, source_ids=source_ids,
+            )
 
     def _keyword_search_fallback(
         self,
@@ -419,6 +484,7 @@ class VectorRAG:
         k: int = 5,
         owner: Optional[str] = None,
         notebook_id: Optional[str] = None,
+        source_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         try:
             if not self._active_collections():
@@ -437,6 +503,8 @@ class VectorRAG:
                     if owner and meta.get("owner") != owner:
                         continue
                     if notebook_id and meta.get("notebook_id") != notebook_id:
+                        continue
+                    if source_ids and meta.get("document_id") not in source_ids:
                         continue
                     doc_lower = doc.lower()
                     score = sum(1 for w in query_words if w in doc_lower)

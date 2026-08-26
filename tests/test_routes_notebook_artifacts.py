@@ -237,6 +237,28 @@ def test_list_artifacts_title_none_safe_when_document_missing(monkeypatch, ts):
     assert artifacts[0]["title"] is None
 
 
+def test_list_artifacts_own_title_wins_over_document_title(monkeypatch, ts):
+    """Once an artifact has its own title (set via rename or at creation),
+    the list response must use it instead of falling back to the linked
+    Document's title."""
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    created = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "faq"}).json()
+
+    s = ts()
+    try:
+        row = s.get(db.NotebookArtifact, created["id"])
+        row.title = "Eigen titel"
+        s.commit()
+    finally:
+        s.close()
+
+    r = c.get(f"/api/notebooks/{nb_id}/artifacts")
+    assert r.status_code == 200
+    assert r.json()["artifacts"][0]["title"] == "Eigen titel"
+
+
 def test_list_artifacts_cross_owner_is_404(monkeypatch, ts):
     monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
     c_ed = _client(monkeypatch, user="ed")
@@ -291,6 +313,107 @@ def test_delete_artifact_unknown_id_is_404(monkeypatch, ts):
     assert r.status_code == 404
 
 
+# ---- PATCH (rename) ----
+
+def test_rename_artifact_happy_path(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    created = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "faq"}).json()
+
+    r = c.patch(f"/api/notebooks/{nb_id}/artifacts/{created['id']}", json={"title": "Nieuwe titel"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Nieuwe titel"
+
+    s = ts()
+    try:
+        row = s.get(db.NotebookArtifact, created["id"])
+        assert row.title == "Nieuwe titel"
+    finally:
+        s.close()
+
+    # And the list reflects it too.
+    listed = c.get(f"/api/notebooks/{nb_id}/artifacts").json()["artifacts"]
+    assert listed[0]["title"] == "Nieuwe titel"
+
+
+def test_rename_artifact_strips_whitespace(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    created = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "faq"}).json()
+
+    r = c.patch(f"/api/notebooks/{nb_id}/artifacts/{created['id']}", json={"title": "  Padded  "})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Padded"
+
+
+def test_rename_artifact_empty_title_is_400(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    created = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "faq"}).json()
+
+    r = c.patch(f"/api/notebooks/{nb_id}/artifacts/{created['id']}", json={"title": "   "})
+    assert r.status_code == 400
+
+
+def test_rename_artifact_too_long_title_is_400(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    created = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "faq"}).json()
+
+    r = c.patch(f"/api/notebooks/{nb_id}/artifacts/{created['id']}", json={"title": "x" * 201})
+    assert r.status_code == 400
+
+
+def test_rename_artifact_missing_title_key_is_400(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    created = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "faq"}).json()
+
+    r = c.patch(f"/api/notebooks/{nb_id}/artifacts/{created['id']}", json={})
+    assert r.status_code == 400
+
+
+def test_rename_artifact_unknown_id_is_404(monkeypatch, ts):
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    r = c.patch(f"/api/notebooks/{nb_id}/artifacts/does-not-exist", json={"title": "X"})
+    assert r.status_code == 404
+
+
+def test_rename_artifact_cross_owner_is_404(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c_ed = _client(monkeypatch, user="ed")
+    nb_id = _make_notebook(c_ed)
+    created = c_ed.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "faq"}).json()
+    c_eve = _client(monkeypatch, user="eve")
+
+    r = c_eve.patch(f"/api/notebooks/{nb_id}/artifacts/{created['id']}", json={"title": "Gekaapt"})
+    assert r.status_code == 404
+
+    s = ts()
+    try:
+        row = s.get(db.NotebookArtifact, created["id"])
+        assert row.title is None
+    finally:
+        s.close()
+
+
+def test_rename_artifact_foreign_notebook_is_404(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb1_id = _make_notebook(c, name="NB1")
+    nb2_id = _make_notebook(c, name="NB2")
+    created = c.post(f"/api/notebooks/{nb1_id}/artifacts", json={"kind": "faq"}).json()
+
+    r = c.patch(f"/api/notebooks/{nb2_id}/artifacts/{created['id']}", json={"title": "X"})
+    assert r.status_code == 404
+
+
 # ---- notebook DELETE cleans up artifact Documents, not source Documents ----
 
 def test_notebook_delete_removes_artifact_documents_but_not_source_documents(monkeypatch, ts):
@@ -315,3 +438,17 @@ def test_notebook_delete_removes_artifact_documents_but_not_source_documents(mon
         assert s.get(db.NotebookArtifact, art["id"]) is None
     finally:
         s.close()
+
+
+@pytest.mark.parametrize("kind", [[1, 2, 3], {"a": 1}, 7, None, True])
+def test_generate_artifact_unhashable_or_non_string_kind_is_400(monkeypatch, ts, kind):
+    """ARTIFACT_KINDS is a dict, so `kind not in ARTIFACT_KINDS` raises
+    TypeError: unhashable type on a list/dict kind — a 500 on plain bad
+    client input. Every non-str kind must land on the same 400 as an
+    unknown string kind."""
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": kind})
+    assert r.status_code == 400

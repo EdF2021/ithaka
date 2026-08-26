@@ -13,9 +13,10 @@ export const THEMES = {
   light:      { bg:'#f0ebe3', fg:'#5a5248', panel:'#faf6f0', border:'#d4cdc2', red:'#c47d5a' },
   midnight:   { bg:'#0d1117', fg:'#c9d1d9', panel:'#161b22', border:'#30363d', red:'#f85149' },
   paper:      { bg:'#faf8f5', fg:'#3b3836', panel:'#ffffff', border:'#d5d0c8', red:'#c5ac4a' },
+  minimal:    { bg:'#ffffff', fg:'#36454f', panel:'#f6f7f8', border:'#d3d3d3', red:'#708090' },
   // Spicy / fun themes
-  cyberpunk:  { bg:'#0a0a0f', fg:'#0ff0fc', panel:'#12101a', border:'#9b30ff', red:'#e040fb' },
-  retrowave:  { bg:'#1a1a2e', fg:'#e94560', panel:'#16213e', border:'#533483', red:'#e94560' },
+  sunset:     { bg:'#264653', fg:'#e9c46a', panel:'#1b3a45', border:'#3a5b68', red:'#e76f51',
+                advanced: { sendBtnBg: '#e76f51', sendBtnHover: '#f4a261' } },
   forest:     { bg:'#1b2a1b', fg:'#a8d5a2', panel:'#142414', border:'#3d6b3d', red:'#7cb871' },
   ocean:      { bg:'#0b1a2c', fg:'#64d2ff', panel:'#091422', border:'#1e5074', red:'#4facfe' },
   ume:        { bg:'#2b1b2e', fg:'#f5c2e7', panel:'#1e1420', border:'#6c4675', red:'#f5a0c0' },
@@ -28,7 +29,6 @@ export const THEMES = {
                             userBubbleBg: '#2f2f2f', aiBubbleBg: '#171717',
                             inputBg: '#2f2f2f', brandColor: '#ffffff', brandMixTo: '#ffffff' } },
   claude:     { bg:'#262624', fg:'#f5f4f0', panel:'#30302e', border:'#4a4a47', red:'#c6613f' },
-  cute:       { bg:'#fff0f5', fg:'#d4608a', panel:'#fff8fa', border:'#f0c0d0', red:'#ff6b9d' },
   dageraad:   { bg:'#0A1220', fg:'#EDF2F8', panel:'#111927', border:'#232C3B', red:'#D77A8C',
                 advanced: { sendBtnBg: '#F0A868', sendBtnHover: '#F5B87E',
                             userBubbleBg: '#1A2333', aiBubbleBg: '#0E1624',
@@ -57,14 +57,13 @@ const THEME_DEFAULT_PATTERN = {
   light:      'dots',
   midnight:   'rain',
   paper:      'dots',
-  cyberpunk:  'synapse',
-  retrowave:  'embers',
+  minimal:    'none',
+  sunset:     'embers',
   forest:     'petals',
   ocean:      'constellations',
   terminal:   'perlin-flow',
   organs:     'rain',
   ume:        'petals',
-  cute:       'sparkles',
   dageraad:   'dageraad-gloed',
 };
 
@@ -72,7 +71,6 @@ const THEME_DEFAULT_PATTERN = {
 const THEME_DEFAULT_EFFECT_COLOR = {
   midnight:   '#ffffff',
   organs:     '#451616',
-  cute:       '#ff8cb8',
   ume:        '#f5a0c0',
 };
 

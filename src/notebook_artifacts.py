@@ -25,6 +25,11 @@ import uuid
 
 from core.database import Document, Notebook, NotebookArtifact, NotebookSource
 from src.event_bus import fire_event
+from src.notebook_flashcards import validate_flashcards_markdown
+from src.notebook_infographic import validate_infographic_markdown
+from src.notebook_language import DUTCH_OUTPUT_RULE
+from src.notebook_mindmap import validate_mindmap_markdown
+from src.notebook_slides import extract_slide_deck
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
 from src.task_endpoint import task_llm_call_async
 
@@ -78,16 +83,17 @@ def _strip_think_blocks(text: str) -> str:
 # --------------------------------------------------------------------------
 # Prompts
 #
-# Written in Dutch (the project language), but every prompt orders the model to
-# follow the *sources'* language - an artifact over English sources must come
-# out in English. The rule is stated first and repeated per kind because a
-# Dutch instruction otherwise nudges the model towards Dutch output.
+# Written in Dutch (the project language). Output is always forced to Dutch
+# via DUTCH_OUTPUT_RULE (src/notebook_language.py), regardless of the
+# sources' language - the rule is stated first and repeated per kind because
+# a per-kind instruction that mentions "the sources' language" would
+# otherwise nudge the model away from Dutch output.
 # --------------------------------------------------------------------------
 
-_BASE_RULES = """Je bent een zorgvuldige redacteur die materiaal samenstelt uit een vaste set bronnen.
+_BASE_RULES = f"""Je bent een zorgvuldige redacteur die materiaal samenstelt uit een vaste set bronnen.
 
 Harde regels:
-- Schrijf in de taal van de bronnen, niet in de taal van deze instructie. Zijn de bronnen Engels, schrijf dan Engels; zijn ze Nederlands, schrijf dan Nederlands. Volg de dominante taal van de bronnen en vertaal citaten niet.
+- {DUTCH_OUTPUT_RULE}
 - Baseer je uitsluitend op de aangeleverde bronnen. Vul niets aan met algemene kennis en presenteer geen aanname als feit.
 - Ontbreekt informatie, benoem dat in één korte zin in plaats van te gokken.
 - Lever pure markdown. Geen inleidende zin, geen afsluitende opmerking, geen meta-tekst over de opdracht: begin direct met de inhoud.
@@ -122,7 +128,7 @@ Schrijf zakelijk en stellig. Vermijd vulwoorden en formuleringen die niets toevo
     "faq": """Stel een FAQ samen van 8 tot 12 vraag-en-antwoordparen die de bronnen daadwerkelijk beantwoorden.
 
 Structuur:
-- "# " met een titel die "veelgestelde vragen" uitdrukt in de taal van de bronnen.
+- "# " met een titel die "veelgestelde vragen" uitdrukt in het Nederlands.
 - Per paar een "### " met de vraag, daaronder het antwoord als gewone alinea van twee tot vijf zinnen.
 
 Regels:
@@ -134,10 +140,10 @@ Regels:
     "quiz": """Maak een toets van 8 tot 10 vragen waarmee iemand kan nagaan of hij de stof beheerst.
 
 Structuur:
-- "# " met een titel die "toets" of "quiz" uitdrukt in de taal van de bronnen.
+- "# " met een titel die "toets" of "quiz" uitdrukt in het Nederlands.
 - Daarna de genummerde vragen, 1 tot en met N, elk als "**1.** vraagtekst".
 - Meerkeuzevragen krijgen de opties eronder als bullets "A) ...", "B) ...", "C) ...", "D) ...".
-- Sluit af met een kop "## " gevolgd door het woord voor "antwoorden" in de taal van de bronnen, met daaronder de genummerde antwoorden, elk met één zin toelichting waarom dat het antwoord is.
+- Sluit af met een kop "## " gevolgd door het woord voor "antwoorden" in het Nederlands, met daaronder de genummerde antwoorden, elk met één zin toelichting waarom dat het antwoord is.
 
 Regels:
 - Varieer tussen meerkeuze en open vragen en toets begrip en toepassing, niet alleen losse feitjes.
@@ -169,6 +175,67 @@ mindmap
     Tweede tak
       Detail drie
 ```""",
+
+    "infographic": """Maak een infographic: een compacte, visueel scanbare pagina met de kern van de bronnen in cijfers en korte feiten.
+
+Structuur, exact in deze volgorde en met exact deze koppen (de renderer parst op deze structuur):
+- "# " met een pakkende titel in het Nederlands.
+- "## Key numbers": 3 tot 5 bullets, elk exact in de vorm "- **<getal, percentage of korte metric>** — <label van maximaal 8 woorden>". Zijn er geen cijfers in de bronnen, gebruik dan een telwoord of kort feit als "getal" (bijvoorbeeld "3 panelen" of "geen vermeld") - verzin nooit een cijfer dat niet in de bronnen staat.
+- Daarna 3 tot 4 gewone secties, elk "## <sectiekop>" met 2 tot 4 korte bullet-feiten.
+- Afsluitend één blockquote-regel "> " met één kernboodschap in één zin.
+
+Regels:
+- Elk "key number" en elk bullet-feit moet herleidbaar zijn tot de bronnen; geen verzonnen cijfers of aannames.
+- Houd bullets kort en concreet - geen volledige alinea's.
+- Gebruik uitsluitend de koppen "## Key numbers" en de overige sectiekoppen; geen extra kopniveaus (geen "###").""",
+
+    "flashcards": """Maak 10 tot 15 flashcards waarmee iemand de kernbegrippen uit de bronnen kan oefenen.
+
+Structuur (de renderer parst op deze vorm):
+- "# " met een titel in het Nederlands.
+- Per kaart een "### " met de voorzijde (een vraag of begrip), daaronder de achterzijde als één of twee gewone alinea's.
+
+Regels:
+- De voorzijde is kort: één vraagzin of één begrip, geen opsommingen.
+- De achterzijde is op zichzelf te begrijpen: twee tot vier zinnen, geen verwijzingen als "zie boven".
+- Dek de belangrijkste begrippen, cijfers en verbanden uit de bronnen; geen twee kaarten over hetzelfde.
+- Gebruik uitsluitend "# " en "### " als koppen; geen bullets op de achterzijde, geen HTML.""",
+
+    "data_table": """Maak een gegevenstabel: de concrete feiten, cijfers en kenmerken uit de bronnen als overzichtelijke markdown-tabellen.
+
+Structuur:
+- "# " met een titel in het Nederlands.
+- Eén of meer markdown-tabellen, elk voorafgegaan door een "## " sectiekop die zegt wat de tabel toont.
+- Kies kolommen die bij het brontype passen (bijvoorbeeld indicator/waarde/bron, of begrip/definitie/voorbeeld).
+- Sluit af met één regel gewone tekst die de belangrijkste observatie uit de tabellen benoemt.
+
+Regels:
+- Elke celwaarde moet herleidbaar zijn tot de bronnen; ontbreekt een waarde, schrijf dan een streepje "-", verzin niets.
+- Houd cellen kort: geen volledige zinnen in cellen, toelichting hoort in de sectiekop of de slotregel.
+- Gebruik uitsluitend markdown-tabellen met "|"-syntax; geen HTML-tabellen.""",
+
+    "slide_deck": """Maak een diapresentatie van 6 tot 12 slides die de kern van de bronnen presenteert.
+
+Lever exact één codefence met taalaanduiding "json" en daarin één JSON-object, niets anders. Schema:
+
+{
+  "title": "presentatietitel in het Nederlands",
+  "slides": [
+    {
+      "title": "slidetitel",
+      "bullets": ["punt een", "punt twee"],
+      "notes": "sprekersnotitie van twee tot vier zinnen"
+    }
+  ]
+}
+
+Regels:
+- Alle tekstvelden in het Nederlands.
+- 6 tot 12 slides; de eerste slide introduceert het onderwerp, de laatste vat samen of concludeert.
+- Per slide 2 tot 5 bullets van elk maximaal 12 woorden; geen volledige zinnen met punt erachter.
+- "notes" is de uitgeschreven toelichting die een spreker bij de slide zou vertellen - op zichzelf begrijpelijk.
+- Elk feit moet herleidbaar zijn tot de bronnen; verzin niets.
+- Geen markdown of HTML binnen de JSON-strings; alleen platte tekst.""",
 }
 
 _KIND_LABELS = {
@@ -177,7 +244,27 @@ _KIND_LABELS = {
     "faq": "FAQ",
     "quiz": "Quiz",
     "mindmap": "Mindmap",
+    "infographic": "Infographic",
+    "flashcards": "Flashcards",
+    "data_table": "Gegevenstabel",
+    "slide_deck": "Diapresentatie",
 }
+
+# Post-generation format validators: kind -> callable that raises ValueError
+# on a format miss. generate_artifact retries (with the error fed back) up to
+# _VALIDATION_ATTEMPTS times before giving up - same recovery shape as the
+# podcast script-format retry in src/notebook_audio.py.
+_KIND_VALIDATORS = {
+    "slide_deck": extract_slide_deck,
+    # Free-prose / wrong-heading model output used to be stored as-is and
+    # then surfaced as raw markdown (infographic fallback card, one-card
+    # flashcard deck, unrendered mindmap) — 2026-08-20..23 production
+    # regressions with format-ignoring models.
+    "infographic": validate_infographic_markdown,
+    "flashcards": validate_flashcards_markdown,
+    "mindmap": validate_mindmap_markdown,
+}
+_VALIDATION_ATTEMPTS = 3
 
 # kind -> {label, prompt}. Insertion order is the order the UI lists them in.
 ARTIFACT_KINDS = {
@@ -373,17 +460,56 @@ async def generate_artifact(
     # workload="foreground" tells the local-model slot this is a synchronous
     # user-facing call, not a genuine background job, so it does not wait on
     # its own request's activity flag.
-    content = await task_llm_call_async(
-        messages, owner=owner, wait_for_quiet=False, workload="foreground"
-    )
-    content = _strip_think_blocks(content or "").strip()
+    validator = _KIND_VALIDATORS.get(kind)
+    content = ""
+    last_error = ""
+    for attempt in range(_VALIDATION_ATTEMPTS):
+        attempt_messages = list(messages)
+        if attempt > 0:
+            # Same shape as the podcast script-format retry (PR #32): feed the
+            # rejected answer plus the validation error back so the model can
+            # correct the format instead of guessing blind.
+            attempt_messages.append({"role": "assistant", "content": content})
+            attempt_messages.append({
+                "role": "user",
+                "content": (
+                    "Je vorige antwoord voldeed niet aan het gevraagde formaat "
+                    f"({last_error}). Lever het antwoord opnieuw, exact volgens de "
+                    "instructie hierboven."
+                ),
+            })
+        content = await task_llm_call_async(
+            attempt_messages, owner=owner, wait_for_quiet=False, workload="foreground"
+        )
+        content = _strip_think_blocks(content or "").strip()
+        if not content:
+            last_error = "leeg antwoord"
+            continue
+        if validator is None:
+            break
+        try:
+            validator(content)
+            break
+        except ValueError as e:
+            last_error = str(e)
+            logger.info(
+                "Artifact %s: formaat-misser op poging %d/%d: %s",
+                kind, attempt + 1, _VALIDATION_ATTEMPTS, last_error,
+            )
+            continue
+    else:
+        raise RuntimeError(
+            f"Het model leverde geen geldig antwoord na {_VALIDATION_ATTEMPTS} pogingen"
+            + (f" ({last_error})" if last_error else "")
+        )
     if not content:
         raise RuntimeError("Het model gaf een leeg antwoord terug")
 
     document_id = str(uuid.uuid4())
+    document_title = f"{notebook.name} — {spec['label']}"
     db_session.add(Document(
         id=document_id,
-        title=f"{notebook.name} — {spec['label']}",
+        title=document_title,
         owner=owner,
         language="markdown",
         current_content=content,
@@ -394,6 +520,11 @@ async def generate_artifact(
         notebook_id=notebook.id,
         document_id=document_id,
         kind=kind,
+        # Own title, seeded from the same value as the Document's — a fixed,
+        # renamable title from the start rather than a NULL that only ever
+        # falls back to the (also renamable, but conceptually separate)
+        # Document title. See NotebookArtifact.title in core/database.py.
+        title=document_title,
     )
     db_session.add(artifact)
     db_session.commit()

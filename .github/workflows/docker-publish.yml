@@ -25,7 +25,8 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # ghcr.io requires a lowercase repository name; github.repository is "EdF2021/ithaka".
+  IMAGE_NAME: edf2021/ithaka
 
 jobs:
   build:

@@ -9,6 +9,15 @@ import { PROVIDER_DEVICE_FLOWS, formatDeviceFlowError, runProviderDeviceFlow } f
 
 let initialized = false;
 let modalEl = null;
+
+// The 'services' (Add Models) tab stays visible to non-admins (issue #13:
+// it's not gated behind .admin-only CSS like 'tools'/'users'/'system', it's
+// the modal's default active tab) but every write it triggers hits an
+// admin-only backend. Translate the raw 403 detail into copy that tells a
+// non-admin what's actually going on instead of a bare "Admin only".
+function _friendlyAdminError(detail) {
+  return detail === 'Admin only' ? 'Only an admin can change this. Ask your admin.' : (detail || 'Failed');
+}
 // When the user adds an endpoint, store its id so the next render of
 // the endpoints list can flash a glow on that row. Cleared once the
 // animation fires.
@@ -1113,7 +1122,7 @@ function initEndpointForm() {
           msg.innerHTML = `Added — found ${count} model${count !== 1 ? 's' : ''}` + goLink;
           msg.className = 'admin-success';
         }
-      } else { msg.textContent = d.detail || 'Failed'; msg.className = 'admin-error'; }
+      } else { msg.textContent = _friendlyAdminError(d.detail); msg.className = 'admin-error'; }
     } catch (e) { msg.textContent = 'Request failed'; msg.className = 'admin-error'; }
     btn.disabled = false; btn.textContent = 'Add';
   });
@@ -1612,7 +1621,7 @@ function initEndpointForm() {
             : 'Added (offline — will retry on next load)';
           msg.innerHTML = `${baseText} <a href="#" data-go-added-models style="margin-left:6px;text-decoration:underline;color:inherit;font-weight:600;">Added Models →</a>`;
           msg.className = d.online ? 'admin-success' : 'admin-error';
-        } else { msg.textContent = d.detail || 'Failed'; msg.className = 'admin-error'; }
+        } else { msg.textContent = _friendlyAdminError(d.detail); msg.className = 'admin-error'; }
       } catch (e) { msg.textContent = 'Request failed'; msg.className = 'admin-error'; }
       localAddBtn.disabled = false;
       localAddBtn.innerHTML = addOriginalHtml;

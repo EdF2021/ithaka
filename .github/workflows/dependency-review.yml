@@ -16,7 +16,7 @@ name: Dependency review
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
 
 # Default-deny token; jobs grant only read access.
@@ -30,7 +30,10 @@ jobs:
   dependency-review:
     name: dependency-review (PR gate)
     # Only meaningful on a pull request -- it needs a base..head diff to review.
-    if: github.event_name == 'pull_request'
+    # Skipped on private repos: the dependency-review API requires GitHub
+    # Advanced Security there, so the action can only ever fail with
+    # "not supported on this repository".
+    if: github.event_name == 'pull_request' && !github.event.repository.private
     runs-on: ubuntu-latest
     permissions:
       contents: read
