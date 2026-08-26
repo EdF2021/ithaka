@@ -232,7 +232,12 @@ class WriteFileTool:
 
 class LsTool:
     async def execute(self, content: str, ctx: dict) -> dict:
-        from src.tool_execution import _resolve_tool_path, _resolve_search_root, _truncate
+        from src.tool_execution import (
+            _is_sensitive_path,
+            _resolve_tool_path,
+            _resolve_search_root,
+            _truncate,
+        )
         raw_path = ""
         _s = (content or "").strip()
         if _s.startswith("{"):
@@ -255,6 +260,11 @@ class LsTool:
                 with os.scandir(root) as it:
                     for entry in it:
                         if entry.name.startswith("."):
+                            continue
+                        # Never list deny-listed paths (app credential stores
+                        # like sessions.json/vault.json, key files): a listing
+                        # leaks their existence and size to the model.
+                        if _is_sensitive_path(os.path.realpath(entry.path)):
                             continue
                         try:
                             is_dir = entry.is_dir(follow_symlinks=False)
@@ -436,7 +446,22 @@ class GrepTool:
                 try:
                     import subprocess
                     p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-                    lines = [ln for ln in (p.stdout or "").splitlines() if ln][:max_hits]
+                    # The --iglob exclusions above cover the basename deny-list
+                    # but cannot express the ABSOLUTE-path exclusion of the
+                    # app's own credential stores (sessions.json, vault.json,
+                    # … under DATA_DIR), so filter hits per file here — the
+                    # same _is_sensitive_path check the Python fallback below
+                    # applies before opening each file.
+                    lines = []
+                    for ln in (p.stdout or "").splitlines():
+                        if not ln:
+                            continue
+                        fp = ln.split(":", 1)[0]
+                        if fp and _is_sensitive_path(os.path.realpath(fp)):
+                            continue
+                        lines.append(ln)
+                        if len(lines) >= max_hits:
+                            break
                     return lines, None
                 except subprocess.TimeoutExpired:
                     return None, "grep: timed out"
