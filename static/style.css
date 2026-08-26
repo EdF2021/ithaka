@@ -41721,3 +41721,77 @@ body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
    right below is the end-of-block anchor the static test scans up to, so
    anything appended after it falls outside that scan. */
 /* nbws-end */
+
+/* ── Voice Mode ── */
+.voice-mode-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--accent-primary, var(--red, #e74c3c));
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  animation: voice-mode-pulse 2s infinite;
+}
+
+@keyframes voice-mode-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(231, 76, 60, 0); }
+}
+
+/* Voice mode armed state — mic is listening */
+.send-btn.voice-armed {
+  background: var(--red) !important;
+  color: #fff !important;
+  animation: voice-armed-pulse 1.5s infinite;
+}
+
+@keyframes voice-armed-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Voice mode overlay banner */
+.voice-mode-banner {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 100;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  animation: voice-mode-pulse 2s infinite;
+}
+
+.voice-mode-banner .voice-mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff3b30;
+  animation: voice-dot-pulse 1s infinite;
+}
+
+@keyframes voice-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* Voice mode listening state on indicator */
+#voice-mode-indicator-btn.active {
+  color: var(--red, #e74c3c);
+}
+
+#voice-mode-indicator-btn.active .tool-indicator-x {
+  display: none;
+}

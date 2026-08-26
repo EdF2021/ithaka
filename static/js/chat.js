@@ -1482,6 +1482,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       // Streaming TTS: synthesize sentence-by-sentence during streaming
       const streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
       if (streamingTTS) window.aiTTSManager.streamingStart();
+      if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onStreamStart();
       // Multi-bubble agent tracking
       let roundHolder = holder;       // Current AI text bubble (changes per round)
       let roundText = '';             // Text accumulated for current round
@@ -3227,6 +3228,19 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
             }
           }
         }
+        // Voice mode: re-arm mic after TTS playback finishes (or immediately if no TTS)
+        if (window.voiceMode && window.voiceMode.isActive) {
+          if (window.aiTTSManager && (window.aiTTSManager.isPlaying || window.aiTTSManager._processing)) {
+            const _vmPollTTS = setInterval(() => {
+              if (!window.aiTTSManager.isPlaying && !window.aiTTSManager._processing) {
+                clearInterval(_vmPollTTS);
+                window.voiceMode.onResponseComplete();
+              }
+            }, 200);
+          } else {
+            window.voiceMode.onResponseComplete();
+          }
+        }
         if (metrics) {
           displayMetrics(_metricsTargetForTurn() || footerTarget, metrics);
         }
@@ -3300,6 +3314,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       } else {
         // Stop streaming TTS on any error/abort
         if (streamingTTS && window.aiTTSManager) window.aiTTSManager.stop();
+        if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onResponseComplete();
 
         if (currentAbort && currentAbort.signal.aborted) {
           const abortReason = currentAbort._reason || '';
