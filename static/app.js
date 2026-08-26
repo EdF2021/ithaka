@@ -2422,29 +2422,33 @@ function initializeEventListeners() {
         if (window.aiTTSManager) window.aiTTSManager.autoPlay = true;
       }
       if (window._updateSendBtnIcon) window._updateSendBtnIcon();
-    });
+      // Persist here (not in the click handler): activate() is async, so
+      // reading voiceMode.isActive right after toggle() would race it.
+      try {
+        const s = loadToggleState();
+        if (s.voiceMode !== active) {
+          s.voiceMode = active;
+          saveToggleState(s);
+        }
+      } catch(e) {}
+    }, voiceRecorderModule);
 
-    // Restore persisted state
+    // Restore persisted state (activate() re-checks the STT provider
+    // against the server itself, so this is safe before voiceRecorder init)
     try {
       const st = loadToggleState();
       if (st.voiceMode) {
-        voiceMode.activate();
+        Promise.resolve(voiceMode.activate()).catch(() => {});
       }
     } catch(e) {}
 
     vmBtn.addEventListener('click', () => {
       voiceMode.toggle();
-      const s = loadToggleState();
-      s.voiceMode = voiceMode.isActive;
-      saveToggleState(s);
     });
 
     if (vmIndicator) {
       vmIndicator.addEventListener('click', () => {
         voiceMode.deactivate();
-        const s = loadToggleState();
-        s.voiceMode = false;
-        saveToggleState(s);
       });
     }
   })();
@@ -4365,6 +4369,7 @@ function startIthakaApp() {
   runNonCriticalStartup(() => memoryModule.loadMemories(), 12000);
   
   // Ensure proper initial state
+  window.voiceRecorderModule = voiceRecorderModule;
   voiceRecorderModule.init();
   if (censorModule) censorModule.init();
 
