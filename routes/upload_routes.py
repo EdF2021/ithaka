@@ -11,7 +11,7 @@ from typing import List, Optional
 import logging
 from core.middleware import require_admin
 from core.database import SessionLocal, GalleryImage, Session as DbSession
-from src.auth_helpers import effective_user
+from src.auth_helpers import effective_user, get_current_user
 from src.constants import GENERATED_IMAGES_DIR
 from src.upload_handler import count_recent_uploads
 
@@ -19,6 +19,40 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 UPLOAD_RESPONSE_HEADERS = {"X-Content-Type-Options": "nosniff"}
+
+
+def _gate_file_access(request: Request, info: dict | None) -> str | None:
+    """Owner/admin gate for serving an uploaded file or its vision text.
+
+    Two bearer-token rules (security finding F3):
+    - ``ody_`` tokens must carry the ``chat`` scope — uploads are chat
+      attachments, so this mirrors the scope enforcement in
+      routes/codex_routes.py and routes/model_routes.py.
+    - The admin bypass keys off the HUMAN cookie identity
+      (``get_current_user``), never ``effective_user``, which resolves a token
+      to its (possibly admin) owner. A token therefore only reaches files
+      owned by its own owner; it can never inherit the owner's admin status
+      and download every user's files.
+
+    Cookie/browser behavior is unchanged. Returns the acting user for
+    attribution (None only in unconfigured/single-user modes).
+    """
+    is_api_token = bool(getattr(request.state, "api_token", False))
+    if is_api_token:
+        scopes = set(getattr(request.state, "api_token_scopes", []) or [])
+        if "chat" not in scopes:
+            raise HTTPException(403, "API token is not scoped for chat")
+    auth_mgr = getattr(request.app.state, "auth_manager", None)
+    auth_configured = bool(auth_mgr and auth_mgr.is_configured)
+    current_user = effective_user(request)
+    file_owner = info.get("owner") if info else None
+    if auth_configured:
+        if not current_user:
+            raise HTTPException(403, "Access denied")
+        human_user = None if is_api_token else get_current_user(request)
+        if file_owner != current_user and not (human_user and auth_mgr.is_admin(human_user)):
+            raise HTTPException(404, "File not found")
+    return current_user
 
 def setup_upload_routes(upload_handler):
     """Setup upload routes with the provided handler"""
@@ -225,15 +259,7 @@ def setup_upload_routes(upload_handler):
         info = next((fi for fi in db.values() if fi.get("id") == file_id), None)
         if info:
             original_name = info.get("name", file_id)
-        auth_mgr = getattr(request.app.state, "auth_manager", None)
-        auth_configured = bool(auth_mgr and auth_mgr.is_configured)
-        current_user = effective_user(request)
-        file_owner = info.get("owner") if info else None
-        if auth_configured:
-            if not current_user:
-                raise HTTPException(403, "Access denied")
-            if file_owner != current_user and not auth_mgr.is_admin(current_user):
-                raise HTTPException(404, "File not found")
+        _gate_file_access(request, info)
         path = _resolve_upload_path(file_id)
         mime = (info or {}).get("mime") or _mt.guess_type(path)[0] or "application/octet-stream"
         from fastapi.responses import FileResponse
@@ -314,15 +340,8 @@ def setup_upload_routes(upload_handler):
         if not upload_handler.validate_upload_id(file_id):
             raise HTTPException(400, "Invalid file ID")
         info = _load_upload_info(file_id)
-        auth_mgr = getattr(request.app.state, "auth_manager", None)
-        auth_configured = bool(auth_mgr and auth_mgr.is_configured)
-        current_user = effective_user(request)
+        current_user = _gate_file_access(request, info)
         file_owner = info.get("owner") if info else None
-        if auth_configured:
-            if not current_user:
-                raise HTTPException(403, "Access denied")
-            if file_owner != current_user and not auth_mgr.is_admin(current_user):
-                raise HTTPException(404, "File not found")
         path = _resolve_upload_path(file_id)
         import mimetypes as _mt
         mime = (info or {}).get("mime") or _mt.guess_type(path)[0] or ""
@@ -360,15 +379,8 @@ def setup_upload_routes(upload_handler):
         info = _load_upload_info(file_id)
         if not info:
             raise HTTPException(404, "File not found")
-        auth_mgr = getattr(request.app.state, "auth_manager", None)
-        auth_configured = bool(auth_mgr and auth_mgr.is_configured)
-        current_user = effective_user(request)
+        current_user = _gate_file_access(request, info)
         file_owner = info.get("owner")
-        if auth_configured:
-            if not current_user:
-                raise HTTPException(403, "Access denied")
-            if file_owner != current_user and not auth_mgr.is_admin(current_user):
-                raise HTTPException(404, "File not found")
         _resolve_upload_path(file_id)
         try:
             body = await request.json()

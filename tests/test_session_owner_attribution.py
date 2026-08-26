@@ -104,7 +104,8 @@ _MISSING = object()
 
 def test_bearer_owner_A_cannot_verify_owner_B_session(monkeypatch):
     monkeypatch.setattr(SR, "SessionLocal", _session_local_returning("bob"))
-    req = _req(api_token=True, api_token_owner="alice", current_user="api")
+    req = _req(api_token=True, api_token_owner="alice", current_user="api",
+               api_token_scopes=["chat"])
     with pytest.raises(HTTPException) as exc:
         SR._verify_session_owner(req, "sid-owned-by-bob")
     assert exc.value.status_code == 404
@@ -112,9 +113,21 @@ def test_bearer_owner_A_cannot_verify_owner_B_session(monkeypatch):
 
 def test_owner_can_verify_their_own_session(monkeypatch):
     monkeypatch.setattr(SR, "SessionLocal", _session_local_returning("alice"))
-    req = _req(api_token=True, api_token_owner="alice", current_user="api")
+    req = _req(api_token=True, api_token_owner="alice", current_user="api",
+               api_token_scopes=["chat"])
     # Should not raise.
     SR._verify_session_owner(req, "sid-owned-by-alice")
+
+
+def test_bearer_token_without_chat_scope_is_rejected(monkeypatch):
+    # F3: a token scoped to e.g. todos:read must not reach session data at all,
+    # even for sessions its own owner holds.
+    monkeypatch.setattr(SR, "SessionLocal", _session_local_returning("alice"))
+    req = _req(api_token=True, api_token_owner="alice", current_user="api",
+               api_token_scopes=["todos:read"])
+    with pytest.raises(HTTPException) as exc:
+        SR._verify_session_owner(req, "sid-owned-by-alice")
+    assert exc.value.status_code == 403
 
 
 def test_cookie_user_owns_their_session(monkeypatch):
