@@ -2431,7 +2431,7 @@ function initializeEventListeners() {
           saveToggleState(s);
         }
       } catch(e) {}
-    });
+    }, voiceRecorderModule);
 
     // Restore persisted state (activate() re-checks the STT provider
     // against the server itself, so this is safe before voiceRecorder init)
@@ -4369,6 +4369,7 @@ function startIthakaApp() {
   runNonCriticalStartup(() => memoryModule.loadMemories(), 12000);
   
   // Ensure proper initial state
+  window.voiceRecorderModule = voiceRecorderModule;
   voiceRecorderModule.init();
   if (censorModule) censorModule.init();
 
