@@ -23,6 +23,95 @@ let _browserTranscript = '';
 // Cached STT provider — refreshed on settings change
 let _sttProvider = 'disabled';
 
+// Set when stopRecording() is called before getUserMedia resolves, so the
+// pending promise can release the mic instead of orphaning the stream.
+let _cancelRequested = false;
+
+// Active VAD monitor teardown (interval + AudioContext), if any
+let _vadCleanup = null;
+
+/**
+ * Voice-activity-detection state machine. Pure logic (no WebAudio) so it
+ * is unit-testable: feed it one RMS sample per tick, it returns 'stop'
+ * when end-of-speech (silence after speech) or the max duration is
+ * reached, else null.
+ */
+export function createVoiceActivityDetector({
+  threshold = 0.012,
+  silenceMs = 1400,
+  minSpeechMs = 250,
+  maxMs = 90000,
+  tickMs = 100,
+} = {}) {
+  let speechRunMs = 0;
+  let silenceRunMs = 0;
+  let totalMs = 0;
+  let spoke = false;
+
+  return {
+    push(rms) {
+      totalMs += tickMs;
+      if (totalMs >= maxMs) return 'stop';
+      if (rms >= threshold) {
+        speechRunMs += tickMs;
+        silenceRunMs = 0;
+        if (speechRunMs >= minSpeechMs) spoke = true;
+      } else {
+        silenceRunMs += tickMs;
+        speechRunMs = 0;
+      }
+      if (spoke && silenceRunMs >= silenceMs) return 'stop';
+      return null;
+    },
+    get hasSpeech() { return spoke; },
+  };
+}
+
+/**
+ * Monitor the mic stream with an AnalyserNode and auto-stop on
+ * end-of-speech. Returns a cleanup function. Falls back to a hard
+ * max-duration timer when WebAudio is unavailable, so the voice-mode
+ * loop always completes a turn.
+ */
+function _startVadMonitor(stream, vadOpts, onAutoStop) {
+  const opts = (vadOpts && typeof vadOpts === 'object') ? vadOpts : {};
+  const tickMs = opts.tickMs || 100;
+  const det = createVoiceActivityDetector({ ...opts, tickMs });
+  let ctx = null;
+  let timer = null;
+  const cleanup = () => {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (ctx) { try { ctx.close(); } catch (e) { /* ignore */ } ctx = null; }
+  };
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) throw new Error('AudioContext not supported');
+    ctx = new AC();
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    const buf = new Float32Array(analyser.fftSize);
+    timer = setInterval(() => {
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      if (det.push(rms) === 'stop') {
+        cleanup();
+        onAutoStop();
+      }
+    }, tickMs);
+    return cleanup;
+  } catch (e) {
+    console.warn('VAD unavailable, falling back to max-duration stop:', e);
+    const maxMs = opts.maxMs || 90000;
+    const fallbackTimer = setTimeout(onAutoStop, maxMs);
+    return () => clearTimeout(fallbackTimer);
+  }
+}
+
 /**
  * Fetch current STT provider from server settings
  */
@@ -148,7 +237,7 @@ function insertTranscription(text, showToast) {
 /**
  * Start voice recording
  */
-export function startRecording(onFileCreated, showToast, showError) {
+export function startRecording(onFileCreated, showToast, showError, opts = {}) {
   // Check for secure context (getUserMedia requires HTTPS or localhost)
   if (!window.isSecureContext) {
     if (showError) showError('Microphone requires HTTPS. Use a reverse proxy with SSL or access via localhost.');
@@ -163,9 +252,17 @@ export function startRecording(onFileCreated, showToast, showError) {
   }
 
   audioChunks = [];
+  _cancelRequested = false;
 
   navigator.mediaDevices.getUserMedia({ audio: true })
     .then(stream => {
+      if (_cancelRequested) {
+        // stopRecording() was called while the permission prompt / device
+        // open was still pending — release the mic instead of leaking it.
+        stream.getTracks().forEach(track => track.stop());
+        _resetRecordingUI();
+        return;
+      }
       mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
 
       mediaRecorder.ondataavailable = event => {
@@ -175,19 +272,24 @@ export function startRecording(onFileCreated, showToast, showError) {
       };
 
       mediaRecorder.onstop = async () => {
+        if (_vadCleanup) { _vadCleanup(); _vadCleanup = null; }
         stream.getTracks().forEach(track => track.stop());
 
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         const provider = _sttProvider;
+        // Outcome for opts.onDone: 'transcribed' | 'empty' | 'error' | 'file'
+        let outcome = 'file';
 
         if (provider === 'browser') {
           const transcript = stopBrowserSTT();
           if (transcript) {
             insertTranscription(transcript, showToast);
+            outcome = 'transcribed';
           } else {
             if (showToast) showToast('No speech detected');
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
             if (onFileCreated) onFileCreated(audioFile);
+            outcome = 'empty';
           }
         } else if (provider === 'local' || provider.startsWith('endpoint:')) {
           // Show "Transcribing..." feedback
@@ -196,8 +298,10 @@ export function startRecording(onFileCreated, showToast, showError) {
             const transcript = await transcribeOnServer(audioBlob);
             if (transcript) {
               insertTranscription(transcript, showToast);
+              outcome = 'transcribed';
             } else {
               if (showToast) showToast('No speech detected');
+              outcome = 'empty';
             }
           } catch (e) {
             console.error('STT transcription error:', e);
@@ -205,6 +309,7 @@ export function startRecording(onFileCreated, showToast, showError) {
             // Fallback: attach as file
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
             if (onFileCreated) onFileCreated(audioFile);
+            outcome = 'error';
           }
         } else {
           // STT disabled — attach audio file
@@ -213,11 +318,19 @@ export function startRecording(onFileCreated, showToast, showError) {
         }
 
         _resetRecordingUI();
+        if (opts.onDone) {
+          try { opts.onDone(outcome); } catch (e) { console.error('onDone callback error:', e); }
+        }
       };
 
       mediaRecorder.start();
       isRecording = true;
       recordingStartTime = new Date();
+
+      // Voice mode: auto-stop on end-of-speech so the turn completes hands-free
+      if (opts.vad) {
+        _vadCleanup = _startVadMonitor(stream, opts.vad === true ? {} : opts.vad, () => stopRecording());
+      }
 
       // Start browser STT if that's the provider
       if (_sttProvider === 'browser') {
@@ -251,6 +364,10 @@ export function stopRecording() {
     mediaRecorder.stop();
     // isRecording will be set to false in _resetRecordingUI called from onstop
   } else {
+    // getUserMedia may still be pending — flag it so the promise releases
+    // the mic when it resolves instead of starting an orphaned recording.
+    _cancelRequested = true;
+    if (_vadCleanup) { _vadCleanup(); _vadCleanup = null; }
     _resetRecordingUI();
   }
 }

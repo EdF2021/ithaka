@@ -1432,6 +1432,9 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       
       if (!res.ok) {
         clearResponseTimeout();
+        // Voice mode: clear the busy flag so the mic can re-arm — without
+        // this an error response leaves voice mode stuck on "AI responding".
+        if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onResponseComplete();
         if (res.status === 404) {
           // Session was deleted (e.g. by AI) — reload and go to welcome
           holder.remove();
