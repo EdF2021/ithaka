@@ -3231,8 +3231,13 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
         // Voice mode: re-arm mic after TTS playback finishes (or immediately if no TTS)
         if (window.voiceMode && window.voiceMode.isActive) {
           if (window.aiTTSManager && (window.aiTTSManager.isPlaying || window.aiTTSManager._processing)) {
+            let _vmPollCount = 0;
             const _vmPollTTS = setInterval(() => {
-              if (!window.aiTTSManager.isPlaying && !window.aiTTSManager._processing) {
+              _vmPollCount++;
+              if (_vmPollCount > 150) { // 30s safety timeout
+                clearInterval(_vmPollTTS);
+                window.voiceMode.onResponseComplete();
+              } else if (!window.aiTTSManager.isPlaying && !window.aiTTSManager._processing) {
                 clearInterval(_vmPollTTS);
                 window.voiceMode.onResponseComplete();
               }
