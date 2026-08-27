@@ -11,6 +11,41 @@ from typing import Optional, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+# Whisper's `language` parameter expects an ISO-639-1 code. The STT settings
+# card exposes a free-text field, so a Dutch user naturally types a language
+# *name* ("Nederlands") — which the OpenAI /audio/transcriptions API rejects
+# with a 400, silently breaking voice input. Map the names we expect to their
+# codes; pass through anything that already looks like a 2-letter code.
+_LANGUAGE_NAME_TO_ISO = {
+    "nederlands": "nl", "dutch": "nl", "vlaams": "nl", "flemish": "nl",
+    "engels": "en", "english": "en",
+    "duits": "de", "german": "de", "deutsch": "de",
+    "frans": "fr", "french": "fr", "francais": "fr", "français": "fr",
+    "spaans": "es", "spanish": "es", "espanol": "es", "español": "es",
+    "italiaans": "it", "italian": "it", "italiano": "it",
+    "portugees": "pt", "portuguese": "pt",
+}
+
+
+def normalize_stt_language(language: str) -> str:
+    """Coerce a user-supplied STT language to an ISO-639-1 code Whisper accepts.
+
+    Returns "" (auto-detect) for empty or unrecognized input, so an invalid
+    free-text value falls back to auto-detection instead of a hard 400 error.
+    """
+    if not language:
+        return ""
+    lang = language.strip().lower()
+    if not lang:
+        return ""
+    if lang in _LANGUAGE_NAME_TO_ISO:
+        return _LANGUAGE_NAME_TO_ISO[lang]
+    if len(lang) == 2 and lang.isalpha():
+        return lang
+    logger.warning("Unrecognized STT language %r — falling back to auto-detect", language)
+    return ""
+
+
 class STTService:
     """Multi-provider STT service.
 
@@ -159,7 +194,7 @@ class STTService:
             return None
         provider = settings["stt_provider"]
         model = settings["stt_model"]
-        language = settings.get("stt_language", "")
+        language = normalize_stt_language(settings.get("stt_language", ""))
 
         if provider in ("disabled", "browser"):
             return None
