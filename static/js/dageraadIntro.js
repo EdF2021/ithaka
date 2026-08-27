@@ -42,7 +42,7 @@ function _buildOverlay() {
     '<div class="dageraad-intro-horizon"></div>' +
     '<div class="dageraad-intro-center">' +
     '<span class="dageraad-intro-title">Ithaka</span>' +
-    '<span class="dageraad-intro-tagline">De bestemming is belangrijk, de reis belangrijker.</span>' +
+    '<span class="dageraad-intro-tagline">The destination matters, the journey matters more.</span>' +
     '</div>';
   return overlay;
 }

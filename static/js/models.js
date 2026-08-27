@@ -590,7 +590,7 @@ export async function refreshModels(force = false) {
     } else {
       // Configured installs should feel ready, not stuck in onboarding.
       const welcomeSub = document.getElementById('welcome-sub');
-      if (welcomeSub) welcomeSub.textContent = 'De bestemming is belangrijk, de reis belangrijker.';
+      if (welcomeSub) welcomeSub.textContent = 'The destination matters, the journey matters more.';
       const welcomeTip = document.getElementById('welcome-tip');
       if (welcomeTip) {
         const tips = window.innerWidth <= 768
