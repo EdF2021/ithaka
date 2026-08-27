@@ -460,6 +460,11 @@ class TestIsChatModel:
     def test_legacy_openai_instruct_is_not_chat(self):
         assert _is_chat_model("gpt-3.5-turbo-instruct") is False
 
+    def test_gemini_native_audio_is_not_chat(self):
+        # Gemini Live/native-audio dialog models 404 on chat/completions
+        assert _is_chat_model("models/gemini-2.5-flash-native-audio-latest") is False
+        assert _is_chat_model("gemini-2.5-flash-native-audio-preview-09-2025") is False
+
     @pytest.mark.parametrize("bad", [None, 123, 4.5, ["x"], {"a": 1}])
     def test_non_string_id_is_treated_as_chat(self, bad):
         # Defensive boundary: a non-compliant upstream can yield a non-string

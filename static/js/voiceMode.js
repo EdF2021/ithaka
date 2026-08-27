@@ -25,6 +25,7 @@ const VoiceMode = {
   _active: false,
   _armed: false,
   _busy: false,
+  _errStreak: 0,
   _onStateChange: null,
 
   // Saved TTS autoPlay value, restored on deactivate
@@ -58,9 +59,12 @@ const VoiceMode = {
 
   /**
    * Activate voice mode. Forces TTS autoPlay on, arms the mic, and
-   * notifies the host.
+   * notifies the host. Async: when the cached STT provider still reads
+   * 'disabled' (e.g. restore-on-page-load runs before the stats fetch,
+   * or STT was just enabled in settings) it refreshes the provider from
+   * the server before deciding.
    */
-  activate() {
+  async activate() {
     if (this._active) return
 
     const recorder = this._getRecorder()
@@ -69,16 +73,27 @@ const VoiceMode = {
       return
     }
 
-    // STT must be enabled for voice mode to function
+    // STT must be enabled for voice mode to function. The cached provider
+    // may be stale ('disabled' is also the pre-fetch default), so re-check
+    // against the server before refusing.
+    if (!recorder._sttProvider || recorder._sttProvider === 'disabled') {
+      if (recorder.refreshSttProvider) {
+        try { await recorder.refreshSttProvider() } catch (e) { /* ignore */ }
+      }
+    }
     if (!recorder._sttProvider || recorder._sttProvider === 'disabled') {
       if (window.uiModule?.showToast) window.uiModule.showToast('Enable Speech-to-Text to use Voice Mode')
       else console.warn('VoiceMode: STT is disabled')
       return
     }
 
+    // Re-check after the await above: a concurrent activate() may have won
+    if (this._active) return
+
     this._active = true
     this._armed = false
     this._busy = false
+    this._errStreak = 0
 
     // Force TTS auto-play so AI responses are spoken during streaming
     const tts = window.aiTTSManager
@@ -156,7 +171,8 @@ const VoiceMode = {
     try {
       recorder.startRecording(
         // onFileCreated — only fires when STT is disabled/fallback; voice
-        // mode requires STT so this should be rare. Handle gracefully.
+        // mode requires STT so this should be rare. The file is dropped;
+        // opts.onDone below decides whether to re-arm.
         (file) => {
           console.warn('VoiceMode: audio file created instead of transcription (STT fallback?)')
         },
@@ -167,14 +183,51 @@ const VoiceMode = {
           console.error('VoiceMode: recording error:', msg)
           this.deactivate()
           if (window.uiModule?.showToast) window.uiModule.showToast(msg)
+        },
+        {
+          // End-of-speech detection: recording auto-stops after silence,
+          // which triggers transcription and closes the loop.
+          vad: true,
+          onDone: (outcome) => this._onRecordingDone(outcome),
         }
       )
     } catch (e) {
       console.error('VoiceMode: failed to start recording:', e)
-      this._armed = false
-      this._detachInputListener()
-      this._notify()
+      this.deactivate()
     }
+  },
+
+  /**
+   * Called by the recorder when a recording cycle finishes. On a
+   * successful transcription the input listener takes over (auto-send);
+   * on silence or a failed transcription the mic re-arms so the loop
+   * keeps going instead of hanging. Three transcription errors in a row
+   * deactivate voice mode.
+   *
+   * @private
+   * @param {'transcribed'|'empty'|'error'|'file'} outcome
+   */
+  _onRecordingDone(outcome) {
+    if (!this._active || this._busy) return
+    if (outcome === 'transcribed') {
+      this._errStreak = 0
+      return
+    }
+    if (outcome === 'error') {
+      this._errStreak = (this._errStreak || 0) + 1
+      if (this._errStreak >= 3) {
+        console.error('VoiceMode: 3 transcription errors in a row, deactivating')
+        this.deactivate()
+        if (window.uiModule?.showToast) window.uiModule.showToast('Voice mode stopped: transcription keeps failing')
+        return
+      }
+    }
+    // 'empty' / 'file' / recoverable 'error' — re-arm for another attempt
+    this._armed = false
+    this._notify()
+    setTimeout(() => {
+      if (this._active && !this._busy) this._armMic()
+    }, 800)
   },
 
   /**

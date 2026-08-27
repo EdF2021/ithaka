@@ -1714,6 +1714,36 @@
               <div id="set-ttsSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>
+          <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:1px;opacity:0.6;flex-shrink:0"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>Speech to Text<span style="flex:1"></span><label class="admin-switch"><input type="checkbox" id="set-sttEnabledToggle" checked><span class="admin-slider"></span></label></h2>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Configure STT provider for voice input.</div>
+            <div id="set-sttConfigWrap" style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Provider</label>
+                <select id="set-sttProviderSelect" class="settings-select">
+                  <option value="disabled">Disabled</option>
+                  <option value="browser">Browser (built-in)</option>
+                  <option value="local">Local (Whisper)</option>
+                </select>
+              </div>
+              <div id="set-sttModelRow" style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Model</label>
+                <select id="set-sttModelSelect" class="settings-select">
+                  <option value="tiny">tiny (fastest)</option>
+                  <option value="base" selected>base</option>
+                  <option value="small">small</option>
+                  <option value="medium">medium</option>
+                  <option value="large-v3">large-v3 (best quality)</option>
+                </select>
+                <input id="set-sttModelInput" type="text" placeholder="model name" style="flex:1;padding:5px;display:none;">
+              </div>
+              <div id="set-sttLangRow" style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Language</label>
+                <input id="set-sttLangInput" type="text" placeholder="auto-detect, or e.g. nl" style="flex:1;padding:5px;">
+              </div>
+              <div id="set-sttSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
+            </div>
+          </div>
           <!-- Teacher Model settings card hidden as part of the 2.0
                "harden the core" pass. The escalation flow is dormant when
                `teacher_model` is unset (its default), so the backend keeps

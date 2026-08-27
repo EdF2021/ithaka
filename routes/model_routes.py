@@ -634,6 +634,9 @@ _NON_CHAT_PREFIXES = (
 )
 _NON_CHAT_CONTAINS = (
     "-realtime", "-transcribe", "-tts", "-codex",
+    # Gemini Live/native-audio dialog models: not usable via chat/completions,
+    # every generateContent call 404s (seen with gemini-2.5-flash-native-audio-latest)
+    "native-audio",
     "codex-", "content-safety", "-safety", "-reward", "nvclip",
     "kosmos", "fuyu", "deplot", "vila", "neva",
     "gliner", "riva", "-parse", "-embedqa", "-nemoretriever",
