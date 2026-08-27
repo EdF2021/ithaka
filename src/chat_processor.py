@@ -623,6 +623,24 @@ class ChatProcessor:
         preface = []
         rag_sources = []
 
+        # Standing response language (settings: response_language). Kept as
+        # the first system message and derived from a setting that rarely
+        # changes, so the static prefix stays byte-identical across turns.
+        response_language = ""
+        try:
+            from src.settings import get_setting
+            response_language = (get_setting("response_language") or "").strip()
+        except Exception:
+            pass
+        if response_language:
+            preface.append({
+                "role": "system",
+                "content": (
+                    f"Antwoordtaal / response language: {response_language}. "
+                    f"Reply in {response_language} unless the user explicitly asks for another language."
+                ),
+            })
+
         # Add preset system prompt if specified
         if preset_system_prompt:
             preface.append({

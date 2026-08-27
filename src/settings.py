@@ -140,6 +140,11 @@ DEFAULT_SETTINGS = {
     # Email replies use email_writing_style instead because greetings,
     # signatures, and mailbox identity rules are medium-specific.
     "document_writing_style": "",
+    # Standing response language for chat/agent/voice replies (e.g.
+    # "Nederlands"). Empty = follow the user's language implicitly. Injected
+    # as a system message in build_context_preface, so it applies to every
+    # turn — including the short utterances hands-free voice mode produces.
+    "response_language": "",
     # Ordered fallback chain for the default chat model. Each entry is
     # {"endpoint_id": "...", "model": "..."}. If the primary model fails
     # before producing output (endpoint offline / errors), the chat
