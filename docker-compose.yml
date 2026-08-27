@@ -12,6 +12,11 @@ services:
       # Cookbook local model cache. Inside Docker, "Local" means the Ithaka
       # container, so persist its HuggingFace cache under ./data/huggingface.
       - ${APP_DATA_DIR:-./data}/huggingface:/app/.cache/huggingface:z
+      # npm/npx cache for MCP servers. Without this the cache dies on every
+      # image rebuild, so npx-based MCP servers hit a cold (re)install inside
+      # the 20s startup budget - killed installs leave corrupt _npx entries
+      # ("<bin>: not found" forever). Persist it next to the other caches.
+      - ${APP_DATA_DIR:-./data}/npm-cache:/app/.npm:z
       # Cookbook-installed Python CLIs/packages (vLLM, llama-cpp-python, etc.)
       # land under /app/.local for the ithaka user. Persist them so a
       # container recreate does not silently remove installed serve engines.

@@ -5,6 +5,7 @@ Manages connections to MCP (Model Context Protocol) tool servers.
 Each server exposes tools that are made available to the agent loop.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,29 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.runtime_paths import get_app_root
+
+
+class _StdioSessionHandle:
+    """Handle for a stdio MCP session living in its own runner task.
+
+    Exposes the same aclose() surface as the AsyncExitStack that
+    disconnect_server() expects, but closing is done by signalling the
+    runner task — the contexts are entered and exited in that one task,
+    keeping anyio cancel scopes consistent (issue #61).
+    """
+
+    def __init__(self, stop_event: "asyncio.Event", task: "asyncio.Task"):
+        self._stop_event = stop_event
+        self._task = task
+
+    async def aclose(self):
+        self._stop_event.set()
+        try:
+            await asyncio.wait_for(self._task, timeout=10)
+        except asyncio.TimeoutError:
+            self._task.cancel()
+        except Exception:
+            pass
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +203,15 @@ class McpManager:
             return False
 
     async def _connect_stdio(self, server_id: str, name: str, command: str, args: List[str], env: Dict[str, str]) -> bool:
-        """Connect to an MCP server via stdio transport."""
+        """Connect to an MCP server via stdio transport.
+
+        The whole session lifecycle (enter contexts → serve → close) runs in a
+        dedicated task owned by the manager. Entering the anyio cancel scopes
+        from a request handler's task binds the session to that request: once
+        the request returns, every later tool call dies with an empty
+        ClosedResourceError (issue #61). The runner task outlives the caller,
+        so /reconnect now yields sessions as healthy as the startup path's.
+        """
         try:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
@@ -191,19 +223,35 @@ class McpManager:
                 env={**os.environ, **env} if env else None,
             )
 
-            stack = AsyncExitStack()
+            loop = asyncio.get_running_loop()
+            ready: asyncio.Future = loop.create_future()
+            stop_event = asyncio.Event()
+
+            async def _session_runner():
+                try:
+                    async with AsyncExitStack() as run_stack:
+                        transport = await run_stack.enter_async_context(stdio_client(server_params))
+                        read_stream, write_stream = transport
+                        session = await run_stack.enter_async_context(ClientSession(read_stream, write_stream))
+                        await session.initialize()
+                        tools_result = await session.list_tools()
+                        if not ready.done():
+                            ready.set_result((session, tools_result))
+                        # Hold the contexts open in this task until disconnect.
+                        await stop_event.wait()
+                except Exception as e:
+                    if not ready.done():
+                        ready.set_exception(e)
+                    else:
+                        logger.warning(f"MCP stdio session {name} ({server_id}) ended: {e}")
+
+            runner_task = asyncio.create_task(_session_runner(), name=f"mcp-stdio-{server_id}")
             try:
-                transport = await stack.enter_async_context(stdio_client(server_params))
-                read_stream, write_stream = transport
-                session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
-
-                await session.initialize()
-
-                # Discover tools
-                tools_result = await session.list_tools()
+                session, tools_result = await ready
             except Exception:
-                await stack.aclose()
+                stop_event.set()
                 raise
+            stack = _StdioSessionHandle(stop_event, runner_task)
             tools = []
             for tool in tools_result.tools:
                 tools.append({
