@@ -1,7 +1,7 @@
 /**
  * Dageraad intro choreography — Fase 3 of the Dageraad port.
  *
- * A short cinematic overlay (~2.2-2.6s) that plays once per page load, only
+ * A short cinematic overlay (~3.5-4.2s) that plays once per page load, only
  * when the Dageraad theme is active and the visitor hasn't asked for
  * reduced motion. Purely visual, layered on top of the already-initialized
  * app — never blocks session loading. Pattern mirrored from dashboard.js:
@@ -9,16 +9,17 @@
  *
  * Reference choreography: docs/design/dageraad-brief.md ("De opening") and
  * docs/design/dageraad-mockup.html (phases p-warm/p-title/p-collapse/
- * p-done). Ported here compacted to ~2.2-2.6s, driven by fixed setTimeouts
- * toggling phase classes on a dedicated overlay element instead of <html>.
+ * p-done). Ported here, driven by fixed setTimeouts toggling phase classes
+ * on a dedicated overlay element instead of <html>; the title/tagline hold
+ * (phase-title → phase-collapse) was widened so the tagline stays readable.
  */
 
 // [delayMs, phaseClass] — mirrors the mockup's PHASES timeline, compacted.
 const PHASES = [
   [200, 'dageraad-intro-phase-warm'],
   [600, 'dageraad-intro-phase-title'],
-  [1300, 'dageraad-intro-phase-collapse'],
-  [2200, 'dageraad-intro-phase-done'],
+  [2600, 'dageraad-intro-phase-collapse'],
+  [3500, 'dageraad-intro-phase-done'],
 ];
 // How long after the last phase fires before the overlay is torn down —
 // gives the opacity/transform transitions kicked off at that phase time to
@@ -41,7 +42,7 @@ function _buildOverlay() {
     '<div class="dageraad-intro-horizon"></div>' +
     '<div class="dageraad-intro-center">' +
     '<span class="dageraad-intro-title">Ithaka</span>' +
-    '<span class="dageraad-intro-tagline">Yours for the voyage.</span>' +
+    '<span class="dageraad-intro-tagline">De bestemming is belangrijk, de reis belangrijker.</span>' +
     '</div>';
   return overlay;
 }
