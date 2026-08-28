@@ -42,6 +42,7 @@ import cookbookModule from './js/cookbook.js';
 import groupModule from './js/group.js';
 import * as researchPanelModule from './js/research/panel.js?v=20260630researchthumb';
 import ttsModule from './js/tts-ai.js';
+import { zoomOf, toLocalPx } from './js/uiZoom.js';
 import spinnerModule from './js/spinner.js';
 import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
 import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js';
@@ -429,10 +430,15 @@ function initializeEventListeners() {
       } else {
         // Move menu to body so it's not affected by ancestor transforms
         if (exportMenu.parentElement !== document.body) document.body.appendChild(exportMenu);
+        // UI text-scale zoom (:root.ui-scale-125) renders local px assigned
+        // to top/left/right multiplied by the zoom — divide viewport-space
+        // rect/window measurements before assigning (see uiZoom.js, PR
+        // #76/#77).
+        const _z = zoomOf(document.documentElement);
         const rect = exportDlBtn.getBoundingClientRect();
-        exportMenu.style.top = (rect.bottom + 4) + 'px';
+        exportMenu.style.top = toLocalPx(rect.bottom + 4, _z) + 'px';
         exportMenu.style.left = 'auto';
-        exportMenu.style.right = (window.innerWidth - rect.right) + 'px';
+        exportMenu.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
         exportMenu.classList.add('open');
       }
     });
