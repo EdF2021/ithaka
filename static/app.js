@@ -2073,20 +2073,27 @@ function initializeEventListeners() {
     // portaled to <body>). Only cap height + show a scrollbar when the list is
     // genuinely taller than the room above the button.
     function positionMenu() {
+      // UI text-size scale (`:root.ui-scale-125 { zoom: 1.25 }`) skews the
+      // coordinate spaces: getBoundingClientRect() returns real viewport px,
+      // but the px we assign to top/left render multiplied by the zoom (the
+      // menu lives inside the zoomed root, portal or not). Divide measured
+      // coords by the effective zoom so set-px and rendered-px line up again
+      // (scrollHeight is already in the element's own, unzoomed px).
+      const z = menu.currentCSSZoom || 1;
       const r = plusBtn.getBoundingClientRect();
-      menu.style.left = r.left + 'px';
+      menu.style.left = (r.left / z) + 'px';
       menu.style.right = 'auto';
       menu.style.bottom = 'auto';
       menu.style.maxHeight = '';      // reset so we can measure the natural height
       menu.style.overflowY = '';
-      const avail = r.top - 16;        // room above the chevron
+      const avail = r.top / z - 16;    // room above the chevron
       const natural = menu.scrollHeight;
       const h = Math.min(natural, avail);
       if (natural > avail) {           // only cap + scroll when it doesn't fit
         menu.style.maxHeight = avail + 'px';
         menu.style.overflowY = 'auto';
       }
-      menu.style.top = (r.top - 8 - h) + 'px';
+      menu.style.top = (r.top / z - 8 - h) + 'px';
     }
     // Tapping the chevron must NOT steal focus from the message box, or the
     // mobile keyboard collapses. preventDefault on pointerdown keeps the
