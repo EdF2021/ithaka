@@ -72,4 +72,6 @@ Ithaka is a self-hosted workspace with powerful local tools. Keep auth enabled, 
 
 ## License
 
-AGPL-3.0-or-later -- see [LICENSE](LICENSE) and [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
+Copyright (C) 2026 Ed de Feber.
+
+AGPL-3.0-or-later -- see [LICENSE](LICENSE). Ithaka builds on Odysseus and other third-party work; original copyrights remain with their authors -- see [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
