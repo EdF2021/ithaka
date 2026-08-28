@@ -10,6 +10,7 @@ import settingsModule from './settings.js';
 import spinnerModule from './spinner.js';
 import { bindMenuDismiss } from './escMenuStack.js';
 import { matchModelKey } from './model/matchKey.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 const SEARCH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>';
 const REPORT_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
@@ -748,12 +749,16 @@ export function applyModelColor(roleEl, modelName) {
       }
       popup.innerHTML = html;
       const rect = roleEl.getBoundingClientRect();
-      popup.style.top = (rect.bottom + 4) + 'px';
-      popup.style.left = rect.left + 'px';
       document.body.appendChild(popup);
+      // UI text-scale zoom (:root.ui-scale-125) renders local px assigned to
+      // top/left multiplied by the zoom — divide viewport-space rect/window
+      // measurements before assigning (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
+      popup.style.top = toLocalPx(rect.bottom + 4, _z) + 'px';
+      popup.style.left = toLocalPx(rect.left, _z) + 'px';
       const pr = popup.getBoundingClientRect();
-      if (pr.bottom > window.innerHeight - 8) popup.style.top = (rect.top - pr.height - 4) + 'px';
-      if (pr.right > window.innerWidth - 8) popup.style.left = (window.innerWidth - pr.width - 8) + 'px';
+      if (pr.bottom > window.innerHeight - 8) popup.style.top = toLocalPx(rect.top - pr.height - 4, _z) + 'px';
+      if (pr.right > window.innerWidth - 8) popup.style.left = toLocalPx(window.innerWidth - pr.width - 8, _z) + 'px';
       bindMenuDismiss(popup, () => popup.remove());
     });
   }
@@ -1672,15 +1677,22 @@ export function createMsgFooter(msgElement) {
       });
       menu._trigger = moreBtn;
       document.body.appendChild(menu);
-      // Position fixed relative to the ··· button
+      // Position fixed relative to the ··· button. UI text-scale zoom
+      // (:root.ui-scale-125) renders local px assigned to top/left
+      // multiplied by the zoom, but getBoundingClientRect()/innerWidth
+      // report real viewport px — divide those terms before combining with
+      // offsetHeight (already local/unzoomed) so set-px and rendered-px
+      // line up (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const btnRect = moreBtn.getBoundingClientRect();
-      menu.style.top = (btnRect.top - menu.offsetHeight - 4) + 'px';
-      menu.style.left = btnRect.left + 'px';
+      let _top = toLocalPx(btnRect.top, _z) - menu.offsetHeight - 4;
       // Flip down if above viewport
-      if (parseFloat(menu.style.top) < 8) menu.style.top = (btnRect.bottom + 4) + 'px';
+      if (_top < 8) _top = toLocalPx(btnRect.bottom + 4, _z);
+      menu.style.top = _top + 'px';
+      menu.style.left = toLocalPx(btnRect.left, _z) + 'px';
       // Keep within right edge
       const mr = menu.getBoundingClientRect();
-      if (mr.right > window.innerWidth - 8) menu.style.left = (window.innerWidth - mr.width - 8) + 'px';
+      if (mr.right > window.innerWidth - 8) menu.style.left = toLocalPx(window.innerWidth - mr.width - 8, _z) + 'px';
       // Close on outside click or Escape. The trigger button is treated as
       // "inside" so its own click toggles rather than double-fires.
       closeMenu = bindMenuDismiss(menu, () => menu.remove(), (ev) => !menu.contains(ev.target) && ev.target !== moreBtn);    });
@@ -1735,20 +1747,28 @@ export function createMsgFooter(msgElement) {
       });
       detail.style.visibility = 'hidden';
       document.body.appendChild(detail);
+      // UI text-scale zoom (:root.ui-scale-125) — compute the target
+      // position fully in viewport-space (rect terms only, all comparable),
+      // then divide by the zoom exactly once per assignment (see uiZoom.js,
+      // PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const pillRect = pill.getBoundingClientRect();
       const detailRect = detail.getBoundingClientRect();
       const spaceAbove = pillRect.top;
       const spaceBelow = window.innerHeight - pillRect.bottom;
+      let _top;
       if (spaceAbove >= detailRect.height + 8 || spaceAbove > spaceBelow) {
-        detail.style.top = (pillRect.top - detailRect.height - 8) + 'px';
+        _top = pillRect.top - detailRect.height - 8;
       } else {
-        detail.style.top = (pillRect.bottom + 8) + 'px';
+        _top = pillRect.bottom + 8;
       }
-      detail.style.left = pillRect.left + 'px';
-      if (pillRect.left + detailRect.width > window.innerWidth - 8) {
-        detail.style.left = (window.innerWidth - detailRect.width - 8) + 'px';
+      let _left = pillRect.left;
+      if (_left + detailRect.width > window.innerWidth - 8) {
+        _left = window.innerWidth - detailRect.width - 8;
       }
-      if (parseFloat(detail.style.left) < 8) detail.style.left = '8px';
+      if (_left < 8) _left = 8;
+      detail.style.top = toLocalPx(_top, _z) + 'px';
+      detail.style.left = toLocalPx(_left, _z) + 'px';
       detail.style.visibility = '';
       pill._openDetail = detail;
       // Close on outside click or Escape (pill click toggles, so it's inside).
@@ -1861,12 +1881,16 @@ export function createUserMsgFooter(msgElement) {
       });
       menu._trigger = moreBtn;
       document.body.appendChild(menu);
+      // See uiZoom.js / PR #76/#77 for why the rect/window terms are
+      // divided by zoom while offsetHeight (local/unzoomed) is not.
+      const _z = zoomOf(document.documentElement);
       const btnRect = moreBtn.getBoundingClientRect();
-      menu.style.top = (btnRect.top - menu.offsetHeight - 4) + 'px';
-      menu.style.left = btnRect.left + 'px';
-      if (parseFloat(menu.style.top) < 8) menu.style.top = (btnRect.bottom + 4) + 'px';
+      let _top = toLocalPx(btnRect.top, _z) - menu.offsetHeight - 4;
+      if (_top < 8) _top = toLocalPx(btnRect.bottom + 4, _z);
+      menu.style.top = _top + 'px';
+      menu.style.left = toLocalPx(btnRect.left, _z) + 'px';
       const mr = menu.getBoundingClientRect();
-      if (mr.right > window.innerWidth - 8) menu.style.left = (window.innerWidth - mr.width - 8) + 'px';
+      if (mr.right > window.innerWidth - 8) menu.style.left = toLocalPx(window.innerWidth - mr.width - 8, _z) + 'px';
       closeMenu = bindMenuDismiss(menu, () => menu.remove(), (ev) => !menu.contains(ev.target) && ev.target !== moreBtn);    });
     actions.appendChild(moreBtn);
   }
@@ -1978,19 +2002,27 @@ export function displayMetrics(messageElement, metrics) {
     `;
 
     const rect = metricsContainer.getBoundingClientRect();
-    popup.style.left = rect.left + 'px';
     popup.style.visibility = 'hidden';
     document.body.appendChild(popup);
+    // UI text-scale zoom — compute the target position fully in
+    // viewport-space, then divide by zoom exactly once per assignment
+    // (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    let _left = rect.left;
+    popup.style.left = toLocalPx(_left, _z) + 'px';
     const pr = popup.getBoundingClientRect();
     const spaceAbove = rect.top;
     const spaceBelow = window.innerHeight - rect.bottom;
+    let _top;
     if (spaceAbove >= pr.height + 8 || spaceAbove > spaceBelow) {
-      popup.style.top = (rect.top - pr.height - 8) + 'px';
+      _top = rect.top - pr.height - 8;
     } else {
-      popup.style.top = (rect.bottom + 8) + 'px';
+      _top = rect.bottom + 8;
     }
-    if (pr.right > window.innerWidth - 8) popup.style.left = (window.innerWidth - pr.width - 8) + 'px';
-    if (parseFloat(popup.style.left) < 8) popup.style.left = '8px';
+    if (pr.right > window.innerWidth - 8) _left = window.innerWidth - pr.width - 8;
+    if (_left < 8) _left = 8;
+    popup.style.top = toLocalPx(_top, _z) + 'px';
+    popup.style.left = toLocalPx(_left, _z) + 'px';
     popup.style.visibility = '';
 
     bindMenuDismiss(popup, () => popup.remove());
@@ -2123,15 +2155,16 @@ export function displayMetrics(messageElement, metrics) {
       const rect = ctxRing.getBoundingClientRect();
       popup.style.visibility = 'hidden';
       document.body.appendChild(popup);
+      // UI text-scale zoom — compute in viewport-space, divide once per
+      // assignment (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const pr = popup.getBoundingClientRect();
       // Position above the ring, right-aligned
-      popup.style.left = Math.max(8, rect.right - pr.width) + 'px';
+      const _left = Math.max(8, rect.right - pr.width);
       const spaceAbove = rect.top;
-      if (spaceAbove >= pr.height + 8) {
-        popup.style.top = (rect.top - pr.height - 8) + 'px';
-      } else {
-        popup.style.top = (rect.bottom + 8) + 'px';
-      }
+      const _top = spaceAbove >= pr.height + 8 ? rect.top - pr.height - 8 : rect.bottom + 8;
+      popup.style.left = toLocalPx(_left, _z) + 'px';
+      popup.style.top = toLocalPx(_top, _z) + 'px';
       popup.style.visibility = '';
 
       bindMenuDismiss(popup, () => popup.remove(), (ev) => !popup.contains(ev.target) && ev.target !== ctxRing && !ctxRing.contains(ev.target));
