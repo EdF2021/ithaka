@@ -853,9 +853,9 @@ def _init_scheduled_db():
                 finally:
                     _db.close()
             except Exception:
-                pass
+                logger.warning("scheduled_emails owner backfill failed", exc_info=True)
     except Exception:
-        pass
+        logger.warning("scheduled_emails lazy migration failed", exc_info=True)
     # Lazy migration: add turns_json to email_boundaries for server-side
     # thread parsing cache (talon-style precomputed reply chain).
     try:
@@ -863,7 +863,7 @@ def _init_scheduled_db():
         if "turns_json" not in cols:
             conn.execute("ALTER TABLE email_boundaries ADD COLUMN turns_json TEXT")
     except Exception:
-        pass
+        logger.warning("email_boundaries.turns_json migration failed", exc_info=True)
     # Per-sender signature cache. Populated by `learn_sender_signatures`.
     # Message sender addresses are global, so signatures must be scoped to the
     # mailbox owner before `/read` returns them to the renderer.

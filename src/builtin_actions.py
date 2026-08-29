@@ -1864,7 +1864,6 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
         urgency_prompt = settings.get("urgent_email_prompt", "")
         per_uid_scores = {}   # key = "<acc_id>:<uid>" → {"score": 0-3, "reason": "..."}
         all_unread_keys = set()
-        llm_attempts = 0
         saved_classifications = 0
         failed_classifications = []
         tag_write_details = []
@@ -2103,122 +2102,6 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                 per_uid_scores[key] = verdict
                 saved_classifications += 1
                 continue
-                # ── LLM-classify. JSON-only response; bullet-proof parse.
-                llm_attempts += 1
-                prompt = (
-                    "You are triaging ONE email. Return ONLY JSON: "
-                    "{\"score\":0|1|2|3,\"tags\":[\"...\"],\"spam\":false,"
-                    "\"reason\":\"one short phrase\"}.\n"
-                    "0 = trivial / promotional · 1 = informational, no reply needed · "
-                    "2 = should reply within a day · 3 = urgent, reply now (deadline, blocker).\n\n"
-                    "Allowed visible tags: urgent, reply-soon, action-needed, calendar, bills, receipt, travel.\n"
-                    "Use action-needed when the user likely needs to reply, pay, sign, book, or decide. "
-                    "Use bills for bills or debts, receipt for purchases/deliveries, travel for reservations/trips, "
-                    "and calendar only when a calendar event/reminder is involved. spam=true for scams, phishing, "
-                    "junk, cold sales, generic ads, or no-personal-action bulk mail.\n"
-                    "Important: 'I'm outside', 'I am outside', 'waiting outside', 'at the door', "
-                    "'locked out', or 'can't get in' means score 3 unless clearly historical.\n\n"
-                    f"User's rules:\n{urgency_prompt}\n\n"
-                    f"Email:\nFrom: {item.get('from','')}\nSubject: {item.get('subject','')}\n"
-                    f"Snippet:\n{item.get('body','')}\n"
-                )
-                try:
-                    await wait_for_interactive_quiet("email urgency action")
-                    raw = await llm_call_async_with_fallback(
-                        candidates,
-                        [{"role": "user", "content": prompt}],
-                        temperature=0.1, max_tokens=220, timeout=30,
-                    )
-                    # Tolerant JSON-parse: strip code fences if present.
-                    txt = (raw or "").strip()
-                    if txt.startswith("```"):
-                        txt = txt.strip("`")
-                        # Drop a leading "json\n" or any tag.
-                        nl = txt.find("\n")
-                        if nl >= 0:
-                            txt = txt[nl + 1:]
-                    # Find first { ... } in the response.
-                    s = txt.find("{")
-                    e = txt.rfind("}")
-                    if s < 0 or e <= s:
-                        failed_classifications.append({
-                            "subject": item.get("subject") or "(no subject)",
-                            "from": item.get("from") or "",
-                            "reason": "model returned no JSON",
-                        })
-                        continue
-                    obj = _json.loads(txt[s:e + 1])
-                    score = int(obj.get("score", 0))
-                    reason = str(obj.get("reason", ""))[:200]
-                    raw_tags = obj.get("tags") or []
-                    if isinstance(raw_tags, str):
-                        raw_tags = [raw_tags]
-                    tags = []
-                    for t in raw_tags:
-                        if not isinstance(t, str):
-                            continue
-                        tag = t.strip().lower().replace("_", "-")
-                        if tag == "promo":
-                            tag = "marketing"
-                        if tag in CATEGORY_TAGS and tag not in tags:
-                            tags.append(tag)
-                    _spam_raw = obj.get("spam")
-                    if isinstance(_spam_raw, bool):
-                        spam = _spam_raw
-                    elif isinstance(_spam_raw, (int, float)):
-                        spam = bool(_spam_raw)
-                    else:
-                        spam = str(_spam_raw or "").strip().lower() in {"1", "true", "yes", "y"}
-                    _blob = f"{item.get('headers','')}\n{item.get('subject','')}\n{item.get('body','')}".lower()
-                    if _re.search(r"\b(i'?m|i am|im|we'?re|we are)\s+outside\b", _blob) or _re.search(
-                        r"\b(waiting outside|at the door|locked out|can'?t get in|cannot get in)\b", _blob
-                    ):
-                        if score < 3:
-                            reason = "person is waiting outside"
-                        score = max(score, 3)
-                    bulkish = bool(_re.search(
-                        r"\b(list-unsubscribe|list-id|mailchimp|mailchimpapp|view this email in your browser|unsubscribe|newsletter|digest|precedence:\s*bulk)\b",
-                        _blob,
-                    ))
-                    marketingish = bool(_re.search(
-                        r"\b(advertisement|sponsored|promo|promotion|sale|discount|offer|limited time|deal|tickets?|tour|merch|stream|purchase|sold out|low tickets|coupon|shop now|buy now)\b",
-                        _blob,
-                    ))
-                    if (bulkish or marketingish) and score < 2:
-                        score = 0
-                        if not reason or "urgent" in reason.lower():
-                            reason = "bulk mail; no personal reply needed"
-                    # Strip "Name <addr>" to bare display name for compact summary.
-                    _from_raw = item.get("from", "") or ""
-                    if "<" in _from_raw:
-                        _from_short = _from_raw.split("<", 1)[0].strip().strip('"') or _from_raw
-                    else:
-                        _from_short = _from_raw
-                    verdict = {
-                        "score": max(0, min(3, score)),
-                        "tags": tags[:4],
-                        "spam": spam,
-                        "reason": reason,
-                        "subject": (item.get("subject") or "")[:200],
-                        "from": _from_short[:120],
-                        "triage_version": TRIAGE_VERSION,
-                        # Cache the message_id too so re-scans of already-cached
-                        # UIDs can still write the inbox tag without re-LLM'ing.
-                        "message_id": (item.get("message_id") or "").strip(),
-                        "unread": bool(item.get("unread")),
-                        "ts": _time.time(),
-                    }
-                    cache.setdefault("uids", {})[item["uid"]] = verdict
-                    per_uid_scores[key] = verdict
-                    saved_classifications += 1
-                except Exception as e:
-                    failed_classifications.append({
-                        "subject": item.get("subject") or "(no subject)",
-                        "from": item.get("from") or "",
-                        "reason": str(e)[:120] or "classification failed",
-                    })
-                    logger.debug(f"urgency: LLM classify failed for {key}: {e}")
-                    continue
 
             # ── Prune cache entries for UIDs that are no longer in the recent
             # scan window. Read messages remain cached because tags are useful
