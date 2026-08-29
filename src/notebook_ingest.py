@@ -100,7 +100,7 @@ def _is_heading_like(line: str) -> bool:
         return True
     letters = [c for c in line if c.isalpha()]
     if letters:
-        upper = sum(1 for c in letters if c.is_upper())
+        upper = sum(1 for c in letters if c.isupper())
         if upper / len(letters) >= 0.6:
             return True
     return False

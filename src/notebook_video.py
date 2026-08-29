@@ -248,18 +248,28 @@ async def _run_ffmpeg(cmd: list[str]) -> None:
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        _, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=_FFMPEG_TIMEOUT_SECONDS
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError(
-            f"ffmpeg overschreed de tijdslimiet van {_FFMPEG_TIMEOUT_SECONDS}s"
-        )
-    if proc.returncode != 0:
-        tail = (stderr or b"").decode("utf-8", "replace").strip()[-500:]
-        raise RuntimeError(f"ffmpeg faalde (exit {proc.returncode}): {tail}")
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=_FFMPEG_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"ffmpeg overschreed de tijdslimiet van {_FFMPEG_TIMEOUT_SECONDS}s"
+            )
+        if proc.returncode != 0:
+            tail = (stderr or b"").decode("utf-8", "replace").strip()[-500:]
+            raise RuntimeError(f"ffmpeg faalde (exit {proc.returncode}): {tail}")
+    finally:
+        # Reap the child on every abnormal exit — the per-command timeout above,
+        # but also an outer cancellation or the 30-min job cap firing while
+        # communicate() is still awaiting. communicate() only reaps on normal
+        # completion, so without this the ffmpeg process would be orphaned.
+        if proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
 
 
 # --------------------------------------------------------------------------
