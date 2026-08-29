@@ -4069,7 +4069,14 @@ async function initUnifiedIntegrations() {
         const u = _editId ? `/api/auth/integrations/${_editId}` : '/api/auth/integrations';
         const m = _editId ? 'PUT' : 'POST';
         const r = await fetch(u, { method: m, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        if (!r.ok) throw new Error();
+        if (!r.ok) {
+          // Surface the server's validation detail (e.g. the ntfy
+          // base-URL guard) instead of a bare "Failed".
+          const err = await r.json().catch(() => ({}));
+          el('uf-api-msg').textContent = friendlyAdminError(err.detail).slice(0, 360);
+          el('uf-api-msg').style.color = 'var(--red)';
+          return;
+        }
         const saved = await r.json().catch(() => null);
         // If this was a create, capture the new ID so Test works
         // immediately without needing a form reopen. The POST response

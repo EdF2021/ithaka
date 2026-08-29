@@ -215,6 +215,43 @@ def _normalize_integration_base_url(base_url: Any) -> str:
     return urlunparse(parsed._replace(scheme=parsed.scheme.lower(), query="", fragment="")).rstrip("/")
 
 
+def validate_ntfy_base_url(base_url: Any) -> str:
+    """Normalize an ntfy base URL and reject one that carries a path.
+
+    The topic lives in Settings -> Reminders and is appended at send time;
+    a path in the base URL (e.g. http://ntfy/ithaka) would make reminders
+    publish to /<path>/<topic>, which ntfy 404s on.
+    """
+    normalized = _normalize_integration_base_url(base_url)
+    parsed = urlparse(normalized)
+    if parsed.path and parsed.path != "/":
+        raise ValueError(
+            "ntfy base URL must not include a path — use scheme://host[:port] "
+            "only (the topic is configured under Settings -> Reminders)"
+        )
+    return normalized
+
+
+async def check_ntfy_reachable(base_url: str, timeout: float = 4.0) -> Optional[str]:
+    """Probe GET {base}/v1/health; return an error message when the ntfy
+    server is unreachable from the app process, or None when it responds."""
+    import httpx
+
+    url = base_url.rstrip("/") + "/v1/health"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 500:
+            return f"ntfy server at {base_url} returned HTTP {resp.status_code}"
+        return None
+    except Exception as exc:
+        return (
+            f"ntfy server at {base_url} is not reachable from the app: {exc}. "
+            "For the bundled Docker container use http://ntfy; tailnet or "
+            "public URLs are for phone subscriptions, not for the server."
+        )
+
+
 def _join_integration_url(base_url: str, path: str) -> str:
     base = base_url.rstrip("/")
     rel = path.lstrip("/")
@@ -286,7 +323,10 @@ def add_integration(data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(integration.get("name"), str) or not integration["name"].strip():
         raise HTTPException(400, "Integration name is required")
     try:
-        integration["base_url"] = _normalize_integration_base_url(integration.get("base_url"))
+        if str(integration.get("preset") or "").lower() == "ntfy":
+            integration["base_url"] = validate_ntfy_base_url(integration.get("base_url"))
+        else:
+            integration["base_url"] = _normalize_integration_base_url(integration.get("base_url"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -301,15 +341,19 @@ def update_integration(integration_id: str, data: Dict[str, Any]) -> Optional[Di
     data = dict(data)
     if "name" in data and (not isinstance(data["name"], str) or not data["name"].strip()):
         raise HTTPException(400, "Integration name is required")
-    if "base_url" in data:
-        try:
-            data["base_url"] = _normalize_integration_base_url(data["base_url"])
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
 
     integrations = load_integrations()
     for item in integrations:
         if item.get("id") == integration_id:
+            if "base_url" in data:
+                preset = str(data.get("preset") or item.get("preset") or "").lower()
+                try:
+                    if preset == "ntfy":
+                        data["base_url"] = validate_ntfy_base_url(data["base_url"])
+                    else:
+                        data["base_url"] = _normalize_integration_base_url(data["base_url"])
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
             data.pop("id", None)  # prevent id change
             item.update(data)
             save_integrations(integrations)
