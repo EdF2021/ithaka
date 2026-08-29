@@ -499,6 +499,14 @@ async def _exec_shell(command: str, timeout: int = EXEC_TIMEOUT) -> Dict[str, An
             "exit_code": -1,
         }
     except Exception as e:
+        # Reap the child on non-timeout failures too (a decode/transport error
+        # after spawn would otherwise orphan the shell).
+        if proc:
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
         return {"stdout": "", "stderr": str(e), "exit_code": -1}
 
 
