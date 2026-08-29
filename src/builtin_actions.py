@@ -1172,6 +1172,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
             by_sender.setdefault(addr, []).append(m)
 
         # 3. Eligibility: ≥3 emails AND (no cache OR cache > 30 days old).
+        conn = None
         try:
             conn = _sql3.connect(SCHEDULED_DB)
             owner_clause, owner_params = _email_cache_owner_clause(owner)
@@ -1181,9 +1182,11 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
                     owner_params,
                 ).fetchall()
             }
-            conn.close()
         except Exception:
             cached = {}
+        finally:
+            if conn is not None:
+                conn.close()
 
         cutoff_iso = (_dt.utcnow() - _td(days=30)).isoformat()
         eligible: list[tuple[str, list[dict]]] = []
@@ -1285,6 +1288,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
             else:
                 cached_sig = sig
 
+            conn = None
             try:
                 conn = _sql3.connect(SCHEDULED_DB)
                 owner_value = (owner or "").strip()
@@ -1295,10 +1299,12 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
                     (addr, owner_value, cached_sig, len(bodies), _dt.utcnow().isoformat(), model, "llm"),
                 )
                 conn.commit()
-                conn.close()
                 analyzed += 1
             except Exception as e:
                 logger.warning(f"sig cache write failed for {addr}: {e}")
+            finally:
+                if conn is not None:
+                    conn.close()
 
         return f"Learned sigs: {analyzed - no_sig} found, {no_sig} no-sig, of {len(eligible)} eligible", True
     except Exception as e:
@@ -1353,7 +1359,10 @@ async def action_daily_brief(owner: str, **kwargs) -> Tuple[str, bool]:
         recent_subjects: list[tuple[str, str]] = []
         try:
             import email as _email
-            conn = _imap_connect(None)
+            # Scope IMAP to this brief's owner — the calendar/notes queries above
+            # are owner-filtered, so the email section must be too, or a
+            # multi-user brief would leak another account's inbox.
+            conn = _imap_connect(None, owner=owner)
             try:
                 conn.select("INBOX", readonly=True)
                 status, data = conn.search(None, "UNSEEN")
@@ -1972,7 +1981,21 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                         cached_ok = isinstance(cached, dict) and cached.get("triage_version") == TRIAGE_VERSION
                         results.append({"key": key, "uid": uid, "cached": cached if cached_ok else None})
                         if cached_ok:
-                            # Already classified — skip the fetch.
+                            # Already classified — skip the expensive header/body
+                            # fetch, but still refresh the read/unread flag with a
+                            # cheap FLAGS-only fetch. The caller overwrites the
+                            # cached verdict's `unread` from this per-scan value,
+                            # so without it a cached unread email is marked read
+                            # forever and drops out of the urgent counts.
+                            try:
+                                st, fdata = conn.uid("FETCH", uid_b, "(FLAGS)")
+                                if st == "OK" and fdata:
+                                    fblob = b" ".join(
+                                        p for p in fdata if isinstance(p, (bytes, bytearray))
+                                    )
+                                    results[-1]["unread"] = b"\\Seen" not in fblob
+                            except Exception as _fe:
+                                logger.debug(f"urgency: flag refresh for uid {uid} failed: {_fe}")
                             continue
                         # Pull headers + first ~800 chars of plaintext body.
                         try:
@@ -2065,7 +2088,11 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     all_unread_keys.add(key)
                 if item.get("cached"):
                     cached_v = dict(item["cached"])
-                    cached_v["unread"] = bool(item.get("unread"))
+                    # Only refresh unread when we actually re-read the flag this
+                    # scan; if the FLAGS fetch failed, keep the cached value
+                    # rather than clobbering it to False.
+                    if "unread" in item:
+                        cached_v["unread"] = bool(item["unread"])
                     per_uid_scores[key] = cached_v
                     continue
                 # Skip uids we couldn't fetch (no subject/from/body).

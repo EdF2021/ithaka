@@ -99,7 +99,11 @@ def _load_mcp_disabled_map() -> Dict[str, set]:
                     if names:
                         disabled_map[srv.id] = set(names)
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    logger.warning(
+                        "MCP server %s has malformed disabled_tools JSON; its tool "
+                        "denylist is being ignored (tools may be exposed)",
+                        srv.id, exc_info=True,
+                    )
     finally:
         db.close()
     return disabled_map

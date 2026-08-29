@@ -2370,6 +2370,7 @@ def _migrate_add_caldav_sync_columns():
     db_path = DATABASE_URL.replace("sqlite:///", "")
     if not os.path.exists(db_path):
         return
+    conn = None
     try:
         conn = sqlite3.connect(db_path)
         ev_columns = [row[1] for row in conn.execute("PRAGMA table_info(calendar_events)").fetchall()]
@@ -2384,9 +2385,11 @@ def _migrate_add_caldav_sync_columns():
         if cal_columns and "caldav_base_url" not in cal_columns:
             conn.execute("ALTER TABLE calendars ADD COLUMN caldav_base_url TEXT")
         conn.commit()
-        conn.close()
     except Exception as e:
         logging.getLogger(__name__).warning(f"CalDAV sync metadata migration failed: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _migrate_add_calendar_metadata():
