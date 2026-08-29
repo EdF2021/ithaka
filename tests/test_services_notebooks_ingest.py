@@ -62,6 +62,38 @@ def test_txt_ingest_creates_chunks_and_document(dbs):
     assert doc is not None and doc.owner == "ed" and doc.title == "notes.txt"
 
 
+def test_multiline_body_ingests_and_sets_section_hints(dbs):
+    """Regression: a document with short non-heading body lines must ingest.
+
+    The heading heuristic (`_is_heading_like`) is only reached for stripped
+    lines under 80 chars, so a single-long-line fixture never exercises it.
+    A `c.is_upper()` typo (should be `isupper()`) crashed on every short body
+    line and surfaced as a misleading "embedding failed" status; this fixture
+    drives real short lines — lowercase body, an ALL-CAPS heading, a `#`
+    heading and a trailing-`:` heading — across more than one chunk and
+    asserts the section-hint metadata lands on a later chunk.
+    """
+    s, nb_id = dbs
+    rag = _FakeRag()
+    body = (
+        "# Introductie\n"
+        "de kat zat op de mat\n"
+        "nog wat gewone tekst hier\n"
+        "HOOFDSTUK TWEE\n"
+        + ("een korte regel body tekst\n" * 60)
+        + "Samenvatting:\n"
+        "de laatste alinea met inhoud\n"
+    )
+    src = notebook_ingest.ingest_notebook_file(
+        nb_id, "ed", "hoofdstukken.txt", body.encode("utf-8"), rag, s)
+    assert src.status == "indexed"
+    assert src.chunk_count == len(rag.calls) and len(rag.calls) > 1
+    # A chunk beyond the first should carry a section_hint resolved from the
+    # last heading-like line before it (proves the heuristic ran, not crashed).
+    hints = [m.get("section_hint") for _, m in rag.calls]
+    assert any(h for h in hints[1:]), f"no section_hint on later chunks: {hints}"
+
+
 def test_docx_goes_through_markitdown(dbs, monkeypatch):
     s, nb_id = dbs
     monkeypatch.setattr(notebook_ingest, "_convert_office_to_text",

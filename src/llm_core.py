@@ -1965,6 +1965,10 @@ def _configured_cached_model_ids(
             hidden = set(_parse_model_cache(getattr(ep, "hidden_models", None)))
             return [m for m in models if m not in hidden]
     except Exception:
+        logger.warning(
+            "cached-model lookup failed for endpoint_url=%s; falling back to a "
+            "live fetch", endpoint_url, exc_info=True,
+        )
         return []
     finally:
         try:

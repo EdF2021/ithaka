@@ -426,23 +426,25 @@ def duckduckgo_search(query: str, count: Optional[int] = None, time_filter: Opti
         timelimit = time_map.get(time_filter)
 
     try:
-        ddgs = DDGS()
-        raw = ddgs.text(
-            query,
-            max_results=count,
-            timelimit=timelimit,
-            safesearch=_safesearch_for("duckduckgo_lib"),
-        )
-        results = []
-        for item in raw:
-            url = item.get("href", "")
-            if not url:
-                continue
-            results.append({
-                "title": item.get("title", ""),
-                "url": url,
-                "snippet": item.get("body", ""),
-            })
+        # `with` so the client's HTTP connection pool closes on every exit,
+        # including the except fallback below.
+        with DDGS() as ddgs:
+            raw = ddgs.text(
+                query,
+                max_results=count,
+                timelimit=timelimit,
+                safesearch=_safesearch_for("duckduckgo_lib"),
+            )
+            results = []
+            for item in raw:
+                url = item.get("href", "")
+                if not url:
+                    continue
+                results.append({
+                    "title": item.get("title", ""),
+                    "url": url,
+                    "snippet": item.get("body", ""),
+                })
         logger.info(f"DuckDuckGo search returned {len(results)} results")
         return results or _html_fallback()
     except Exception as e:

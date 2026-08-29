@@ -753,8 +753,10 @@ def _migrate_add_last_message_at_column():
         except Exception:
             pass
 
-def _migrate_add_document_archived_column():
-    """Add `archived` to documents (soft-archive flag). Guarded + idempotent."""
+def _add_column_if_missing(table, column, coltype):
+    """Idempotently add one column to a table on startup: no-op if the DB or
+    column is absent, close on every path, log success and failure. Single
+    source of truth for the trivial one-column migrations below."""
     import sqlite3
     db_path = DATABASE_URL.replace("sqlite:///", "")
     if not os.path.exists(db_path):
@@ -762,115 +764,39 @@ def _migrate_add_document_archived_column():
     conn = None
     try:
         conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(documents)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "archived" not in columns:
-            conn.execute("ALTER TABLE documents ADD COLUMN archived BOOLEAN DEFAULT 0")
+        columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
             conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'archived' to documents")
+            logging.getLogger(__name__).info("Migrated: added '%s' to %s", column, table)
     except Exception as e:
-        logging.getLogger(__name__).warning(f"documents.archived migration failed: {e}")
+        logging.getLogger(__name__).warning("%s.%s migration failed: %s", table, column, e)
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _migrate_add_document_archived_column():
+    _add_column_if_missing('documents', 'archived', 'BOOLEAN DEFAULT 0')
 
 
 def _migrate_add_notebook_artifact_audio_path_column():
-    """Add `audio_path` to notebook_artifacts (podcast audio filename). Guarded + idempotent."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(notebook_artifacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "audio_path" not in columns:
-            conn.execute("ALTER TABLE notebook_artifacts ADD COLUMN audio_path VARCHAR")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'audio_path' to notebook_artifacts")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"notebook_artifacts.audio_path migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('notebook_artifacts', 'audio_path', 'VARCHAR')
 
 
 def _migrate_add_notebook_source_url_column():
-    """Add `url` to notebook_sources (web-source provenance). Guarded + idempotent."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(notebook_sources)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "url" not in columns:
-            conn.execute("ALTER TABLE notebook_sources ADD COLUMN url VARCHAR")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'url' to notebook_sources")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"notebook_sources.url migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('notebook_sources', 'url', 'VARCHAR')
 
 
 def _migrate_add_notebook_artifact_video_path_column():
-    """Add `video_path` to notebook_artifacts (video-overview mp4 filename). Guarded + idempotent."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(notebook_artifacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "video_path" not in columns:
-            conn.execute("ALTER TABLE notebook_artifacts ADD COLUMN video_path VARCHAR")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'video_path' to notebook_artifacts")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"notebook_artifacts.video_path migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('notebook_artifacts', 'video_path', 'VARCHAR')
 
 
 def _migrate_add_notebook_artifact_title_column():
-    """Add `title` to notebook_artifacts (own, renamable title). Guarded + idempotent."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(notebook_artifacts)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "title" not in columns:
-            conn.execute("ALTER TABLE notebook_artifacts ADD COLUMN title VARCHAR")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'title' to notebook_artifacts")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"notebook_artifacts.title migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('notebook_artifacts', 'title', 'VARCHAR')
 
 
 def _migrate_add_owner_column():
@@ -898,27 +824,8 @@ def _migrate_add_owner_column():
             pass
 
 def _migrate_add_session_notebook_id_column():
-    """Add notebook_id column to sessions table if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(sessions)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "notebook_id" not in columns:
-            conn.execute("ALTER TABLE sessions ADD COLUMN notebook_id VARCHAR")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'notebook_id' column to sessions")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Migration check failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('sessions', 'notebook_id', 'VARCHAR')
+
 
 def _migrate_model_endpoints():
     """Recreate model_endpoints table if schema changed (url->base_url)."""
@@ -944,27 +851,8 @@ def _migrate_model_endpoints():
             pass
 
 def _migrate_add_hidden_models_column():
-    """Add hidden_models column to model_endpoints if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(model_endpoints)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if columns and "hidden_models" not in columns:
-            conn.execute("ALTER TABLE model_endpoints ADD COLUMN hidden_models TEXT")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'hidden_models' column to model_endpoints")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"hidden_models migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('model_endpoints', 'hidden_models', 'TEXT')
+
 
 def _migrate_add_model_endpoint_owner_column():
     """Add owner column to model_endpoints if it doesn't exist.
@@ -1024,27 +912,8 @@ def _migrate_add_provider_auth_id_column():
 
 
 def _migrate_add_model_type_column():
-    """Add model_type column to model_endpoints if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(model_endpoints)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if columns and "model_type" not in columns:
-            conn.execute("ALTER TABLE model_endpoints ADD COLUMN model_type TEXT DEFAULT 'llm'")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'model_type' column to model_endpoints")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"model_type migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('model_endpoints', 'model_type', "TEXT DEFAULT 'llm'")
+
 
 def _migrate_add_model_endpoint_refresh_columns():
     """Add endpoint classification / refresh policy columns if missing."""
@@ -1075,96 +944,20 @@ def _migrate_add_model_endpoint_refresh_columns():
             pass
 
 def _migrate_add_task_run_model_column():
-    """Add model column to task_runs if it doesn't exist (records which model ran)."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(task_runs)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if columns and "model" not in columns:
-            conn.execute("ALTER TABLE task_runs ADD COLUMN model TEXT")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'model' column to task_runs")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"task_runs model migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('task_runs', 'model', 'TEXT')
+
 
 def _migrate_add_supports_tools_column():
-    """Add supports_tools column to model_endpoints if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(model_endpoints)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if columns and "supports_tools" not in columns:
-            conn.execute("ALTER TABLE model_endpoints ADD COLUMN supports_tools BOOLEAN")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'supports_tools' column to model_endpoints")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"supports_tools migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('model_endpoints', 'supports_tools', 'BOOLEAN')
 
 
 def _migrate_add_cached_models_column():
-    """Add cached_models column to model_endpoints if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(model_endpoints)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if columns and "cached_models" not in columns:
-            conn.execute("ALTER TABLE model_endpoints ADD COLUMN cached_models TEXT")
-            conn.commit()
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"cached_models migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('model_endpoints', 'cached_models', 'TEXT')
+
 
 def _migrate_add_pinned_models_column():
-    """Add pinned_models column to model_endpoints if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(model_endpoints)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if columns and "pinned_models" not in columns:
-            conn.execute("ALTER TABLE model_endpoints ADD COLUMN pinned_models TEXT")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'pinned_models' column to model_endpoints")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"pinned_models migration failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('model_endpoints', 'pinned_models', 'TEXT')
+
 
 def _migrate_add_notes_sort_order():
     """Add sort_order, image_url, repeat columns to notes if they don't exist."""
@@ -1199,50 +992,12 @@ def _migrate_add_notes_sort_order():
             pass
 
 def _migrate_add_mode_column():
-    """Add mode column to sessions table if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(sessions)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "mode" not in columns:
-            conn.execute("ALTER TABLE sessions ADD COLUMN mode TEXT")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'mode' column to sessions")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Migration check for mode failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('sessions', 'mode', 'TEXT')
+
 
 def _migrate_add_folder_column():
-    """Add folder column to sessions table if it doesn't exist."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.execute("PRAGMA table_info(sessions)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "folder" not in columns:
-            conn.execute("ALTER TABLE sessions ADD COLUMN folder TEXT")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added 'folder' column to sessions")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Migration check for folder failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('sessions', 'folder', 'TEXT')
+
 
 def _migrate_add_token_columns():
     """Add cumulative token tracking columns to sessions table."""
@@ -1305,26 +1060,7 @@ def _migrate_add_multiuser_owner_columns():
 
 
 def _migrate_add_gallery_caption_column():
-    """Add OCR/vision caption storage for gallery images."""
-    import sqlite3
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if not os.path.exists(db_path):
-        return
-    conn = None
-    try:
-        conn = sqlite3.connect(db_path)
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(gallery_images)").fetchall()]
-        if columns and "caption" not in columns:
-            conn.execute("ALTER TABLE gallery_images ADD COLUMN caption TEXT DEFAULT ''")
-            conn.commit()
-            logging.getLogger(__name__).info("Migrated: added caption column to gallery_images")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Migration gallery caption column failed: {e}")
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    _add_column_if_missing('gallery_images', 'caption', "TEXT DEFAULT ''")
 
 
 def _migrate_add_api_token_scopes_column():
@@ -1385,7 +1121,10 @@ def _migrate_assign_legacy_owner():
             if not admin_user:
                 admin_user = next(iter(users))
     except Exception:
-        pass
+        logging.getLogger(__name__).warning(
+            "could not resolve admin user for world-visible ownership sweep; "
+            "skipping it", exc_info=True,
+        )
 
     if not admin_user:
         return
@@ -1643,21 +1382,8 @@ def _migrate_add_disabled_tools():
         logging.getLogger(__name__).warning(f"disabled_tools migration: {e}")
 
 def _migrate_add_mcp_oauth_tokens_column():
-    """Add oauth_tokens column to mcp_servers table if missing.
+    _add_column_if_missing('mcp_servers', 'oauth_tokens', 'TEXT')
 
-    The model declares this column as EncryptedText, but the SQL type is plain
-    TEXT on purpose: EncryptedText is a SQLAlchemy TypeDecorator that encrypts at
-    the Python layer and stores the ciphertext as TEXT, so the DB column type is
-    TEXT. This matches the existing encrypted columns (see _migrate_encrypt_*)."""
-    try:
-        with engine.connect() as conn:
-            cols = [r[1] for r in conn.execute(text("PRAGMA table_info(mcp_servers)"))]
-            if "oauth_tokens" not in cols:
-                conn.execute(text("ALTER TABLE mcp_servers ADD COLUMN oauth_tokens TEXT"))
-                conn.commit()
-                logging.getLogger(__name__).info("Added oauth_tokens column to mcp_servers")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"oauth_tokens migration: {e}")
 
 def _migrate_add_task_v2_columns():
     """Add cron_expression, then_task_id, webhook_token to scheduled_tasks."""
@@ -2370,6 +2096,7 @@ def _migrate_add_caldav_sync_columns():
     db_path = DATABASE_URL.replace("sqlite:///", "")
     if not os.path.exists(db_path):
         return
+    conn = None
     try:
         conn = sqlite3.connect(db_path)
         ev_columns = [row[1] for row in conn.execute("PRAGMA table_info(calendar_events)").fetchall()]
@@ -2384,9 +2111,11 @@ def _migrate_add_caldav_sync_columns():
         if cal_columns and "caldav_base_url" not in cal_columns:
             conn.execute("ALTER TABLE calendars ADD COLUMN caldav_base_url TEXT")
         conn.commit()
-        conn.close()
     except Exception as e:
         logging.getLogger(__name__).warning(f"CalDAV sync metadata migration failed: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _migrate_add_calendar_metadata():

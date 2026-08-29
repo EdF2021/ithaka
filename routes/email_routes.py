@@ -3167,13 +3167,19 @@ def setup_email_routes():
                         for uid in sorted(uids, key=lambda b: int(b)):
                             if permanent:
                                 conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
+                                deleted += 1
                             else:
                                 copy_st, _ = conn.uid("COPY", uid, _q("Trash"))
                                 if copy_st == "OK":
                                     conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
+                                    deleted += 1
                                 else:
-                                    conn.uid("STORE", uid, "+FLAGS", "\\Deleted")
-                            deleted += 1
+                                    # Trash copy failed — do NOT delete, or the
+                                    # reminder is lost permanently with no copy.
+                                    logger.warning(
+                                        "reminder cleanup: Trash COPY failed for uid %s in %r; "
+                                        "leaving message in place", uid, folder_name,
+                                    )
                         conn.expunge()
                     except Exception as e:
                         logger.warning(f"Skipped reminder cleanup in {folder_name!r}: {e}")
@@ -5058,6 +5064,7 @@ def setup_email_routes():
             smtp_security = _smtp_security_mode({"smtp_security": body.get("smtp_security"), "smtp_port": smtp_port})
             smtp_user = (body.get("smtp_user") or imap_user).strip()
             smtp_pass = body.get("smtp_password") or imap_pass
+            smtp = None
             try:
                 if smtp_security == "ssl":
                     smtp = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=10)
@@ -5065,14 +5072,19 @@ def setup_email_routes():
                     smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
                     if smtp_security == "starttls":
                         smtp.starttls()
-                try:
-                    smtp.login(smtp_user, smtp_pass)
-                    smtp_result = {"ok": True}
-                finally:
-                    try: smtp.quit()
-                    except Exception: pass
+                smtp.login(smtp_user, smtp_pass)
+                smtp_result = {"ok": True}
             except Exception as e:
                 smtp_result = {"ok": False, "error": _friendly_email_auth_error("SMTP", smtp_host, e)}
+            finally:
+                # Close on every path — a STARTTLS rejection jumps here before
+                # login and would otherwise leak the connected socket.
+                if smtp is not None:
+                    try:
+                        smtp.quit()
+                    except Exception:
+                        try: smtp.close()
+                        except Exception: pass
 
         return {
             "ok": imap_result["ok"] and (smtp_result is None or smtp_result["ok"]),
