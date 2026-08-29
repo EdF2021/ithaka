@@ -22,8 +22,9 @@ IMAP/SMTP/CalDAV on the compose network — no Entra app registration needed.
 
 The `davmail` service in `docker-compose.yml` (mirrored in
 `docker-compose.gpu-nvidia.yml` / `docker-compose.gpu-amd.yml`) runs
-`docker.io/kran0/davmail-docker:trunk`, reachable only from other containers
-as hostname `davmail`. (`trunk` instead of the 6.8.1 release: personal
+a digest-pinned `trunk` build of `docker.io/kran0/davmail-docker`, reachable
+only from other containers as hostname `davmail`. (`trunk` instead of the
+6.8.1 release: personal
 accounts run over DavMail's Graph backend, and 6.8.1 still crashes with a
 NullPointerException in `DateUtil.getExchangeTimeZone` on calendar events
 without a timezone; the null guard is only on master. Pin back to a release

@@ -189,7 +189,7 @@ services:
   davmail:
     # trunk i.p.v. 6.8.1: Graph-CalDAV NPE-fix (DateUtil null-tijdzone-guard) zit nog
     # niet in een release; terug naar een release-tag zodra er een versie > 6.8.1 is.
-    image: docker.io/kran0/davmail-docker:trunk
+    image: docker.io/kran0/davmail-docker@sha256:fd6c60b89f5bb202434b764527cf1e625ea10b92ac204ae81a205912a05944fc # trunk-build 2026-08-29
     environment:
       - DAVMAIL_SERVER=true
       - DAVMAIL_MODE=${DAVMAIL_MODE:-O365EWS}
