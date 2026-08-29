@@ -60,6 +60,10 @@ services:
       - ITHAKA_EMAIL_COMPOSE_UPLOAD_MAX_BYTES=${ITHAKA_EMAIL_COMPOSE_UPLOAD_MAX_BYTES:-26214400}
       - ITHAKA_STT_MAX_AUDIO_BYTES=${ITHAKA_STT_MAX_AUDIO_BYTES:-26214400}
       - ITHAKA_ICS_MAX_BYTES=${ITHAKA_ICS_MAX_BYTES:-10485760}
+      # Allow CalDAV account URLs that resolve to private IPs (needed for the
+      # bundled DavMail gateway reachable as http://davmail:1080 inside the
+      # compose network). Set to 0 if you don't run the davmail service.
+      - ITHAKA_ALLOW_PRIVATE_CALDAV=${ITHAKA_ALLOW_PRIVATE_CALDAV:-1}
       - DATA_BRAVE_API_KEY=${DATA_BRAVE_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GOOGLE_PSE_CX=${GOOGLE_PSE_CX:-}
@@ -153,6 +157,25 @@ services:
       - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8091}
     restart: unless-stopped
 
+  # DavMail gateway: exposes a personal outlook.com / Microsoft 365 account as
+  # plain IMAP (1143), SMTP (1025) and CalDAV (1080) inside the compose
+  # network only (no host ports). Ithaka connects to hostname `davmail` with
+  # the account's email address as username. First run requires a one-time
+  # OAuth device-code login (watch `docker compose logs davmail` for the code,
+  # then switch DAVMAIL_AUTHENTICATION to O365Modern via .env); the refresh token
+  # persists in the davmail-config volume across restarts.
+  davmail:
+    image: docker.io/kran0/davmail-docker:6.8.1
+    environment:
+      - DAVMAIL_SERVER=true
+      - DAVMAIL_MODE=${DAVMAIL_MODE:-O365EWS}
+      - DAVMAIL_AUTHENTICATION=${DAVMAIL_AUTHENTICATION:-O365Modern}
+      - DAVMAIL_ALLOWREMOTE=true
+      - "ADDITIONAL_PROPERTY_VALUES=davmail.oauth.persistToken=true\ndavmail.oauth.tenantId=${DAVMAIL_TENANT:-common}"
+    volumes:
+      - davmail-config:/davmail-config
+    restart: unless-stopped
+
   # Remote access over your private tailnet. Runs the official Tailscale
   # client in userspace mode on the host network, so inbound connections to
   # this node's Tailscale IP reach the app on localhost:7000. First run:
@@ -184,4 +207,5 @@ volumes:
   searxng-data:
   chromadb-data:
   ntfy-cache:
+  davmail-config:
   tailscale-state:
