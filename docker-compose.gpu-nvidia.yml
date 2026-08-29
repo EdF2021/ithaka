@@ -187,13 +187,18 @@ services:
   # then switch DAVMAIL_AUTHENTICATION to O365Modern via .env); the refresh token
   # persists in the davmail-config volume across restarts.
   davmail:
-    image: docker.io/kran0/davmail-docker:6.8.1
+    # trunk i.p.v. 6.8.1: Graph-CalDAV NPE-fix (DateUtil null-tijdzone-guard) zit nog
+    # niet in een release; terug naar een release-tag zodra er een versie > 6.8.1 is.
+    image: docker.io/kran0/davmail-docker:trunk
     environment:
       - DAVMAIL_SERVER=true
       - DAVMAIL_MODE=${DAVMAIL_MODE:-O365EWS}
       - DAVMAIL_AUTHENTICATION=${DAVMAIL_AUTHENTICATION:-O365Modern}
       - DAVMAIL_ALLOWREMOTE=true
-      - "ADDITIONAL_PROPERTY_VALUES=davmail.oauth.persistToken=true\ndavmail.oauth.tenantId=${DAVMAIL_TENANT:-common}"
+      # enableOidc switches DavMail to the Microsoft identity platform v2.0
+      # endpoints - required for personal outlook.com accounts (AADSTS500201
+      # on v1 otherwise).
+      - "ADDITIONAL_PROPERTY_VALUES=davmail.oauth.persistToken=true\ndavmail.oauth.tenantId=${DAVMAIL_TENANT:-common}\ndavmail.enableOidc=${DAVMAIL_OIDC:-true}\ndavmail.enableGraph=${DAVMAIL_GRAPH:-true}"
     volumes:
       - davmail-config:/davmail-config
     restart: unless-stopped

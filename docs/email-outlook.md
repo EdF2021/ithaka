@@ -22,8 +22,12 @@ IMAP/SMTP/CalDAV on the compose network — no Entra app registration needed.
 
 The `davmail` service in `docker-compose.yml` (mirrored in
 `docker-compose.gpu-nvidia.yml` / `docker-compose.gpu-amd.yml`) runs
-`docker.io/kran0/davmail-docker:6.8.1`, reachable only from other containers
-as hostname `davmail`:
+`docker.io/kran0/davmail-docker:trunk`, reachable only from other containers
+as hostname `davmail`. (`trunk` instead of the 6.8.1 release: personal
+accounts run over DavMail's Graph backend, and 6.8.1 still crashes with a
+NullPointerException in `DateUtil.getExchangeTimeZone` on calendar events
+without a timezone; the null guard is only on master. Pin back to a release
+tag once something newer than 6.8.1 ships.)
 
 | Protocol | Port | Notes |
 | --- | --- | --- |
@@ -35,14 +39,23 @@ It's not published on a host port — only containers on the compose network
 (i.e. `ithaka`) can reach it. Key env vars, all overridable via `.env`:
 
 - `DAVMAIL_MODE` (default `O365EWS`) — the Exchange backend DavMail talks to.
-- `DAVMAIL_AUTHENTICATION` (default `O365Modern`) — the OAuth method. Set to
-  `O365DeviceCode` only for the one-time initial login (see below).
-- `DAVMAIL_TENANT` (default `common`) — set to `consumers` if you hit a
-  unified-consent error on a personal Microsoft account.
+- `DAVMAIL_AUTHENTICATION` (default `O365Modern`) — the OAuth method.
+  `O365Modern` uses the refresh token stored in the config volume.
+- `DAVMAIL_TENANT` (default `common`) — **set to `consumers` for a personal
+  outlook.com / hotmail account.** The `common` tenant rejects the EWS scope
+  for personal accounts (`invalid_scope`), and its device-code flow is broken
+  outright (see below).
+- `DAVMAIL_GRAPH` (default `true`) — sets `davmail.enableGraph=true` so
+  DavMail serves the mailbox through the Microsoft Graph API. Required for
+  personal accounts (their tokens carry Graph scopes; the EWS session refuses
+  them with "Found Graph stored token, incompatible with EWS").
+- `DAVMAIL_OIDC` (default `true`) — sets `davmail.enableOidc=true`, i.e. the
+  Microsoft identity platform v2.0 endpoints. Required for personal accounts
+  (v1 fails with AADSTS500201).
 
 The OAuth refresh token is written to the `davmail-config` volume
 (`davmail.oauth.persistToken=true`) and survives container restarts. Removing
-that volume means doing the device-code login again.
+that volume means doing the one-time login again.
 
 The `ithaka` service also gets `ITHAKA_ALLOW_PRIVATE_CALDAV=${ITHAKA_ALLOW_PRIVATE_CALDAV:-1}`,
 which allows CalDAV URLs pointing at the internal `davmail` hostname (Ithaka's
@@ -51,59 +64,60 @@ CalDAV client otherwise rejects private-network URLs as SSRF risk — see
 service; set it to `0` if you don't run it and want the SSRF guard back to
 strict.
 
-## One-time login
+## One-time login (personal accounts: authorization-code bootstrap)
 
-DavMail needs an interactive OAuth login the first time it connects to a
-mailbox. Do this once per Microsoft account:
+DavMail needs a refresh token the first time it connects to a mailbox.
 
-1. In `.env`, set:
+**Don't bother with `DAVMAIL_AUTHENTICATION=O365DeviceCode` for a personal
+account.** Microsoft's login.live.com layer rejects every completion of the
+device-code flow with a misleading "The code you entered has expired" — on
+any device, via Authenticator and via password, even while DavMail's polling
+shows the code is still valid server-side. (Verified 2026-08-29; likely an
+anti-phishing block on the MSA remoteconnect flow.)
+
+What does work is the plain OAuth authorization-code flow, done once by hand:
+
+1. Open this URL in a browser where you're (or can get) signed in to the
+   Microsoft account (all on one line; this is DavMail's own client id):
 
    ```
-   DAVMAIL_AUTHENTICATION=O365DeviceCode
+   https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=facd6cff-a294-4415-b59f-c5b01937d7bd&response_type=code&redirect_uri=https%3A%2F%2Flogin.microsoftonline.com%2Fcommon%2Foauth2%2Fnativeclient&response_mode=query&scope=openid%20profile%20offline_access%20Mail.ReadWrite%20Calendars.ReadWrite%20MailboxSettings.Read%20Mail.ReadWrite.Shared%20Contacts.ReadWrite%20Tasks.ReadWrite%20Mail.Send%20People.Read&login_hint=<your-email>
    ```
 
-2. Start (or restart) just the gateway:
+2. Sign in normally. You land on a blank `.../oauth2/nativeclient?code=...`
+   page — copy the `code=` value from the address bar **quickly** (the page
+   may bounce to a `/common/wrongplace` URL after a moment; if it does, just
+   reload the authorize URL — the signed-in session hands out a fresh code
+   without prompting).
+
+3. Exchange the code for tokens (from any shell; no client secret needed):
 
    ```bash
-   docker compose up -d davmail
+   curl -s -X POST https://login.microsoftonline.com/consumers/oauth2/v2.0/token \
+     -d client_id=facd6cff-a294-4415-b59f-c5b01937d7bd \
+     -d grant_type=authorization_code \
+     --data-urlencode "redirect_uri=https://login.microsoftonline.com/common/oauth2/nativeclient" \
+     --data-urlencode "code=<the code>"
    ```
 
-3. Trigger the flow by making any IMAP login attempt against it — easiest is
-   to add the Ithaka email account in Settings (see below) with your real
-   Microsoft address and your chosen local password, and let it try to
-   connect. You can also trigger it directly, e.g. `openssl s_client` or any
-   IMAP client pointed at `davmail:1143` from inside the compose network.
-
-4. Watch the logs for the device code and URL:
+4. Put the `refresh_token` from the JSON response into DavMail's config and
+   restart it:
 
    ```bash
-   docker compose logs -f davmail
+   docker exec ithaka-davmail-1 sh -c \
+     'printf "davmail.oauth.<your-email>.refreshToken=%s\n" "<refresh token>" >> /davmail-config/davmail.properties'
+   docker compose restart davmail
    ```
 
-   You'll see something like "To sign in, use a web browser to open the page
-   https://login.microsoftonline.com/... and enter the code XXXXXXXX".
+5. Make sure `.env` has `DAVMAIL_TENANT=consumers` (and no leftover
+   `DAVMAIL_AUTHENTICATION=O365DeviceCode` line), then test: an IMAP login
+   against `davmail:1143` with your email + local password should log
+   "Loaded stored token" followed by a successful refresh.
 
-5. Open that URL on any device, enter the code, and sign in with the
-   Microsoft account you're connecting.
-
-6. Once DavMail logs a successful token acquisition, switch back to normal
-   auth in `.env` — either set it explicitly or just remove the line (it
-   defaults to `O365Modern`):
-
-   ```
-   DAVMAIL_AUTHENTICATION=O365Modern
-   ```
-
-7. Apply the change:
-
-   ```bash
-   docker compose up -d davmail
-   ```
-
-From now on DavMail uses the persisted refresh token silently — no more
-interactive prompts, until the refresh token itself expires or is revoked
-(e.g. by Conditional Access, a password reset, or deleting the
-`davmail-config` volume).
+From then on DavMail refreshes and re-persists the (rotated, encrypted)
+token silently — no more interactive prompts, until the refresh token is
+revoked (password reset, security event, or deleting the `davmail-config`
+volume).
 
 ## The DavMail local password
 
@@ -143,13 +157,25 @@ with the same username and local password.
 
 ## Troubleshooting
 
+- **Device-code login keeps saying "The code you entered has expired"** —
+  not your fault and not fixable by being faster: Microsoft blocks the MSA
+  device-code completion. Use the authorization-code bootstrap above.
+- **`refresh token failed Found Graph stored token, incompatible with EWS`** —
+  the token has Graph scopes but DavMail built an EWS session. Make sure the
+  compose file sets `davmail.enableGraph=true` (env `DAVMAIL_GRAPH`, default
+  on) and restart davmail.
+- **CalDAV requests die with a 503 / `NullPointerException` in
+  `DateUtil.getExchangeTimeZone`** — you're on the 6.8.1 image; its Graph
+  calendar path crashes on events without a timezone. Use the `trunk` image
+  (see above).
 - **`O365Interactive not supported in headless mode`** — `DAVMAIL_AUTHENTICATION`
-  is still on an interactive method (or unset while a stale interactive value
-  lingers) with no way to open a browser inside the container. Set it to
-  `O365DeviceCode` for the initial login, then back to `O365Modern`.
+  is on an interactive method with no way to open a browser inside the
+  container. Set it (back) to `O365Modern`.
 - **Prompted to log in again after everything worked before** — the
   `davmail-config` volume was removed or recreated, so the refresh token is
-  gone. Redo the one-time device-code login above.
+  gone. Also possible: a *failed* login attempt makes DavMail blank the
+  stored `refreshToken=` value (the key stays, the value empties). Redo the
+  one-time bootstrap above.
 - **Login works interactively but Ithaka still can't connect** — check that
   every Ithaka field (IMAP, SMTP, CalDAV) uses the *same* local password;
   DavMail can't match a mismatched one to the cached token.
