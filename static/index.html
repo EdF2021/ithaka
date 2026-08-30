@@ -990,6 +990,10 @@
        around it. Panel bodies (#nbws-sources-body / #nbws-studio-body) start
        empty — Task 4 fills sources, Task 5 the session picker, Task 6 studio. -->
   <div id="nbws-root" aria-hidden="true">
+    <div id="nbws-hero" class="nbws-hero" style="display:none">
+      <div class="nbws-hero-overlay"></div>
+      <span id="nbws-hero-name" class="nbws-hero-name"></span>
+    </div>
     <div id="nbws-topbar" class="nbws-panel">
       <button type="button" id="nbws-back-btn" class="nbws-back-btn" title="Close workspace" aria-label="Close workspace"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg></button>
       <span id="nbws-notebook-name" class="nbws-notebook-name"></span>

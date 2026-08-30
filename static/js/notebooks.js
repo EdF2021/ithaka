@@ -148,6 +148,8 @@ const _ICONS = {
   archive: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg>',
   // lucide "archive-restore" — same box, arrow pointing back out, for unarchive.
   unarchive: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="m9 15 3-3 3 3"/><path d="M12 12v9"/></svg>',
+  // lucide "sparkles" — AI-generated cover image action.
+  sparkles: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>',
 };
 
 // ---- List view ----
@@ -156,9 +158,97 @@ const _ICONS = {
 // Module-local, no persistence — resets to "off" on a fresh page load.
 let _showArchived = false;
 
+// ---- Notebook banner icons ----
+// Map notebook-name keywords to a topical SVG + tint. Matches on lowercase
+// substrings (Dutch + English). Fallback: a deterministic geometric pattern
+// derived from the name hash, so every notebook gets a unique visual.
+const _BANNER_ICONS = {
+  research: { svg: '<circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6M4.22 4.22l4.24 4.24m7.08 7.08 4.24 4.24M1 12h6m10 0h6M4.22 19.78l4.24-4.24m7.08-7.08 4.24-4.24"/>', tint: 'var(--color-accent)' },
+  study: { svg: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>', tint: 'var(--green)' },
+  science: { svg: '<path d="M9 2v6l-5 9a2 2 0 0 0 2 3h8a2 2 0 0 0 2-3l-5-9V2"/><path d="M7 2h10"/>', tint: 'var(--color-accent)' },
+  wetenschap: { svg: '<path d="M9 2v6l-5 9a2 2 0 0 0 2 3h8a2 2 0 0 0 2-3l-5-9V2"/><path d="M7 2h10"/>', tint: 'var(--color-accent)' },
+  law: { svg: '<path d="M12 3v18"/><path d="M7 21h10"/><path d="M5 8l7-5 7 5"/><path d="M5 8v6a7 5 0 0 0 14 0V8"/>', tint: 'var(--red)' },
+  recht: { svg: '<path d="M12 3v18"/><path d="M7 21h10"/><path d="M5 8l7-5 7 5"/><path d="M5 8v6a7 5 0 0 0 14 0V8"/>', tint: 'var(--red)' },
+  medical: { svg: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/>', tint: 'var(--red)' },
+  medisch: { svg: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/>', tint: 'var(--red)' },
+  music: { svg: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', tint: 'var(--color-accent)' },
+  muziek: { svg: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', tint: 'var(--color-accent)' },
+  code: { svg: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', tint: 'var(--green)' },
+  programming: { svg: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>', tint: 'var(--green)' },
+  cook: { svg: '<path d="M6 13.87A4 4 0 0 1 7.41 6a5.59 5.59 0 0 1 1.96-1.21A5.59 5.59 0 0 1 12 4a5.59 5.59 0 0 1 2.63.79A5.59 5.59 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z"/><path d="M6 17h12"/>', tint: 'var(--green)' },
+  koken: { svg: '<path d="M6 13.87A4 4 0 0 1 7.41 6a5.59 5.59 0 0 1 1.96-1.21A5.59 5.59 0 0 1 12 4a5.59 5.59 0 0 1 2.63.79A5.59 5.59 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z"/><path d="M6 17h12"/>', tint: 'var(--green)' },
+  reizen: { svg: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>', tint: 'var(--color-accent)' },
+  travel: { svg: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>', tint: 'var(--color-accent)' },
+  finance: { svg: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>', tint: 'var(--green)' },
+  financie: { svg: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>', tint: 'var(--green)' },
+  geld: { svg: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>', tint: 'var(--green)' },
+  history: { svg: '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>', tint: 'var(--color-muted)' },
+  geschiedenis: { svg: '<path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/>', tint: 'var(--color-muted)' },
+  nature: { svg: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/>', tint: 'var(--green)' },
+  natuur: { svg: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/>', tint: 'var(--green)' },
+  art: { svg: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-4.96-4.49-9-10-9Z"/>', tint: 'var(--color-accent)' },
+  kunst: { svg: '<circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-4.96-4.49-9-10-9Z"/>', tint: 'var(--color-accent)' },
+  sport: { svg: '<circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l4.24 4.24"/><path d="M14.83 9.17l4.24-4.24"/><path d="M14.83 14.83l4.24 4.24"/><path d="M9.17 14.83l-4.24 4.24"/>', tint: 'var(--green)' },
+  business: { svg: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>', tint: 'var(--color-muted)' },
+  bedrijf: { svg: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>', tint: 'var(--color-muted)' },
+  werk: { svg: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>', tint: 'var(--color-muted)' },
+  language: { svg: '<path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/>', tint: 'var(--color-accent)' },
+  taal: { svg: '<path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/>', tint: 'var(--color-accent)' },
+  philosophy: { svg: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>', tint: 'var(--color-muted)' },
+  filosofie: { svg: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>', tint: 'var(--color-muted)' },
+  religion: { svg: '<path d="M12 2v20"/><path d="M5 8h14"/>', tint: 'var(--color-muted)' },
+  religie: { svg: '<path d="M12 2v20"/><path d="M5 8h14"/>', tint: 'var(--color-muted)' },
+  godsdienst: { svg: '<path d="M12 2v20"/><path d="M5 8h14"/>', tint: 'var(--color-muted)' },
+  tech: { svg: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>', tint: 'var(--green)' },
+  technologie: { svg: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>', tint: 'var(--green)' },
+  math: { svg: '<path d="M4 4h16v16H4z" opacity=".3"/><path d="M8 8l8 8M16 8l-8 8"/>', tint: 'var(--color-accent)' },
+  wiskunde: { svg: '<path d="M4 4h16v16H4z" opacity=".3"/><path d="M8 8l8 8M16 8l-8 8"/>', tint: 'var(--color-accent)' },
+  psychology: { svg: '<path d="M12 2a3 3 0 0 1 3 3c0 1.5-1 2.5-1 4s1 2.5 1 4a3 3 0 0 1-6 0c0-1.5 1-2.5 1-4s-1-2.5-1-4a3 3 0 0 1 3-3Z"/><path d="M12 22v-6"/>', tint: 'var(--color-accent)' },
+  psychologie: { svg: '<path d="M12 2a3 3 0 0 1 3 3c0 1.5-1 2.5-1 4s1 2.5 1 4a3 3 0 0 1-6 0c0-1.5 1-2.5 1-4s-1-2.5-1-4a3 3 0 0 1 3-3Z"/><path d="M12 22v-6"/>', tint: 'var(--color-accent)' },
+  email: { svg: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>', tint: 'var(--color-muted)' },
+  mail: { svg: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/>', tint: 'var(--color-muted)' },
+  ai: { svg: '<path d="M12 2a4 4 0 0 1 4 4 4 4 0 0 1 0 8 4 4 0 0 1-8 0 4 4 0 0 1 0-8 4 4 0 0 1 4-4Z"/><path d="M12 14v8"/>', tint: 'var(--color-accent)' },
+  book: { svg: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>', tint: 'var(--green)' },
+  boek: { svg: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>', tint: 'var(--green)' },
+  health: { svg: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/>', tint: 'var(--red)' },
+  gezondheid: { svg: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7Z"/>', tint: 'var(--red)' },
+  politic: { svg: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>', tint: 'var(--red)' },
+  politiek: { svg: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>', tint: 'var(--red)' },
+};
+
+/** Deterministic geometric fallback pattern from a name hash. Produces a
+ *  unique-ish SVG so unrecognised names still get a distinct visual. */
+function _fallbackBanner(name) {
+  let h = 0;
+  const s = String(name || '');
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  const n = Math.abs(h);
+  const cx = 20 + (n % 60);
+  const r = 10 + (n % 20);
+  const rot = n % 360;
+  const tint = n % 2 ? 'var(--color-accent)' : 'var(--green)';
+  const svg = `<circle cx="${cx}" cy="20" r="${r}" fill="none" stroke-width="1.5"/><circle cx="${100 - cx}" cy="40" r="${r * 0.6}" fill="none" stroke-width="1"/><rect x="10" y="10" width="80" height="40" fill="none" stroke-width="0.5" transform="rotate(${rot} 50 30)"/>`;
+  return { svg, tint };
+}
+
+function _bannerForNotebook(nb) {
+  const name = String(nb.name || '').toLowerCase();
+  for (const [kw, icon] of Object.entries(_BANNER_ICONS)) {
+    if (name.includes(kw)) return icon;
+  }
+  return _fallbackBanner(nb.name);
+}
+
 function _notebookCard(nb) {
   const desc = (nb.description || '').trim();
   const archived = !!nb.archived;
+  const banner = _bannerForNotebook(nb);
+  const coverUrl = nb.cover_image ? `${API_BASE}/api/notebook-cover/${encodeURIComponent(nb.cover_image)}` : '';
+  const bannerHtml = coverUrl
+    ? `<div class="notebook-card-banner notebook-card-banner-photo" style="background-image:url('${coverUrl}')"></div>`
+    : `<div class="notebook-card-banner" style="--banner-tint:${banner.tint}">
+         <svg width="48" height="48" viewBox="0 0 100 60" fill="none" stroke="${banner.tint}" stroke-linecap="round" stroke-linejoin="round">${banner.svg}</svg>
+       </div>`;
   // Non-destructive toggle: a single click, no _armConfirm two-step (that
   // pattern is for delete, per the file header's doc comment).
   const archiveBtn = archived
@@ -168,6 +258,7 @@ function _notebookCard(nb) {
                title="Archive notebook">${_ICONS.archive}<span>Archive</span></button>`;
   return `
     <div class="dashboard-card dashboard-card-clickable notebook-card${archived ? ' notebook-card-archived' : ''}" data-nb-id="${_esc(nb.id)}">
+      ${bannerHtml}
       <div class="dashboard-card-title">${_ICONS.notebookSmall}<span class="notebook-card-name">${_esc(nb.name || '(untitled)')}</span></div>
       <div class="dashboard-card-body">
         <div class="dashboard-row-sub notebook-card-desc">${desc ? _esc(desc) : ''}</div>
@@ -175,6 +266,8 @@ function _notebookCard(nb) {
           <span class="dashboard-row-sub notebook-card-count" data-count-for="${_esc(nb.id)}">&hellip;</span>
           <span class="dashboard-row-sub">${_esc(_shortDate(nb.created_at))}</span>
           <span style="flex:1"></span>
+          <button type="button" class="notebook-cover-btn" data-nb-id="${_esc(nb.id)}"
+                  title="Genereer AI cover-afbeelding">${_ICONS.sparkles}<span>Cover</span></button>
           ${archiveBtn}
           <button type="button" class="notebook-del-btn" data-nb-id="${_esc(nb.id)}"
                   title="Delete notebook">${_ICONS.trash}<span>Delete</span></button>
@@ -260,6 +353,12 @@ async function _renderNotebookGrid() {
       _toggleArchived(btn.dataset.nbId, btn.dataset.archived !== '1');
     });
   });
+  grid.querySelectorAll('.notebook-cover-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _startCoverGen(btn.dataset.nbId, btn);
+    });
+  });
 
   _loadCounts(notebooks);
 }
@@ -285,6 +384,57 @@ async function _toggleArchived(id, archived) {
     return;
   }
   _renderNotebookGrid();
+}
+
+async function _startCoverGen(id, btn) {
+  if (btn) {
+    btn.disabled = true;
+    const span = btn.querySelector('span');
+    if (span) span.textContent = 'Genereren...';
+  }
+  let jobId;
+  try {
+    const data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(id)}/cover-image`, { method: 'POST' });
+    jobId = data.job_id;
+  } catch (e) {
+    _showError('notebook-list-error', `Cover-generatie mislukt (${e.message})`);
+    if (btn) { btn.disabled = false; const s = btn.querySelector('span'); if (s) s.textContent = 'Cover'; }
+    return;
+  }
+  _pollCoverJob(id, jobId, btn);
+}
+
+async function _pollCoverJob(notebookId, jobId, btn) {
+  const timeoutMs = 300000; // 5 min — matches server-side JOB_TIMEOUT_SECONDS
+  const start = Date.now();
+  const interval = 3000;
+  async function tick() {
+    if (Date.now() - start > timeoutMs) {
+      _showError('notebook-list-error', 'Cover-generatie time-out');
+      if (btn) { btn.disabled = false; const s = btn.querySelector('span'); if (s) s.textContent = 'Cover'; }
+      return;
+    }
+    let data;
+    try {
+      data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(notebookId)}/cover-image/${encodeURIComponent(jobId)}`);
+    } catch (e) {
+      // 404 = job gone (server restart). Treat as error, re-enable button.
+      _showError('notebook-list-error', 'Cover-generatie status onbekend (server herstart?)');
+      if (btn) { btn.disabled = false; const s = btn.querySelector('span'); if (s) s.textContent = 'Cover'; }
+      return;
+    }
+    if (data.status === 'done') {
+      await _renderNotebookGrid();
+      return;
+    }
+    if (data.status === 'error') {
+      _showError('notebook-list-error', `Cover-generatie mislukt (${data.error || 'onbekende fout'})`);
+      if (btn) { btn.disabled = false; const s = btn.querySelector('span'); if (s) s.textContent = 'Cover'; }
+      return;
+    }
+    setTimeout(tick, interval);
+  }
+  setTimeout(tick, interval);
 }
 
 async function _createNotebook() {

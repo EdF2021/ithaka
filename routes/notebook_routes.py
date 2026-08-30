@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 import src.notebook_audio as notebook_audio
 import src.notebook_video as notebook_video
+import src.notebook_covers as notebook_covers
 from core.database import Document, SessionLocal, Notebook, NotebookArtifact, NotebookSource
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
@@ -24,6 +25,11 @@ from src.notebook_audio import (
     resolve_notebook_audio_path,
     set_synthesizer,
     start_podcast_job,
+)
+from src.notebook_covers import (
+    COVER_IMAGE_HEADERS,
+    resolve_cover_image_path,
+    start_cover_job,
 )
 from src.notebook_flashcards import generate_flashcards
 from src.notebook_infographic import generate_infographic
@@ -212,6 +218,13 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 nb.description = description
             if "archived" in body:
                 nb.archived = bool(body.get("archived"))
+            if "cover_image" in body:
+                cover = body.get("cover_image")
+                if cover is not None and not isinstance(cover, str):
+                    raise HTTPException(
+                        status_code=400, detail="cover_image must be a string"
+                    )
+                nb.cover_image = cover
             db_session.commit()
             db_session.refresh(nb)
             return nb.to_dict()
@@ -373,7 +386,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             {"title": r.get("title") or r.get("url"), "url": r.get("url"),
              "snippet": (r.get("snippet") or "")[:300]}
             for r in (results or []) if r.get("url")
-        ][:8]
+        ][:10]
         return {"results": slim}
 
     # ---- DELETE /api/notebooks/{id}/sources/{source_id} ----
@@ -814,5 +827,67 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             str(path), media_type="video/mp4",
             headers=notebook_video.NOTEBOOK_VIDEO_HEADERS,
         )
+
+    # ---- POST /api/notebooks/{id}/cover-image ----
+    @router.post("/api/notebooks/{notebook_id}/cover-image")
+    async def create_cover_image(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+
+        try:
+            job_id = start_cover_job(notebook_id, user)
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if "niet gevonden" in detail else 409
+            raise HTTPException(status_code=status_code, detail=detail)
+        return {"job_id": job_id, "status": "running"}
+
+    # ---- GET /api/notebooks/{id}/cover-image/{job_id} ----
+    @router.get("/api/notebooks/{notebook_id}/cover-image/{job_id}")
+    async def get_cover_image_status(request: Request, notebook_id: str, job_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            _get_owned_notebook(db_session, notebook_id, user)
+        finally:
+            db_session.close()
+
+        job = notebook_covers.get_job(job_id, user)
+        if job is None or job.get("notebook_id") != notebook_id:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        return {
+            "status": job.get("status"),
+            "error": job.get("error"),
+            "cover_image": job.get("cover_image"),
+        }
+
+    # ---- GET /api/notebook-cover/{filename} ----
+    @router.get("/api/notebook-cover/{filename}")
+    async def serve_notebook_cover(request: Request, filename: str):
+        user = get_current_user(request)
+        path = resolve_cover_image_path(filename)
+        db_session = SessionLocal()
+        try:
+            row = (
+                db_session.query(Notebook.owner)
+                .filter(Notebook.cover_image == filename)
+                .first()
+            )
+            if row is None or row[0] != user:
+                raise HTTPException(status_code=404, detail="Cover image not found")
+        finally:
+            db_session.close()
+
+        ext = filename.rsplit(".", 1)[-1].lower()
+        mime = {
+            "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "webp": "image/webp",
+        }.get(ext, "application/octet-stream")
+        return FileResponse(str(path), media_type=mime, headers=COVER_IMAGE_HEADERS)
 
     return router

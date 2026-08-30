@@ -790,6 +790,9 @@ def _migrate_add_notebook_artifact_audio_path_column():
 def _migrate_add_notebook_source_url_column():
     _add_column_if_missing('notebook_sources', 'url', 'VARCHAR')
 
+def _migrate_add_notebook_cover_image_column():
+    _add_column_if_missing('notebooks', 'cover_image', 'VARCHAR')
+
 
 def _migrate_add_notebook_artifact_video_path_column():
     _add_column_if_missing('notebook_artifacts', 'video_path', 'VARCHAR')
@@ -1514,6 +1517,9 @@ class Notebook(TimestampMixin, Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     archived = Column(Boolean, default=False, nullable=False)
+    # Filename (uuid4-hex + extension) of an AI-generated cover image stored
+    # in NOTEBOOK_COVERS_DIR. Null = no cover yet (card shows SVG fallback).
+    cover_image = Column(String, nullable=True)
     sources = relationship("NotebookSource", cascade="all, delete-orphan",
                            backref="notebook")
     artifacts = relationship("NotebookArtifact", cascade="all, delete-orphan",
@@ -1523,6 +1529,7 @@ class Notebook(TimestampMixin, Base):
         return {
             "id": self.id, "owner": self.owner, "name": self.name,
             "description": self.description, "archived": bool(self.archived),
+            "cover_image": self.cover_image,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -1761,6 +1768,7 @@ def init_db():
     _migrate_add_notebook_artifact_title_column()
     _migrate_add_notebook_artifact_video_path_column()
     _migrate_add_notebook_source_url_column()
+    _migrate_add_notebook_cover_image_column()
     _migrate_add_last_message_at_column()
     _migrate_add_folder_column()
     _migrate_add_token_columns()
