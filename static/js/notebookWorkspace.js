@@ -1213,11 +1213,16 @@ async function _generateArtifact(kind, btn) {
   if (label) label.textContent = 'Generating…';
   _showArtifactError('');
   const epoch = _openEpoch;
+  const payload = { kind };
+  if (kind === 'mindmap') {
+    const focusInput = document.getElementById('nbws-mindmap-focus');
+    if (focusInput && focusInput.value.trim()) payload.focus = focusInput.value.trim();
+  }
   try {
     await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind }),
+      body: JSON.stringify(payload),
     });
     if (epoch === _openEpoch) await _loadArtifacts();
   } catch (e) {
@@ -1589,6 +1594,11 @@ function _studioPanelSkeleton() {
         ${ARTIFACT_KINDS.map(kind => `<button type="button" class="nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}"
                 data-kind="${_esc(kind)}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
       </div>
+      <div class="nbws-mindmap-focus-wrap" id="nbws-mindmap-focus-wrap">
+        <input type="text" id="nbws-mindmap-focus" class="nbws-mindmap-focus-input"
+               placeholder="Focus mindmap op onderwerp…" maxlength="200" />
+        <span class="nbws-mindmap-focus-hint">Optioneel — laat leeg voor een algemene mindmap</span>
+      </div>
     </div>
     <div class="nbws-studio-section nbws-studio-files">
       <div class="nbws-studio-section-head">Files</div>
@@ -1613,6 +1623,23 @@ function _wireStudioPanel() {
   });
   document.getElementById('nbws-podcast-btn')?.addEventListener('click', (e) => _generatePodcast(e.currentTarget));
   document.getElementById('nbws-video-btn')?.addEventListener('click', (e) => _generateVideo(e.currentTarget));
+
+  window.addEventListener('message', _handleMindmapNodeClick);
+}
+
+function _handleMindmapNodeClick(e) {
+  if (!e.data || e.data.type !== 'nbws-mindmap-node-click') return;
+  const label = e.data.label;
+  if (!label) return;
+  _closeArtifactViewer();
+  closeNotebookWorkspace();
+  const msg = `Geef een samenvatting en uitleg over "${label}" op basis van de bronnen van dit notebook.`;
+  const msgInput = document.getElementById('message');
+  if (!msgInput) return;
+  msgInput.value = msg;
+  msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+  const form = document.getElementById('chat-form');
+  if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
 }
 
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks

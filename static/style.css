@@ -41231,6 +41231,33 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .nbws-tile--data_table { --nbws-tile-accent: var(--color-brand-blue); }
 .nbws-tile--study_guide { --nbws-tile-accent: var(--red); }
 .nbws-tile--faq { --nbws-tile-accent: var(--accent-warm); }
+
+/* Mindmap focus input — shown only for mindmap generation */
+.nbws-mindmap-focus-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+}
+.nbws-mindmap-focus-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+.nbws-mindmap-focus-input:focus {
+  outline: none;
+  border-color: var(--accent-warm);
+}
+.nbws-mindmap-focus-hint {
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
 .notebook-artifact-item {
   display: flex;
   flex-wrap: wrap;

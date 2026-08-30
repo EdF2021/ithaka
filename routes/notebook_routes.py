@@ -440,6 +440,9 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         except Exception:
             body = None
         kind = body.get("kind") if isinstance(body, dict) else None
+        focus = body.get("focus") if isinstance(body, dict) else None
+        if focus is not None and not isinstance(focus, str):
+            raise HTTPException(status_code=400, detail="focus moet een string zijn")
         # ARTIFACT_KINDS is a dict, so an unhashable `kind` (a list or dict
         # from the request body) raises TypeError on the membership test
         # below — a 500 where the client sent bad input. Same isinstance
@@ -458,7 +461,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # route to have checked ownership first.
             _get_owned_notebook(db_session, notebook_id, user)
             try:
-                artifact = await generate_artifact(notebook_id, user, kind, db_session)
+                artifact = await generate_artifact(notebook_id, user, kind, db_session, focus=focus)
             except HTTPException:
                 # Not raised by generate_artifact today, but this keeps a
                 # future refactor from having HTTPException fall through

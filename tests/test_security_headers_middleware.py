@@ -84,7 +84,7 @@ def test_notebook_artifact_report_gets_relaxed_report_csp():
     response = _client().get("/api/notebooks/nb1/artifacts/art1/report")
 
     csp = response.headers["content-security-policy"]
-    assert "script-src 'self' 'unsafe-inline'" in csp
+    assert "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net" in csp
     assert "frame-ancestors 'self'" in csp
     assert response.headers.get("x-frame-options") == "SAMEORIGIN"
 
