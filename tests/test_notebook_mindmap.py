@@ -94,7 +94,7 @@ def test_viewer_renders_clickable_tree():
     out = generate_mindmap_viewer("Eigen titel", _VALID_MINDMAP_MD, "NB", datetime(2026, 8, 23))
     assert "SamenWijzer" in out and "Pijnpunten" in out
     assert "mm-node" in out          # klikbare knoop-knoppen
-    assert "mm-children" in out      # in/uitklapbare subbomen
+    assert "mm-edge" in out          # verbindingen tussen knopen
     assert "Alles uitklappen" in out and "Alles inklappen" in out
 
 

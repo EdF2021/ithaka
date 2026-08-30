@@ -69,13 +69,21 @@ _TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
-  :root {{ --bg:#16181d; --fg:#e6e6e6; --panel:#1f2229; --border:#3a3f4b; --accent:#e06c75; }}
-  * {{ box-sizing: border-box; }}
+  :root {{
+    --bg:#fbf9f4; --fg:#1a1817; --panel:#ffffff; --border:rgba(0,0,0,0.08);
+    --accent:#b8543a; --accent-light:#d97a5e; --accent-bg:rgba(184,84,58,0.06);
+    --font-display:'Charter','Iowan Old Style',Georgia,serif;
+    --font-body:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  }}
+  * {{ box-sizing:border-box; }}
   body {{ margin:0; background:var(--bg); color:var(--fg);
-         font-family:'Fira Code','Cascadia Code',ui-monospace,monospace; padding:24px; }}
-  header {{ max-width:960px; margin:0 auto 20px; }}
-  h1 {{ font-size:22px; margin:0 0 4px; }}
-  .fc-meta {{ font-size:12px; opacity:.7; }}
+         font-family:var(--font-body); padding:24px; }}
+  header {{ max-width:960px; margin:0 auto 20px; text-align:center; }}
+  .fc-eyebrow {{ text-transform:uppercase; letter-spacing:0.22em; font-size:0.68rem;
+                 font-weight:600; color:var(--accent); margin-bottom:0.6rem; }}
+  h1 {{ font-family:var(--font-display); font-size:clamp(1.3rem,3.5vw,1.8rem);
+       margin:0 0 4px; font-weight:700; letter-spacing:-0.01em; }}
+  .fc-meta {{ font-size:12px; color:#8a8580; }}
   .fc-grid {{ max-width:960px; margin:0 auto; display:grid;
               grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }}
   .fc-card {{ position:relative; min-height:150px; cursor:pointer; perspective:900px; }}
@@ -83,20 +91,29 @@ _TEMPLATE = """<!doctype html>
   .fc-card.flipped .fc-inner {{ transform:rotateY(180deg); }}
   .fc-face {{ position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center;
               padding:16px; border:1px solid var(--border); border-radius:10px;
-              background:var(--panel); backface-visibility:hidden; overflow-y:auto; }}
+              background:var(--panel); backface-visibility:hidden; overflow-y:auto;
+              box-shadow:0 1px 3px rgba(0,0,0,0.05); }}
   .fc-front {{ font-weight:600; }}
+  .fc-front::before {{ content:""; position:absolute; top:0; left:0; right:0; height:3px;
+                       background:var(--accent); border-radius:10px 10px 0 0; }}
   .fc-front::after {{ content:""; position:absolute; left:16px; right:16px; bottom:10px;
-                      border-bottom:2px solid var(--accent); opacity:.6; }}
+                      border-bottom:2px solid var(--accent); opacity:.4; }}
   .fc-back {{ transform:rotateY(180deg); font-size:13px; }}
+  .fc-back::before {{ content:""; position:absolute; top:0; left:0; right:0; height:3px;
+                      background:var(--accent-light); border-radius:10px 10px 0 0; }}
   .fc-back p {{ margin:0 0 8px; }}
-  .fc-hint {{ max-width:960px; margin:0 auto 14px; font-size:12px; opacity:.7; }}
-  .fc-empty {{ max-width:960px; margin:40px auto; opacity:.7; }}
-  footer {{ max-width:960px; margin:28px auto 0; font-size:11px; opacity:.55; }}
+  .fc-hint {{ max-width:960px; margin:0 auto 14px; font-size:12px;
+              color:#5a5651; text-align:center; }}
+  .fc-empty {{ max-width:960px; margin:40px auto; color:#5a5651; }}
+  footer {{ max-width:960px; margin:28px auto 0; font-size:11px;
+             color:#8a8580; text-align:center;
+             border-top:1px solid var(--border); padding-top:1rem; }}
   @media (max-width:480px) {{ body {{ padding:12px; }} }}
 </style>
 </head>
 <body>
 <header>
+  <div class="fc-eyebrow">Ithaka &mdash; Flashcards</div>
   <h1>{title}</h1>
   <div class="fc-meta">{notebook_name} &middot; {count_label} &middot; {date}</div>
 </header>

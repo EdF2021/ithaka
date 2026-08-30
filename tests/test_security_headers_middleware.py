@@ -79,12 +79,14 @@ def test_notebook_artifact_report_gets_relaxed_report_csp():
     """The notebook-artifact visual report reuses src/visual_report.py's
     self-contained template (inline scripts + toolbar), same as
     /api/research/report/<id>, so it needs the same relaxed CSP rather than
-    the app-wide nonce-only default."""
+    the app-wide nonce-only default. The report is now embedded in an
+    in-panel iframe (same origin), so frame-ancestors must be 'self'."""
     response = _client().get("/api/notebooks/nb1/artifacts/art1/report")
 
     csp = response.headers["content-security-policy"]
     assert "script-src 'self' 'unsafe-inline'" in csp
-    assert "frame-ancestors 'none'" in csp
+    assert "frame-ancestors 'self'" in csp
+    assert response.headers.get("x-frame-options") == "SAMEORIGIN"
 
 
 def test_notebook_sources_keeps_default_strict_csp():

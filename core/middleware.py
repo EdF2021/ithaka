@@ -97,6 +97,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
         if is_report:
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self' 'unsafe-inline'; "
@@ -104,7 +105,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "font-src 'self'; "
                 "img-src 'self' data: blob: https:; "
                 "connect-src 'self'; "
-                "frame-ancestors 'none'"
+                "frame-ancestors 'self'"
             )
         elif is_tool_render:
             # Skip framing headers for tools.

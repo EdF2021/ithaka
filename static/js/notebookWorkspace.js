@@ -1464,6 +1464,9 @@ async function _generateVideo(btn) {
 
 // Same close-hook reasoning as the podcast poll above.
 registerCloseHook(_stopVideoPoll);
+// Same reasoning: close the in-panel artifact viewer so no stale iframe
+// persists across a workspace close/reopen.
+registerCloseHook(_closeArtifactViewer);
 
 /**
  * Open a generated artifact in the document viewer, as an overlay ABOVE the
@@ -1510,10 +1513,53 @@ function _openArtifactReport(row) {
   if (!_state.notebook) return;
   const artId = row.dataset.artId;
   if (!artId) return;
-  window.open(
-    `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artId)}/report`,
-    '_blank'
-  );
+  // Relative URL so it works regardless of how the app is reached
+  // (Tailscale serve, localhost, etc.) — same origin as the page itself.
+  const url = `/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artId)}/report`;
+  _showArtifactViewer(url, row.dataset.kind);
+}
+
+/** Show the artifact report in an in-panel iframe, hiding the Generate/Files
+ *  sections. A back button restores the studio panel. The iframe takes the
+ *  full studio body height. */
+function _showArtifactViewer(url, kind) {
+  const body = document.getElementById('nbws-studio-body');
+  if (!body) return;
+  // Hide the generate+files sections
+  const sections = body.querySelectorAll('.nbws-studio-section');
+  sections.forEach(s => s.style.display = 'none');
+  // Remove any existing viewer
+  const old = document.getElementById('nbws-artifact-viewer');
+  if (old) old.remove();
+  // Build the viewer chrome
+  const viewer = document.createElement('div');
+  viewer.id = 'nbws-artifact-viewer';
+  viewer.className = 'nbws-artifact-viewer';
+  const kindLabel = KIND_LABELS[kind] || 'Artifact';
+  viewer.innerHTML = `
+    <div class="nbws-artifact-viewer-bar">
+      <button type="button" class="nbws-artifact-viewer-back" id="nbws-artifact-viewer-back" title="Back to studio">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+        <span>Studio</span>
+      </button>
+      <span class="nbws-artifact-viewer-kind">${_esc(kindLabel)}</span>
+    </div>
+    <iframe class="nbws-artifact-viewer-frame" src="${_esc(url)}" title="${_esc(kindLabel)}"></iframe>`;
+  body.appendChild(viewer);
+  viewer.querySelector('#nbws-artifact-viewer-back')?.addEventListener('click', _closeArtifactViewer);
+  document.getElementById('nbws-studio')?.classList.add('nbws-artifact-viewer-active');
+}
+
+/** Restore the studio panel's Generate + Files sections, removing the
+ *  in-panel iframe viewer. Called from the back button and on workspace
+ *  close so no stale iframe persists. */
+function _closeArtifactViewer() {
+  const body = document.getElementById('nbws-studio-body');
+  if (!body) return;
+  const viewer = document.getElementById('nbws-artifact-viewer');
+  if (viewer) viewer.remove();
+  body.querySelectorAll('.nbws-studio-section').forEach(s => s.style.display = '');
+  document.getElementById('nbws-studio')?.classList.remove('nbws-artifact-viewer-active');
 }
 
 // Two visually distinct sections (Task B): "Generate" is the row of action
@@ -1644,6 +1690,27 @@ async function _openImpl(nb) {
   const nameEl = document.getElementById('nbws-notebook-name');
   if (nameEl) nameEl.textContent = nb.name || '(untitled)';
 
+  // Hero banner: show the AI-generated cover image full-width with the
+  // notebook name overlaid. Falls back to hidden when no cover exists.
+  const hero = document.getElementById('nbws-hero');
+  const heroName = document.getElementById('nbws-hero-name');
+  if (hero && heroName) {
+    const coverUrl = nb.cover_image
+      ? `${window.location.origin}/api/notebook-cover/${encodeURIComponent(nb.cover_image)}`
+      : '';
+    if (coverUrl) {
+      hero.style.backgroundImage = `url('${coverUrl}')`;
+      hero.style.display = '';
+      heroName.textContent = nb.name || '(untitled)';
+      const mobile = window.matchMedia('(max-width: 768px)').matches;
+      root.style.setProperty('--nbws-hero-h', mobile ? '70px' : '90px');
+    } else {
+      hero.style.backgroundImage = '';
+      hero.style.display = 'none';
+      root.style.setProperty('--nbws-hero-h', '0px');
+    }
+  }
+
   _clearChips();
   _wireSessionSelect();
   _populateSessionSelect();
@@ -1688,14 +1755,12 @@ export function closeNotebookWorkspace() {
   );
   const root = _root();
   if (root) {
-    // A collapse/back button inside #nbws-root can still hold focus at this
-    // point (e.g. the button that was just clicked to trigger this close) —
-    // setting aria-hidden on an ancestor of the focused element is invalid
-    // (browsers log a warning and refuse to apply it), so drop focus out of
-    // the subtree first.
     if (root.contains(document.activeElement)) document.activeElement.blur();
     root.setAttribute('aria-hidden', 'true');
+    root.style.setProperty('--nbws-hero-h', '0px');
   }
+  const hero = document.getElementById('nbws-hero');
+  if (hero) { hero.style.display = 'none'; hero.style.backgroundImage = ''; }
   _resetPanel('sources');
   _resetPanel('studio');
   document.body.classList.remove(
