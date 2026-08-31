@@ -78,4 +78,7 @@ def generate_notebook_artifact_report(
         session_id=None,
         report_type_label=f"Notebook {kind_label}",
         generated_by_label="Ithaka Notebooks",
+        # Notebook viewers render always-light, matching the dedicated
+        # mindmap/flashcards/slides/infographic templates.
+        force_light=True,
     )

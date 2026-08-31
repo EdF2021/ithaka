@@ -156,6 +156,17 @@ def test_parser_malformed_stat_bullet_without_bold_degrades_gracefully():
 
 # ---- renderer (pure) ----------------------------------------------------
 
+def test_renderer_forces_light_theme():
+    # All notebook viewers render light regardless of the OS/browser dark
+    # preference (matching mindmap/flashcards/slides); print keeps its own
+    # forced-light block.
+    html_out = generate_infographic(
+        title="fallback", markdown=_FULL_MD, notebook_name="My Notebook",
+        generated_at=datetime(2026, 8, 20),
+    )
+    assert "prefers-color-scheme" not in html_out
+
+
 def test_renderer_full_structure_has_stat_cards():
     html_out = generate_infographic(
         title="fallback", markdown=_FULL_MD, notebook_name="My Notebook",
