@@ -232,7 +232,41 @@ def test_renderer_single_leftover_card_spans_full_width():
         title=None, markdown="- a loose bullet",
         notebook_name="NB", generated_at=datetime(2026, 8, 20),
     )
-    assert 'class="ig-sections-grid ig-single-card"' in html_out
+    assert 'ig-single' in html_out
+
+
+def test_renderer_poster_layout_three_zones():
+    # NotebookLM-style poster: landscape three-zone grid with section
+    # panels left/right and a central hero + capacity bars.
+    html_out = generate_infographic(
+        title="T", markdown=_FULL_MD, notebook_name="NB",
+        generated_at=datetime(2026, 8, 20),
+    )
+    assert 'class="ig-grid"' in html_out
+    assert 'ig-col-left' in html_out
+    assert 'ig-col-right' in html_out
+    assert 'ig-center' in html_out
+    assert 'ig-hero-art' in html_out
+
+
+def test_renderer_sections_get_icon_circles():
+    html_out = generate_infographic(
+        title="T", markdown=_FULL_MD, notebook_name="NB",
+        generated_at=datetime(2026, 8, 20),
+    )
+    # every section panel carries an inline-SVG icon in a tinted circle
+    assert html_out.count('class="ig-icon"') >= 2
+    assert "<svg" in html_out
+
+
+def test_renderer_stats_render_as_capacity_bars():
+    html_out = generate_infographic(
+        title="T", markdown=_FULL_MD, notebook_name="NB",
+        generated_at=datetime(2026, 8, 20),
+    )
+    assert 'ig-bar-track' in html_out
+    assert 'ig-bar-fill' in html_out
+    assert "42%" in html_out
 
 
 def test_renderer_has_no_external_resources():
