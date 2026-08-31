@@ -3,6 +3,7 @@
 
 import io
 import logging
+import re
 import httpx
 import tempfile
 from pathlib import Path
@@ -44,6 +45,45 @@ def normalize_stt_language(language: str) -> str:
         return lang
     logger.warning("Unrecognized STT language %r — falling back to auto-detect", language)
     return ""
+
+
+# Whisper (every size, every provider) was trained on YouTube subtitles and,
+# when fed silence or non-speech noise, hallucinates the credit lines that
+# closed those subtitle files — "Ondertiteld door de Amara.org gemeenschap",
+# "Thanks for watching", ZDF-credits, etc. In continuous voice mode such a
+# phantom transcript auto-sends as a chat message. Strip the known phrases;
+# a transcript that consists only of them collapses to "" (the voice-mode
+# client ignores empty input). The local provider additionally suppresses
+# the trigger at the source via faster-whisper's built-in VAD filter.
+_HALLUCINATION_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"ondertitel(s|d|ing)?( ingediend)?( door)? de amara\.org gemeenschap",
+        r"subtitles by the amara\.org community",
+        r"sous-titres r[ée]alis[ée]s? .{0,20}la communaut[ée] d'amara\.org",
+        r"untertitel(ung)?( im auftrag)? des zdf f[üu]r funk,? ?\d{0,4}",
+        r"thank(s| you) for watching[.!]?",
+    )
+]
+
+
+def strip_stt_hallucinations(text: Optional[str]) -> str:
+    """Remove known Whisper silence-hallucination phrases from a transcript.
+
+    Returns "" when nothing meaningful remains, so callers (and the
+    voice-mode auto-send) treat the result as an empty transcription.
+    """
+    if not text:
+        return ""
+    out = text
+    for pat in _HALLUCINATION_PATTERNS:
+        out = pat.sub("", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    # A removal can leave dangling separators or bare punctuation behind.
+    out = out.strip(" \t\n-–—")
+    if not re.search(r"\w", out):
+        return ""
+    return out
 
 
 class STTService:
@@ -133,12 +173,18 @@ class STTService:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
-            kwargs = {}
+            # Silero-VAD keeps silence/noise out of the model — the main
+            # trigger for subtitle-credit hallucinations (see
+            # strip_stt_hallucinations above, which catches what slips by).
+            kwargs = {"vad_filter": True}
             if language:
                 kwargs["language"] = language
 
             segments, info = model.transcribe(tmp_path, **kwargs)
-            text = " ".join(seg.text.strip() for seg in segments)
+            raw = " ".join(seg.text.strip() for seg in segments)
+            text = strip_stt_hallucinations(raw)
+            if text != raw.strip():
+                logger.info("STT hallucination filter stripped subtitle-credit artifact from transcript")
 
             logger.info(f"Local STT: {len(text)} chars, lang={info.language}, prob={info.language_probability:.2f}")
             return text
@@ -179,7 +225,10 @@ class STTService:
             r = httpx.post(url, headers=headers, files=files, data=data, timeout=60)
             r.raise_for_status()
             result = r.json()
-            text = result.get("text", "")
+            raw = result.get("text", "")
+            text = strip_stt_hallucinations(raw)
+            if text != (raw or "").strip():
+                logger.info("STT hallucination filter stripped subtitle-credit artifact from transcript")
             logger.info(f"API STT: {len(text)} chars from {base_url}")
             return text
         except Exception as e:
