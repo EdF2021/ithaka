@@ -13,6 +13,7 @@
 ## Overig
 
 - Gmail (`ed.de.feber@gmail.com`) als default e-mailaccount gezet (was Outlook/DavMail) op verzoek van Ed, via `POST /api/email/accounts/{id}/set-default`.
+- Google-agenda gekoppeld (13:30): app-wachtwoord werkt alleen op het **legacy** CalDAV-endpoint `www.google.com/calendar/dav/<email>/user/` — het moderne `apidata.googleusercontent.com/caldav/v2` is OAuth-only en gaf Unauthorized. 38 events over 4 Google-kalenders gesynct, 0 fouten; gotcha ook in CLAUDE.md gezet. Infographic-poster (#100) en Brain-uitleg + memory-extractor-issue #101 ook deze sessie.
 - Google-agenda als 2e CalDAV-account: onderzocht, **geen code nodig** — multi-account CRUD + Google-URL-mapping (`_google_caldav_events_url`) + per-account writeback bestaan al. Alleen een Google-app-wachtwoord van Ed nodig; instructie in de chat overgedragen. Eén cleanup-kandidaat: dode `initCalDAV()` in `static/js/admin.js:2619` (oude single-account-velden, onbereikbaar).
 - Notebooks NL-taalproef en zomaar zijn door Ed zelf verwijderd (test-notebooks); samenwijzer is de actieve.
 - GitHub "run failed"-mails verklaard: open PR #91 (dev→main, uit de Qwen-sessie) hertestte bij elke dev-push zijn ongeldige (Nederlandstalige) PR-body via `pull_request_target`. Body template-conform gemaakt → alle checks op #91 groen; PR bewust open gelaten als release-beslissing. Workflow-tuning-kandidaat genoteerd: description/title-checks kunnen `synchronize` overslaan.
