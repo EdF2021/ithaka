@@ -61,6 +61,68 @@ def test_empty_and_none_are_safe():
     assert strip_stt_hallucinations(None) == ""
 
 
+def test_dutch_regional_tv_credit_becomes_empty():
+    # Live-observed on 2.5s of digital silence via an OpenAI-compatible
+    # whisper endpoint (language=nl).
+    assert strip_stt_hallucinations("TV GELDERLAND 2021.") == ""
+
+
+# ---- silence gate --------------------------------------------------------
+
+def test_parse_max_volume_reads_ffmpeg_volumedetect():
+    from services.stt.stt_service import _parse_max_volume
+    stderr = (
+        "[Parsed_volumedetect_0 @ 0x55] n_samples: 120000\n"
+        "[Parsed_volumedetect_0 @ 0x55] mean_volume: -91.0 dB\n"
+        "[Parsed_volumedetect_0 @ 0x55] max_volume: -84.3 dB\n"
+    )
+    assert _parse_max_volume(stderr) == -84.3
+
+
+def test_parse_max_volume_none_without_marker():
+    from services.stt.stt_service import _parse_max_volume
+    assert _parse_max_volume("no volumedetect output here") is None
+
+
+def test_transcribe_skips_provider_for_silent_audio(monkeypatch):
+    # A silent clip must never reach the provider: whisper hallucinates
+    # subtitle credits on it, and no phrase list catches them all.
+    import services.stt.stt_service as mod
+    service = STTService()
+    service._load_settings = lambda: {
+        "stt_enabled": True, "stt_provider": "endpoint:ep1",
+        "stt_model": "whisper-1", "stt_language": "nl",
+    }
+    called = {"api": False}
+    service._transcribe_api = lambda *a, **k: called.__setitem__("api", True) or "should not happen"
+    monkeypatch.setattr(mod, "_audio_is_silent", lambda b: True)
+    assert service.transcribe(b"webm-bytes") == ""
+    assert called["api"] is False
+
+
+def test_transcribe_proceeds_when_not_silent(monkeypatch):
+    import services.stt.stt_service as mod
+    service = STTService()
+    service._load_settings = lambda: {
+        "stt_enabled": True, "stt_provider": "endpoint:ep1",
+        "stt_model": "whisper-1", "stt_language": "nl",
+    }
+    service._transcribe_api = lambda *a, **k: "hallo"
+    monkeypatch.setattr(mod, "_audio_is_silent", lambda b: False)
+    assert service.transcribe(b"webm-bytes") == "hallo"
+
+
+def test_audio_is_silent_fails_open_without_ffmpeg(monkeypatch):
+    # No ffmpeg (or any probe error) must never block transcription.
+    import services.stt.stt_service as mod
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("ffmpeg not installed")
+
+    monkeypatch.setattr(mod.subprocess, "run", _boom)
+    assert mod._audio_is_silent(b"webm-bytes") is False
+
+
 # ---- wiring: local provider ---------------------------------------------
 
 class _FakeWhisper:

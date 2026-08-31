@@ -4,6 +4,7 @@
 import io
 import logging
 import re
+import subprocess
 import httpx
 import tempfile
 from pathlib import Path
@@ -63,8 +64,44 @@ _HALLUCINATION_PATTERNS = [
         r"sous-titres r[ée]alis[ée]s? .{0,20}la communaut[ée] d'amara\.org",
         r"untertitel(ung)?( im auftrag)? des zdf f[üu]r funk,? ?\d{0,4}",
         r"thank(s| you) for watching[.!]?",
+        # Dutch regional-TV credit, live-observed on pure silence.
+        r"tv gelderland,? ?\d{0,4}",
     )
 ]
+
+# The phrase list above can never be complete — Whisper's silence
+# hallucinations span every credit line in its training data ("TV GELDERLAND
+# 2021" surfaced the day the list was written). So gate the audio itself:
+# probe peak volume with ffmpeg and skip the provider entirely for clips
+# that contain no signal. Fails open (returns False) when ffmpeg is missing
+# or the probe errors, so transcription never breaks on the gate itself.
+_SILENCE_MAX_VOLUME_DB = -50.0
+
+_MAX_VOLUME_RE = re.compile(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
+
+
+def _parse_max_volume(ffmpeg_stderr: str) -> Optional[float]:
+    """Extract max_volume (dB) from ffmpeg volumedetect output, or None."""
+    m = _MAX_VOLUME_RE.search(ffmpeg_stderr or "")
+    return float(m.group(1)) if m else None
+
+
+def _audio_is_silent(audio_bytes: bytes) -> bool:
+    """True when ffmpeg's volumedetect sees no meaningful signal."""
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", "pipe:0", "-af", "volumedetect", "-f", "null", "-"],
+            input=audio_bytes,
+            capture_output=True,
+            timeout=15,
+        )
+        max_volume = _parse_max_volume(proc.stderr.decode(errors="replace"))
+        if max_volume is None:
+            return False
+        return max_volume < _SILENCE_MAX_VOLUME_DB
+    except Exception as e:
+        logger.debug(f"STT silence probe unavailable ({e}); proceeding with transcription")
+        return False
 
 
 def strip_stt_hallucinations(text: Optional[str]) -> str:
@@ -247,6 +284,10 @@ class STTService:
 
         if provider in ("disabled", "browser"):
             return None
+
+        if _audio_is_silent(audio_bytes):
+            logger.info("STT: audio below silence threshold — skipping transcription")
+            return ""
 
         if provider == "local":
             return self._transcribe_local(audio_bytes, language)
