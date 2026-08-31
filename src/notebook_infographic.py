@@ -239,16 +239,8 @@ _TEMPLATE = """\
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
 }}
 
-@media (prefers-color-scheme: dark) {{
-  :root {{
-    --bg: #131214; --bg-surface: #1c1a1e;
-    --border: rgba(255,255,255,0.07);
-    --text: #ece8e2; --text-dim: #a8a39c; --text-muted: #6f6b66;
-    --accent: #e88f73;
-    --gold: #e8c05a; --gold-bg: rgba(232,192,90,0.09);
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
-  }}
-}}
+/* No dark palette: notebook viewers render always-light, matching the
+   mindmap/flashcards/slides templates. */
 
 body {{
   font-family: var(--font-body);
@@ -350,9 +342,8 @@ body {{
 }}
 
 @media print {{
-  /* Force the light palette on paper regardless of the viewer's dark
-     preference — printing whatever prefers-color-scheme picked would risk
-     light text on a white page. */
+  /* Plain white on paper: flatten the tinted page background and card
+     shadows so ink-friendly output stays crisp. */
   body {{ background: #fff !important; color: #1a1817 !important; }}
   .ig-card, .ig-stat-card {{
     box-shadow: none !important; background: #fff !important;

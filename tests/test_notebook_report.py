@@ -36,6 +36,22 @@ def test_adapter_embeds_markdown_content():
     assert "What is X? X is Y." in html_out
 
 
+def test_adapter_forces_light_theme():
+    # Notebook artifact viewers render light regardless of the OS/browser
+    # dark preference, matching the mindmap/flashcards/slides viewers; the
+    # research-report default keeps its dark media query.
+    html_out = generate_notebook_artifact_report(
+        notebook_name="NB", kind="briefing",
+        document_title="T", document_content="# T\n\ntekst",
+    )
+    assert "prefers-color-scheme: dark" not in html_out
+    assert "--bg: #fbf9f4" in html_out
+
+    from src.visual_report import generate_visual_report
+    research = generate_visual_report(question="q", report_markdown="# q\n\ntekst")
+    assert "prefers-color-scheme: dark" in research
+
+
 def test_adapter_falls_back_to_kind_label_without_title():
     html_out = generate_notebook_artifact_report(
         notebook_name="Course Notes", kind="quiz",
