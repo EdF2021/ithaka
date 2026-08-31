@@ -19,6 +19,7 @@ viewers.
 from __future__ import annotations
 
 import html
+import json
 import re
 from datetime import datetime
 from typing import Optional
@@ -257,66 +258,71 @@ def generate_mindmap_viewer(
             "</div>"
             '<div class="mm-click-hint">Klik op een knoop om de AI-assistent te vragen over dat onderwerp</div>'
         )
-        # Convert the mermaid tree to markdown headings for markmap
+        # Convert the mermaid tree to markdown headings for markmap.
+        # html.escape the markdown so label-injected tags render as literal
+        # text (markdown-it decodes the entities back to characters), then
+        # JSON-embed it in the inline script — script content is raw text,
+        # so entity-escaping alone can't be relied on there.
         md_content = _tree_to_markdown(tree)
-        # Escape for embedding in the SVG's text content
-        escaped_md = html.escape(md_content)
+        md_json = json.dumps(html.escape(md_content))
 
         canvas_html = (
-            f'<div class="mm-canvas">'
-            f'<svg class="markmap" style="width:100%;height:100%">{escaped_md}</svg>'
+            '<div class="mm-canvas">'
+            '<svg id="mm-svg" class="markmap" style="width:100%;height:100%"></svg>'
             "</div>"
         )
 
-        # markmap autoloader + custom controls script
+        # Pinned self-contained bundles instead of markmap-autoloader: the
+        # report-CSP keeps connect-src 'self', which blocks the autoloader's
+        # runtime dependency fetches, so everything must arrive via script
+        # tags (script-src allows cdn.jsdelivr.net).
         script_html = (
-            '<script src="https://cdn.jsdelivr.net/npm/markmap-autoloader@0.16.5/dist/index.min.js"></script>'
+            '<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" '
+            'integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" '
+            'crossorigin="anonymous"></script>'
+            '<script src="https://cdn.jsdelivr.net/npm/markmap-lib@0.18.12/dist/browser/index.iife.min.js" '
+            'integrity="sha384-mQgrLtILpAxOQmxspISBOEZByHJoRpKeG1+0/BEr0MO3hG1aBqcd4aJgrUoQGGE7" '
+            'crossorigin="anonymous"></script>'
+            '<script src="https://cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.min.js" '
+            'integrity="sha384-C8c2nsw+oZzYU5tGVHgXz8jVOoxdzionfzyQKFUQCqb/xLZgWZv2pnTamUfUiBSt" '
+            'crossorigin="anonymous"></script>'
             "<script>"
             "window.addEventListener('load', function() {"
-            "  setTimeout(function() {"
-            "    var svg = document.querySelector('svg.markmap');"
-            "    if (!svg) return;"
-            "    var mm = svg.__mm;"
-            "    var fitBtn = document.getElementById('mm-fit');"
-            "    var expandBtn = document.getElementById('mm-expand-all');"
-            "    var collapseBtn = document.getElementById('mm-collapse-all');"
-            "    if (fitBtn && mm) fitBtn.addEventListener('click', function() { mm.fit(); });"
-            "    if (expandBtn && mm) expandBtn.addEventListener('click', function() {"
-            "      mm.setData(mm.state.data, function(node) { node.payload = { fold: 0 }; });"
-            "      mm.fit();"
-            "    });"
-            "    if (collapseBtn && mm) collapseBtn.addEventListener('click', function() {"
-            "      var root = mm.state.data;"
-            "      function collapse(node) {"
-            "        if (node.children) {"
-            "          node.payload = node.payload || {};"
-            "          node.payload.fold = 1;"
-            "          node.children.forEach(collapse);"
-            "        }"
-            "      }"
-            "      if (root.children) root.children.forEach(collapse);"
-            "      mm.setData(root);"
-            "      mm.fit();"
-            "    });"
-            "    function attachNodeClicks() {"
-            "      var nodes = svg.querySelectorAll('g.markmap-node');"
-            "      nodes.forEach(function(node) {"
-            "        node.addEventListener('click', function(e) {"
-            "          e.stopPropagation();"
-            "          var textEl = node.querySelector('text');"
-            "          if (!textEl) return;"
-            "          var label = textEl.textContent || '';"
-            "          label = label.trim();"
-            "          if (!label) return;"
-            "          window.parent.postMessage({"
-            "            type: 'nbws-mindmap-node-click',"
-            "            label: label"
-            "          }, '*');"
-            "        });"
-            "      });"
+            f"  var mmMarkdown = {md_json};"
+            "  var svg = document.getElementById('mm-svg');"
+            "  if (!svg || !window.markmap || !window.markmap.Markmap) return;"
+            "  var transformed = new window.markmap.Transformer().transform(mmMarkdown);"
+            "  var mm = window.markmap.Markmap.create(svg, { autoFit: true }, transformed.root);"
+            "  function setFoldAll(fold) {"
+            "    var root = mm.state.data;"
+            "    function walk(node) {"
+            "      node.payload = Object.assign({}, node.payload, { fold: fold });"
+            "      (node.children || []).forEach(walk);"
             "    }"
-            "    attachNodeClicks();"
-            "  }, 800);"
+            "    (root.children || []).forEach(walk);"
+            "    root.payload = Object.assign({}, root.payload, { fold: 0 });"
+            "    mm.setData(root);"
+            "    mm.fit();"
+            "  }"
+            "  var fitBtn = document.getElementById('mm-fit');"
+            "  var expandBtn = document.getElementById('mm-expand-all');"
+            "  var collapseBtn = document.getElementById('mm-collapse-all');"
+            "  if (fitBtn) fitBtn.addEventListener('click', function() { mm.fit(); });"
+            "  if (expandBtn) expandBtn.addEventListener('click', function() { setFoldAll(0); });"
+            "  if (collapseBtn) collapseBtn.addEventListener('click', function() { setFoldAll(1); });"
+            "  svg.addEventListener('click', function(e) {"
+            "    if (!e.target || !e.target.closest) return;"
+            "    if (e.target.closest('circle')) return;"
+            "    var node = e.target.closest('g.markmap-node');"
+            "    if (!node) return;"
+            "    var textEl = node.querySelector('foreignObject div') || node.querySelector('text');"
+            "    var label = textEl ? (textEl.textContent || '').trim() : '';"
+            "    if (!label) return;"
+            "    window.parent.postMessage({"
+            "      type: 'nbws-mindmap-node-click',"
+            "      label: label"
+            "    }, '*');"
+            "  });"
             "});"
             "</script>"
         )

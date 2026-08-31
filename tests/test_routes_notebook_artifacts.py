@@ -61,7 +61,7 @@ def _client(monkeypatch, user="ed"):
     return TestClient(app, raise_server_exceptions=False)
 
 
-async def _fake_generate_artifact_ok(notebook_id, owner, kind, db_session):
+async def _fake_generate_artifact_ok(notebook_id, owner, kind, db_session, focus=None):
     """Mirror the real generate_artifact's row-writing shape, minus the LLM call."""
     document_id = str(uuid.uuid4())
     db_session.add(db.Document(
@@ -77,11 +77,11 @@ async def _fake_generate_artifact_ok(notebook_id, owner, kind, db_session):
     return artifact
 
 
-async def _fake_generate_artifact_no_sources(notebook_id, owner, kind, db_session):
+async def _fake_generate_artifact_no_sources(notebook_id, owner, kind, db_session, focus=None):
     raise ValueError("Geen geïndexeerde bronnen")
 
 
-async def _fake_generate_artifact_llm_failure(notebook_id, owner, kind, db_session):
+async def _fake_generate_artifact_llm_failure(notebook_id, owner, kind, db_session, focus=None):
     raise RuntimeError("Het model gaf een leeg antwoord terug")
 
 
@@ -109,6 +109,33 @@ def test_generate_artifact_creates_document_and_row(monkeypatch, ts):
         assert doc is not None and doc.current_content == "# inhoud"
     finally:
         s.close()
+
+
+def test_generate_artifact_passes_focus_through(monkeypatch, ts):
+    """The route reads `focus` from the body and forwards it as a keyword
+    to generate_artifact (added in 8b8cdf0 for the mindmap focus-prompt)."""
+    captured = {}
+
+    async def _fake_generate_artifact_captures_focus(notebook_id, owner, kind, db_session, focus=None):
+        captured["focus"] = focus
+        return await _fake_generate_artifact_ok(notebook_id, owner, kind, db_session, focus=focus)
+
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_captures_focus)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "mindmap", "focus": "budgetten"})
+    assert r.status_code == 200
+    assert captured["focus"] == "budgetten"
+
+
+def test_generate_artifact_non_string_focus_is_400(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "mindmap", "focus": 123})
+    assert r.status_code == 400
 
 
 def test_generate_artifact_unknown_kind_is_400(monkeypatch, ts):

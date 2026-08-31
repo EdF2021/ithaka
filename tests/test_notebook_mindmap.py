@@ -113,11 +113,17 @@ def test_viewer_degrades_on_malformed_content():
     assert "Eigen titel" in out
 
 
-def test_viewer_uses_markmap_cdn():
+def test_viewer_uses_pinned_markmap_bundles():
+    # The report-CSP allows script-src from cdn.jsdelivr.net but keeps
+    # connect-src 'self', so the viewer must load self-contained bundles:
+    # the autoloader fetches its dependencies at runtime and gets blocked.
     from src.notebook_mindmap import generate_mindmap_viewer
     from datetime import datetime
     out = generate_mindmap_viewer(None, _VALID_MINDMAP_MD, "NB", datetime(2026, 8, 23))
-    assert "cdn.jsdelivr.net/npm/markmap-autoloader" in out
+    assert "cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" in out
+    assert "cdn.jsdelivr.net/npm/markmap-lib@0.18.12/dist/browser/index.iife.min.js" in out
+    assert "cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.min.js" in out
+    assert "markmap-autoloader" not in out
 
 
 def test_viewer_has_node_click_postmessage():

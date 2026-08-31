@@ -25,8 +25,16 @@ def test_workspace_module_exports_open_close():
 
 def test_body_class_drives_layout_and_chat_stays_untouched():
     assert "notebook-workspace-open" in _WS and "notebook-workspace-open" in _CSS
-    # the workspace must not move or hide chat-container:
-    assert "chat-container" not in _WS or "appendChild" not in _WS
+    # The workspace must never look up or reparent #chat-container itself
+    # (per the module-header note): CSS drives the layout, this module only
+    # ever appends/removes chrome of its own (badge, in-panel artifact
+    # viewer) — a bare "appendChild" substring check is no longer a valid
+    # proxy for that now that the in-panel artifact viewer legitimately
+    # appends its own iframe (86d8084), so assert the real invariant.
+    assert "getElementById('chat-container')" not in _WS
+    assert 'getElementById("chat-container")' not in _WS
+    assert "querySelector('#chat-container')" not in _WS
+    assert 'querySelector("#chat-container")' not in _WS
 
 
 def test_grid_click_opens_workspace_not_detail():
@@ -156,14 +164,37 @@ def test_studio_panel_has_generate_and_files_section_headers():
     assert 'nbws-studio-section-head">Files<' in _WS
 
 
-def test_open_artifact_report_calls_window_open_with_report_endpoint():
-    # Scoped to _openArtifactReport's own body (not a bare "somewhere in the
-    # file" substring check) so this fails if the report-tab call is moved,
-    # dropped, or its target/tab-behavior changed.
+def test_open_artifact_report_opens_in_panel_iframe_viewer():
+    # 86d8084 replaced the new-tab window.open with an in-panel iframe
+    # viewer (relative URL, same origin) so the report opens inside the
+    # studio panel instead of a separate browser tab. Scoped to
+    # _openArtifactReport's own body so this fails if the call is moved,
+    # dropped, or reverted back to window.open.
     fn = _between(_WS, "function _openArtifactReport", "\n}\n")
-    assert "window.open(" in fn
+    assert "window.open(" not in fn
     assert "/report`" in fn
-    assert "'_blank'" in fn
+    assert "_showArtifactViewer(url, row.dataset.kind);" in fn
+
+
+def test_show_and_close_artifact_viewer_manage_in_panel_iframe():
+    show = _between(_WS, "function _showArtifactViewer", "\n}\n")
+    assert "id = 'nbws-artifact-viewer'" in show
+    assert "<iframe" in show
+    assert "body.appendChild(viewer);" in show
+    assert "nbws-artifact-viewer-active" in show
+
+    close = _between(_WS, "function _closeArtifactViewer", "\n}\n")
+    assert "if (viewer) viewer.remove();" in close
+    assert "nbws-artifact-viewer-active" in close
+
+    # The viewer is torn down on workspace close too, so no stale iframe
+    # survives across a close/reopen.
+    assert "registerCloseHook(_closeArtifactViewer);" in _WS
+
+
+def test_studio_widens_to_60vw_while_artifact_viewer_is_active():
+    assert "width: 60vw;" in _CSS
+    assert "nbws-artifact-viewer-active" in _CSS
 
 
 def test_artifact_click_podcast_toggles_others_open_report():
