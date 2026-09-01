@@ -359,6 +359,18 @@ def test_report_tile_and_modal_registered_client_side():
     assert "kind === 'report'" not in handler
 
 
+def test_report_modal_z_index_clears_workspace_root_on_mobile():
+    # #115: #nbrp-modal is a plain .modal (base z-index 250, not routed
+    # through modalManager.js), so opening it from the Studio tab left it
+    # behind #nbws-root's z-index: 10005 — invisible on mobile, where the
+    # active tab panel is opaque and fills the viewport (desktop hid this by
+    # luck via #nbws-root's transparent middle column). Same fix/value as
+    # the .doc-editor-pane precedent right above this rule in style.css.
+    assert "body.notebook-workspace-open #nbrp-modal { z-index: 10010; }" in _CSS
+    root_z = _between(_CSS, "#nbws-root {\n  display: none;", "\n}")
+    assert "z-index: 10005;" in root_z
+
+
 def test_slide_deck_kind_registered_client_side_as_first_tile():
     kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
     assert kinds.split("[", 1)[-1].strip().startswith("'slide_deck'")
