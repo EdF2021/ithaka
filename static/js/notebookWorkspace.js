@@ -927,7 +927,17 @@ const KIND_LABELS = {
   data_table: 'Data table',
   podcast: 'Podcast',
   video: 'Video',
-  report: 'Rapporten',
+  // Deliberately English, not "Rapporten" — this object is the English-only
+  // studio-chrome map (see the "no more Dutch strings" comment above) and
+  // also feeds the Files-list kind pill (_artifactRow's `label`) and the
+  // in-panel viewer's kind pill (_showArtifactViewer's `kindLabel`), both
+  // unconditional lookups with no per-kind override. A Dutch value here
+  // would show as a lone "Rapporten" pill next to "Briefing"/"FAQ"/etc.
+  // Matches the backend's own English mirror, ENGLISH_KIND_LABELS["report"]
+  // in src/notebook_report.py. The tile itself still reads "Rapporten" —
+  // hardcoded literally in _studioPanelSkeleton, same as the podcast tile's
+  // literal "Audio" label diverging from KIND_LABELS.podcast.
+  report: 'Report',
 };
 
 // Per-kind studio-tile icons — 14px monochrome outline SVGs (stroke:
@@ -1594,7 +1604,7 @@ function _studioPanelSkeleton() {
         <button type="button" class="nbws-tile notebook-video-gen-btn nbws-tile--video" id="nbws-video-btn"
                 data-kind="video"><span class="nbws-tile-icon">${_KIND_ICONS.video}</span><span class="nbws-tile-label">${_esc(KIND_LABELS.video)}</span></button>
         <button type="button" class="nbws-tile notebook-report-open-btn nbws-tile--report" id="nbws-report-btn"
-                data-kind="report"><span class="nbws-tile-icon">${_KIND_ICONS.report}</span><span class="nbws-tile-label">${_esc(KIND_LABELS.report)}</span></button>
+                data-kind="report"><span class="nbws-tile-icon">${_KIND_ICONS.report}</span><span class="nbws-tile-label">Rapporten</span></button>
         ${ARTIFACT_KINDS.map(kind => `<button type="button" class="nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}"
                 data-kind="${_esc(kind)}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
       </div>
