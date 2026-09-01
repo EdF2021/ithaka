@@ -18,6 +18,7 @@ from core.database import Document, SessionLocal, Notebook, NotebookArtifact, No
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
 from src.notebook_artifacts import ARTIFACT_KINDS, generate_artifact
+from src.notebook_report_layouts import FIXED_TEMPLATES, get_recommended_layouts
 from src.notebook_audio import (
     NOTEBOOK_AUDIO_HEADERS,
     NOTEBOOK_AUDIO_RE,
@@ -441,8 +442,14 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             body = None
         kind = body.get("kind") if isinstance(body, dict) else None
         focus = body.get("focus") if isinstance(body, dict) else None
+        layout_instruction = body.get("layout_instruction") if isinstance(body, dict) else None
         if focus is not None and not isinstance(focus, str):
             raise HTTPException(status_code=400, detail="focus moet een string zijn")
+        if layout_instruction is not None:
+            if not isinstance(layout_instruction, str):
+                raise HTTPException(status_code=400, detail="layout_instruction moet een string zijn")
+            if len(layout_instruction) > 2000:
+                raise HTTPException(status_code=400, detail="layout_instruction is te lang (max 2000 tekens)")
         # ARTIFACT_KINDS is a dict, so an unhashable `kind` (a list or dict
         # from the request body) raises TypeError on the membership test
         # below — a 500 where the client sent bad input. Same isinstance
@@ -461,7 +468,10 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # route to have checked ownership first.
             _get_owned_notebook(db_session, notebook_id, user)
             try:
-                artifact = await generate_artifact(notebook_id, user, kind, db_session, focus=focus)
+                artifact = await generate_artifact(
+                    notebook_id, user, kind, db_session,
+                    focus=focus, layout_instruction=layout_instruction,
+                )
             except HTTPException:
                 # Not raised by generate_artifact today, but this keeps a
                 # future refactor from having HTTPException fall through
@@ -480,6 +490,21 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                 )
                 raise HTTPException(status_code=502, detail=str(exc))
             return artifact.to_dict()
+        finally:
+            db_session.close()
+
+    # ---- GET /api/notebooks/{id}/report-layouts ----
+    @router.get("/api/notebooks/{notebook_id}/report-layouts")
+    async def get_report_layouts(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            recommended = await get_recommended_layouts(nb, db_session, user)
+            return {
+                "templates": FIXED_TEMPLATES,
+                "recommended": recommended,
+            }
         finally:
             db_session.close()
 

@@ -61,7 +61,7 @@ def _client(monkeypatch, user="ed"):
     return TestClient(app, raise_server_exceptions=False)
 
 
-async def _fake_generate_artifact_ok(notebook_id, owner, kind, db_session, focus=None):
+async def _fake_generate_artifact_ok(notebook_id, owner, kind, db_session, focus=None, layout_instruction=None):
     """Mirror the real generate_artifact's row-writing shape, minus the LLM call."""
     document_id = str(uuid.uuid4())
     db_session.add(db.Document(
@@ -77,11 +77,11 @@ async def _fake_generate_artifact_ok(notebook_id, owner, kind, db_session, focus
     return artifact
 
 
-async def _fake_generate_artifact_no_sources(notebook_id, owner, kind, db_session, focus=None):
+async def _fake_generate_artifact_no_sources(notebook_id, owner, kind, db_session, focus=None, layout_instruction=None):
     raise ValueError("Geen geïndexeerde bronnen")
 
 
-async def _fake_generate_artifact_llm_failure(notebook_id, owner, kind, db_session, focus=None):
+async def _fake_generate_artifact_llm_failure(notebook_id, owner, kind, db_session, focus=None, layout_instruction=None):
     raise RuntimeError("Het model gaf een leeg antwoord terug")
 
 
@@ -116,7 +116,7 @@ def test_generate_artifact_passes_focus_through(monkeypatch, ts):
     to generate_artifact (added in 8b8cdf0 for the mindmap focus-prompt)."""
     captured = {}
 
-    async def _fake_generate_artifact_captures_focus(notebook_id, owner, kind, db_session, focus=None):
+    async def _fake_generate_artifact_captures_focus(notebook_id, owner, kind, db_session, focus=None, layout_instruction=None):
         captured["focus"] = focus
         return await _fake_generate_artifact_ok(notebook_id, owner, kind, db_session, focus=focus)
 
@@ -135,6 +135,44 @@ def test_generate_artifact_non_string_focus_is_400(monkeypatch, ts):
     nb_id = _make_notebook(c)
 
     r = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "mindmap", "focus": 123})
+    assert r.status_code == 400
+
+
+def test_generate_artifact_passes_layout_instruction_through(monkeypatch, ts):
+    captured = {}
+
+    async def _fake_generate_artifact_captures_layout(notebook_id, owner, kind, db_session,
+                                                        focus=None, layout_instruction=None):
+        captured["layout_instruction"] = layout_instruction
+        return await _fake_generate_artifact_ok(notebook_id, owner, kind, db_session, focus=focus)
+
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_captures_layout)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts",
+               json={"kind": "report", "layout_instruction": "Schrijf kort."})
+    assert r.status_code == 200
+    assert captured["layout_instruction"] == "Schrijf kort."
+
+
+def test_generate_artifact_non_string_layout_instruction_is_400(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts",
+               json={"kind": "report", "layout_instruction": 123})
+    assert r.status_code == 400
+
+
+def test_generate_artifact_layout_instruction_too_long_is_400(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate_artifact_ok)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.post(f"/api/notebooks/{nb_id}/artifacts",
+               json={"kind": "report", "layout_instruction": "x" * 2001})
     assert r.status_code == 400
 
 
@@ -479,3 +517,45 @@ def test_generate_artifact_unhashable_or_non_string_kind_is_400(monkeypatch, ts,
 
     r = c.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": kind})
     assert r.status_code == 400
+
+
+# ---- GET /report-layouts ----
+
+def test_report_layouts_returns_fixed_templates_and_empty_recommended_without_sources(monkeypatch, ts):
+    async def _fake_get_recommended_layouts(notebook, db_session, owner):
+        return []
+
+    monkeypatch.setattr(nbr, "get_recommended_layouts", _fake_get_recommended_layouts)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.get(f"/api/notebooks/{nb_id}/report-layouts")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["templates"]) == 3
+    assert body["recommended"] == []
+
+
+def test_report_layouts_returns_recommended_when_available(monkeypatch, ts):
+    async def _fake_get_recommended_layouts(notebook, db_session, owner):
+        return [{"title": "T1", "description": "D1", "instruction": "I1"}]
+
+    monkeypatch.setattr(nbr, "get_recommended_layouts", _fake_get_recommended_layouts)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    r = c.get(f"/api/notebooks/{nb_id}/report-layouts")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["recommended"] == [{"title": "T1", "description": "D1", "instruction": "I1"}]
+
+
+def test_report_layouts_unknown_notebook_is_404(monkeypatch, ts):
+    async def _fake_get_recommended_layouts(notebook, db_session, owner):
+        return []
+
+    monkeypatch.setattr(nbr, "get_recommended_layouts", _fake_get_recommended_layouts)
+    c = _client(monkeypatch)
+
+    r = c.get("/api/notebooks/does-not-exist/report-layouts")
+    assert r.status_code == 404
