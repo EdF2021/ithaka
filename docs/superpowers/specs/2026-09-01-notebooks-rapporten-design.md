@@ -167,3 +167,28 @@ Geen wijziging aan `NotebookArtifact` nodig — een rapport is gewoon een artifa
 
 Tegellabel is **"Rapporten"** (Nederlands) — bevestigd door Ed, bewuste uitzondering op de
 Engelse-tegellabel-conventie van de overige Studio-tegels.
+
+## Fase 2 — bronverwijzingen in rapporten (uitwerking, 2026-09-01 avond)
+
+Afwijking van het oorspronkelijke fase-2-idee "`[n, ¶N]` zoals notebook-chat", met reden:
+`¶N` is een chunk-index die alleen de chat-UI kan resolven (popup naar de chunk). Een rapport
+is een op zichzelf staand markdown-document zonder resolver — een onresolvebare `¶N` is daar
+ruis. Bovendien maakt de chunk-overlap (200 tekens) het annoteren van lineaire brontekst met
+chunkgrenzen ill-defined.
+
+**Gekozen ontwerp — bron-niveau citaties:**
+
+- Alleen voor `kind="report"` krijgen de bronheaders een nummer:
+  `=== BRON [1]: bestandsnaam ===` (aparte opbouw; de gedeelde `_SOURCE_HEADER` voor andere
+  kinds blijft ongewijzigd).
+- De rapport-instructie vraagt: beweringen citeren met `[n]` verwijzend naar de genummerde
+  bron, en het rapport afsluiten met een sectie `## Bronnen` die `[n] bestandsnaam` opsomt.
+- **Validator** (`validate_report_markdown`, zelfde validator-retry-seam als
+  infographic/flashcards/mindmap): controleert alléén dat elke geciteerde `[n]` binnen
+  1..aantal-bronnen valt (geen verzonnen bronnummers). Hij dwingt géén citaties of
+  Bronnen-sectie af — een `layout_instruction` mag die expliciet wegsturen zonder dat de
+  retry-loop dan permanent faalt.
+- Geen viewer-/UI-wijziging: citaties renderen als gewone tekst in de bestaande viewer.
+
+**Geschrapt uit fase 2:** gestructureerde configuratievelden (lengte/toon-dropdowns) — het
+vrije tekstveld dekt dit; YAGNI, conform de oorspronkelijke niet-doelen-afweging.
