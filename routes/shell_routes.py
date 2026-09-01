@@ -1616,7 +1616,15 @@ def setup_shell_routes() -> APIRouter:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            # Some of these (vllm, sglang[all], diffusers[torch]) pull large
+            # CUDA wheels — bound the wait so a stalled download can't hang
+            # the request forever, mirroring install_system_deps' 180s cap.
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"ok": False, "error": "Install timed out after 180s"}
         if proc.returncode == 0:
             return {"ok": True, "output": stdout.decode()[-200:]}
         return {"ok": False, "error": stderr.decode()[-300:]}
