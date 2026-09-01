@@ -2297,14 +2297,14 @@ async function _cmdDemo(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     window.addEventListener('resize', update);
@@ -2621,14 +2621,14 @@ async function _cmdTourCompare(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     window.addEventListener('resize', update);
@@ -2923,14 +2923,14 @@ async function _cmdTourCookbook(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     window.addEventListener('resize', update);
@@ -3169,14 +3169,14 @@ async function _cmdTourTheme(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     window.addEventListener('resize', update);
@@ -3430,14 +3430,14 @@ async function _cmdTourSettings(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     // Track the modal-enter scale animation (see task-tour notes).
@@ -3680,14 +3680,14 @@ async function _cmdTourGallery(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     const _tStart = performance.now();
@@ -3910,14 +3910,14 @@ async function _cmdTourNotes(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     const _tStart = performance.now();
@@ -4127,14 +4127,14 @@ async function _cmdTourBrain(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     const _tStart = performance.now();
@@ -4358,14 +4358,14 @@ async function _runTaskTour(steps, doneText, opts) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     // The tasks modal-content runs a 250ms `modal-enter` scale animation
@@ -4608,14 +4608,14 @@ async function _cmdTourResearch(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     window.addEventListener('resize', update);
@@ -4839,14 +4839,14 @@ async function _cmdTourLibrary(args, ctx) {
     const update = () => {
       const r = target.getBoundingClientRect();
       // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-      // width/height are left as-is (sizing, not covered by the
-      // top/left/right/bottom pattern) — a known residual under zoom.
+      // terms before assigning as local px, including width/height (the
+      // halo is a full-size outline, not just an anchor point — fix-round-1,
+      // finding 3) (see uiZoom.js, PR #76/#77).
       const _z = zoomOf(document.documentElement);
       halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
       halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
-      halo.style.width  = (r.width + 8) + 'px';
-      halo.style.height = (r.height + 8) + 'px';
+      halo.style.width  = (toLocalPx(r.width, _z) + 8) + 'px';
+      halo.style.height = (toLocalPx(r.height, _z) + 8) + 'px';
     };
     update();
     window.addEventListener('resize', update);
@@ -5144,14 +5144,14 @@ function _showSetupSpotlight(selector, duration = 1800, options = {}) {
   const update = () => {
     const r = target.getBoundingClientRect();
     // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
-    // terms before assigning as local px (see uiZoom.js, PR #76/#77).
-    // width/height are left as-is (sizing, not covered by the
-    // top/left/right/bottom pattern) — a known residual under zoom.
+    // terms before assigning as local px, including width/height (the halo
+    // is a full-size outline, not just an anchor point — fix-round-1,
+    // finding 3) (see uiZoom.js, PR #76/#77).
     const _z = zoomOf(document.documentElement);
     halo.style.top = (toLocalPx(r.top, _z) - 5) + 'px';
     halo.style.left = (toLocalPx(r.left, _z) - 5) + 'px';
-    halo.style.width = (r.width + 10) + 'px';
-    halo.style.height = (r.height + 10) + 'px';
+    halo.style.width = (toLocalPx(r.width, _z) + 10) + 'px';
+    halo.style.height = (toLocalPx(r.height, _z) + 10) + 'px';
   };
   update();
   window.addEventListener('resize', update);

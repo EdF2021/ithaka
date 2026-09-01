@@ -5096,8 +5096,11 @@ function _beginGrab(card, touch) {
   card.style.position = 'fixed';
   card.style.left = toLocalPx(rect.left, _zGrab) + 'px';
   card.style.top  = toLocalPx(rect.top, _zGrab) + 'px';
-  card.style.width  = rect.width + 'px';
-  card.style.height = rect.height + 'px';
+  // Also divide width/height — the card is the same fixed-position element,
+  // and rect.width/height is just as much a viewport-space measurement as
+  // rect.left/top (fix-round-1, finding 3).
+  card.style.width  = toLocalPx(rect.width, _zGrab) + 'px';
+  card.style.height = toLocalPx(rect.height, _zGrab) + 'px';
   card.style.margin = '0';
   card.style.zIndex = '10001';
   // pointer-events:none so elementFromPoint sees the card BENEATH the finger
@@ -5254,7 +5257,9 @@ function _beginChecklistGrab(row, container, touch) {
   row.style.position = 'fixed';
   row.style.left = toLocalPx(rect.left, _zGrab) + 'px';
   row.style.top  = toLocalPx(rect.top, _zGrab) + 'px';
-  row.style.width = rect.width + 'px';
+  // Also divide width — same reasoning as _beginGrab above (fix-round-1,
+  // finding 3).
+  row.style.width = toLocalPx(rect.width, _zGrab) + 'px';
   row.style.zIndex = '10002';
   row.style.pointerEvents = 'none';
 
