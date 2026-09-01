@@ -927,6 +927,17 @@ const KIND_LABELS = {
   data_table: 'Data table',
   podcast: 'Podcast',
   video: 'Video',
+  // Deliberately English, not "Rapporten" — this object is the English-only
+  // studio-chrome map (see the "no more Dutch strings" comment above) and
+  // also feeds the Files-list kind pill (_artifactRow's `label`) and the
+  // in-panel viewer's kind pill (_showArtifactViewer's `kindLabel`), both
+  // unconditional lookups with no per-kind override. A Dutch value here
+  // would show as a lone "Rapporten" pill next to "Briefing"/"FAQ"/etc.
+  // Matches the backend's own English mirror, ENGLISH_KIND_LABELS["report"]
+  // in src/notebook_report.py. The tile itself still reads "Rapporten" —
+  // hardcoded literally in _studioPanelSkeleton, same as the podcast tile's
+  // literal "Audio" label diverging from KIND_LABELS.podcast.
+  report: 'Report',
 };
 
 // Per-kind studio-tile icons — 14px monochrome outline SVGs (stroke:
@@ -945,6 +956,7 @@ const _KIND_ICONS = {
   data_table: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="10" x2="9" y2="20"/><line x1="15" y1="10" x2="15" y2="20"/></svg>',
   study_guide: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
   faq: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg>',
+  report: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/></svg>',
 };
 
 // Small inline monochrome icons (no Unicode emoji, per repo convention) used
@@ -1472,6 +1484,11 @@ registerCloseHook(_stopVideoPoll);
 // Same reasoning: close the in-panel artifact viewer so no stale iframe
 // persists across a workspace close/reopen.
 registerCloseHook(_closeArtifactViewer);
+// Same reasoning again: the report layout-picker modal is appended straight
+// to document.body (not the studio panel), so nothing else tears it down —
+// without this it would survive a workspace close and keep showing layout
+// choices for a notebook that's no longer open.
+registerCloseHook(_closeReportModal);
 
 /**
  * Open a generated artifact in the document viewer, as an overlay ABOVE the
@@ -1591,6 +1608,8 @@ function _studioPanelSkeleton() {
                 data-kind="podcast"><span class="nbws-tile-icon">${_KIND_ICONS.podcast}</span><span class="nbws-tile-label">Audio</span></button>
         <button type="button" class="nbws-tile notebook-video-gen-btn nbws-tile--video" id="nbws-video-btn"
                 data-kind="video"><span class="nbws-tile-icon">${_KIND_ICONS.video}</span><span class="nbws-tile-label">${_esc(KIND_LABELS.video)}</span></button>
+        <button type="button" class="nbws-tile notebook-report-open-btn nbws-tile--report" id="nbws-report-btn"
+                data-kind="report"><span class="nbws-tile-icon">${_KIND_ICONS.report}</span><span class="nbws-tile-label">Rapporten</span></button>
         ${ARTIFACT_KINDS.map(kind => `<button type="button" class="nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}"
                 data-kind="${_esc(kind)}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
       </div>
@@ -1623,6 +1642,7 @@ function _wireStudioPanel() {
   });
   document.getElementById('nbws-podcast-btn')?.addEventListener('click', (e) => _generatePodcast(e.currentTarget));
   document.getElementById('nbws-video-btn')?.addEventListener('click', (e) => _generateVideo(e.currentTarget));
+  document.getElementById('nbws-report-btn')?.addEventListener('click', _openReportModal);
 
   window.addEventListener('message', _handleMindmapNodeClick);
 }
@@ -1709,6 +1729,17 @@ async function _openImpl(nb) {
   // Re-opening the SAME notebook keeps the poll: _loadArtifacts below repaints
   // the list and the next tick restores the pending row, so progress survives.
   if (_state.notebook && _state.notebook.id !== nb.id) _stopPodcastPoll();
+
+  // Same open()-not-close() gap for the report modal: it's an independent
+  // document.body overlay, unaffected by _wireStudioPanel/_loadArtifacts
+  // repainting the studio panel below it. Unlike the podcast poll this isn't
+  // just cosmetic — _generateReport reads _state.notebook.id fresh at POST
+  // time, so a still-open modal left over from the notebook being switched
+  // away from would silently generate a report against the *new* notebook
+  // using layout choices picked for the old one. Close it outright rather
+  // than leaving it to the registerCloseHook(_closeReportModal) above, which
+  // only fires on an actual closeNotebookWorkspace() call.
+  if (_state.notebook && _state.notebook.id !== nb.id) _closeReportModal();
 
   _state.notebook = nb;
   _state.sources = [];
@@ -1810,6 +1841,170 @@ export function closeNotebookWorkspace() {
   for (const hook of _closeHooks) {
     try { hook(); } catch (_) {}
   }
+}
+
+// ---- Reports: "Rapport maken" layout-picker modal --------------------------
+//
+// "Rapporten" is a separate tile (not part of ARTIFACT_KINDS) because unlike
+// every other kind, it needs a configuration step before generating: pick a
+// fixed template, an AI-recommended layout, or write a free-text instruction,
+// then POST /artifacts with kind="report" + layout_instruction. See
+// docs/superpowers/specs/2026-09-01-notebooks-rapporten-design.md.
+
+const _MAGIC_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg>';
+
+// "Zelf rapport maken" is client-side only — it never comes from the
+// backend, so it is prepended to whatever /report-layouts returns for the
+// Indeling grid. instruction: null is the signal _reportCardHtml uses to
+// omit the pencil (edit) icon and _openReportEditor uses to start from a
+// blank textarea.
+const _REPORT_CUSTOM_CARD = {
+  title: 'Zelf rapport maken',
+  description: 'Maak rapporten volgens jouw wensen door onder meer de structuur, stijl en toon aan te passen.',
+  instruction: null,
+};
+
+let _reportModalEpoch = 0;
+let _reportEscHandler = null;
+
+function _reportCardHtml(item, idx) {
+  const editable = item.instruction != null;
+  return `
+    <button type="button" class="nbrp-card" data-idx="${idx}">
+      <div class="nbrp-card-title">${_esc(item.title)}${editable ? _RENAME_ICON : ''}</div>
+      <div class="nbrp-card-desc">${_esc(item.description)}</div>
+    </button>`;
+}
+
+function _wireReportTemplateCard(item, grid, idx) {
+  const btn = document.querySelector(`#nbrp-${grid}-grid [data-idx="${idx}"]`);
+  if (btn) btn.addEventListener('click', () => _openReportEditor(item));
+}
+
+function _reportGridsSkeletonHtml() {
+  return `
+    <div class="nbrp-section-head">Indeling</div>
+    <div class="nbrp-grid" id="nbrp-templates-grid">
+      ${_reportCardHtml(_REPORT_CUSTOM_CARD, 0)}
+    </div>
+    <div class="nbrp-section-head nbrp-recommended-head">${_MAGIC_ICON}Aanbevolen indeling</div>
+    <div class="nbrp-grid" id="nbrp-recommended-grid">
+      <div class="dashboard-empty">Loading&hellip;</div>
+    </div>`;
+}
+
+async function _loadReportLayouts(epoch) {
+  if (!_state.notebook) return;
+  const nbId = _state.notebook.id;
+  let data;
+  try {
+    data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(nbId)}/report-layouts`);
+  } catch (e) {
+    if (epoch !== _reportModalEpoch) return;
+    const recGrid = document.getElementById('nbrp-recommended-grid');
+    if (recGrid) recGrid.innerHTML = `<div class="dashboard-empty">Could not load suggestions (${_esc(e.message)})</div>`;
+    return;
+  }
+  if (epoch !== _reportModalEpoch) return;
+
+  const templates = [_REPORT_CUSTOM_CARD, ...(data.templates || [])];
+  const templatesGrid = document.getElementById('nbrp-templates-grid');
+  if (templatesGrid) {
+    templatesGrid.innerHTML = templates.map((item, idx) => _reportCardHtml(item, idx)).join('');
+    templates.forEach((item, idx) => _wireReportTemplateCard(item, 'templates', idx));
+  }
+
+  const recommended = data.recommended || [];
+  const recGrid = document.getElementById('nbrp-recommended-grid');
+  if (recGrid) {
+    if (!recommended.length) {
+      recGrid.innerHTML = '<div class="dashboard-empty">No suggestions yet — add sources to this notebook first.</div>';
+    } else {
+      recGrid.innerHTML = recommended.map((item, idx) => _reportCardHtml(item, idx)).join('');
+      recommended.forEach((item, idx) => _wireReportTemplateCard(item, 'recommended', idx));
+    }
+  }
+}
+
+function _openReportEditor(item) {
+  const body = document.getElementById('nbrp-body');
+  if (!body) return;
+  body.innerHTML = `
+    <button type="button" class="nbrp-back" id="nbrp-editor-back">&larr; Terug</button>
+    <div class="nbrp-editor-title">${_esc(item.title)}</div>
+    <textarea id="nbrp-editor-instruction" class="nbrp-editor-textarea" rows="6" maxlength="2000"
+      placeholder="Beschrijf structuur, stijl en toon in eigen woorden…">${_esc(item.instruction || '')}</textarea>
+    <div class="nbrp-editor-error" id="nbrp-editor-error"></div>
+    <button type="button" class="dashboard-action-btn nbrp-generate-btn" id="nbrp-generate-btn">Genereer</button>`;
+  document.getElementById('nbrp-editor-back')?.addEventListener('click', () => {
+    if (!body) return;
+    body.innerHTML = _reportGridsSkeletonHtml();
+    _wireReportTemplateCard(_REPORT_CUSTOM_CARD, 'templates', 0);
+    _loadReportLayouts(_reportModalEpoch);
+  });
+  document.getElementById('nbrp-generate-btn')?.addEventListener('click', _generateReport);
+}
+
+async function _generateReport() {
+  if (!_state.notebook) return;
+  const btn = document.getElementById('nbrp-generate-btn');
+  const errEl = document.getElementById('nbrp-editor-error');
+  const textarea = document.getElementById('nbrp-editor-instruction');
+  const instruction = textarea ? textarea.value.trim() : '';
+  if (errEl) errEl.textContent = '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  const epoch = _openEpoch;
+  const payload = { kind: 'report' };
+  if (instruction) payload.layout_instruction = instruction;
+  try {
+    await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    _closeReportModal();
+    if (epoch === _openEpoch) await _loadArtifacts();
+  } catch (e) {
+    if (errEl) errEl.textContent = `Could not generate (${e.message})`;
+    if (btn) { btn.disabled = false; btn.textContent = 'Genereer'; }
+  }
+}
+
+function _openReportModal() {
+  if (!_state.notebook) return;
+  if (document.getElementById('nbrp-modal')) return;
+  const epoch = ++_reportModalEpoch;
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'nbrp-modal';
+  modal.innerHTML = `
+    <div class="modal-content nbrp-modal-content" role="dialog" aria-label="Rapport maken">
+      <div class="modal-header">
+        <h4 style="position:relative;top:-2px;">${_KIND_ICONS.report}Rapport maken</h4>
+        <span style="flex:1"></span>
+        <button class="close-btn" id="nbrp-close" aria-label="Close">&#10006;</button>
+      </div>
+      <div class="modal-body nbrp-body" id="nbrp-body">${_reportGridsSkeletonHtml()}</div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  document.getElementById('nbrp-close')?.addEventListener('click', _closeReportModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) _closeReportModal(); });
+  _reportEscHandler = (e) => { if (e.key === 'Escape') _closeReportModal(); };
+  document.addEventListener('keydown', _reportEscHandler);
+  _wireReportTemplateCard(_REPORT_CUSTOM_CARD, 'templates', 0);
+
+  _loadReportLayouts(epoch);
+}
+
+function _closeReportModal() {
+  const modal = document.getElementById('nbrp-modal');
+  if (modal) modal.remove();
+  if (_reportEscHandler) {
+    document.removeEventListener('keydown', _reportEscHandler);
+    _reportEscHandler = null;
+  }
+  _reportModalEpoch++;
 }
 
 export function isNotebookWorkspaceOpen() {

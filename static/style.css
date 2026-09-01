@@ -41181,6 +41181,89 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .nbws-tile--podcast { --nbws-tile-accent: var(--color-brand-blue); }
 .nbws-tile--slide_deck { --nbws-tile-accent: var(--green); }
 .nbws-tile--video { --nbws-tile-accent: var(--color-recording, var(--red)); }
+.nbws-tile--report { --nbws-tile-accent: var(--accent-warm); }
+
+/* Rapporten: "Rapport maken" modal — layout-picker grid + one shared
+   edit-and-generate step. Existing .modal/.modal-content/.modal-header/
+   .modal-body chrome; only the grid/card/editor internals are new. */
+.nbrp-modal-content { max-width: 720px; width: 92vw; }
+.nbrp-body { display: flex; flex-direction: column; gap: 4px; }
+.nbrp-section-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-subheader);
+  margin: 12px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.nbrp-section-head:first-child { margin-top: 0; }
+.nbrp-recommended-head svg { flex-shrink: 0; }
+.nbrp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .nbrp-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.nbrp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: 96px;
+}
+.nbrp-card:hover {
+  background: color-mix(in srgb, var(--red) 8%, var(--panel));
+  border-color: color-mix(in srgb, var(--red) 30%, var(--border));
+}
+.nbrp-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.nbrp-card-title svg { flex-shrink: 0; opacity: 0.6; }
+.nbrp-card-desc {
+  font-size: 11px;
+  opacity: 0.75;
+  line-height: 1.4;
+}
+.nbrp-back {
+  background: none;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 10px;
+  align-self: flex-start;
+}
+.nbrp-editor-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.nbrp-editor-textarea {
+  width: 100%;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.nbrp-editor-error { color: var(--red); font-size: 12px; min-height: 16px; margin: 6px 0; }
+.nbrp-generate-btn { align-self: flex-end; }
 /* Web-source search (fase 4d) — input + button row above the upload zone,
    results as .list-item rows with an inline add button. Existing tokens and
    classes only. */

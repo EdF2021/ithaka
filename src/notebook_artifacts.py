@@ -30,7 +30,11 @@ from src.notebook_infographic import validate_infographic_markdown
 from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_mindmap import validate_mindmap_markdown
 from src.notebook_slides import extract_slide_deck
-from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
+from src.prompt_security import (
+    UNTRUSTED_CONTEXT_POLICY,
+    _escape_guard_markers,
+    untrusted_context_message,
+)
 from src.task_endpoint import task_llm_call_async
 
 logger = logging.getLogger(__name__)
@@ -236,6 +240,16 @@ Regels:
 - "notes" is de uitgeschreven toelichting die een spreker bij de slide zou vertellen - op zichzelf begrijpelijk.
 - Elk feit moet herleidbaar zijn tot de bronnen; verzin niets.
 - Geen markdown of HTML binnen de JSON-strings; alleen platte tekst.""",
+
+    "report": """Maak een rapport op basis van de bronnen.
+
+Structuur:
+- "# " met een titel in het Nederlands die bij het onderwerp past.
+- Volg de indeling-instructie die in het bericht hierna is meegegeven voor structuur, secties, stijl en toon. Geeft die geen duidelijke sectie-indeling, kies dan zelf een heldere indeling met "## "-koppen die recht doet aan de bronnen.
+- Gebruik doorlopende alinea's; gebruik bullets of een tabel alleen waar dat de leesbaarheid echt dient.
+
+Regels:
+- Is er geen indeling-instructie meegegeven, schrijf dan een overzichtelijk, zakelijk rapport van 500 tot 900 woorden.""",
 }
 
 _KIND_LABELS = {
@@ -248,6 +262,7 @@ _KIND_LABELS = {
     "flashcards": "Flashcards",
     "data_table": "Gegevenstabel",
     "slide_deck": "Diapresentatie",
+    "report": "Rapport",
 }
 
 # Post-generation format validators: kind -> callable that raises ValueError
@@ -404,7 +419,8 @@ def gather_source_text(notebook: Notebook, db_session) -> str:
 # --------------------------------------------------------------------------
 
 async def generate_artifact(
-    notebook_id: str, owner: str, kind: str, db_session, focus: str | None = None
+    notebook_id: str, owner: str, kind: str, db_session, focus: str | None = None,
+    layout_instruction: str | None = None,
 ) -> NotebookArtifact:
     """Generate one artifact for `notebook_id` and return its NotebookArtifact.
 
@@ -447,6 +463,21 @@ async def generate_artifact(
             f"maar behoud het mermaid-mindmap formaat."
         )
         user_msg = {"role": user_msg["role"], "content": user_msg["content"] + focus_instruction}
+    if kind == "report" and layout_instruction and layout_instruction.strip():
+        # layout_instruction isn't always user-typed: it can be an
+        # AI-recommended layout's `instruction` field, itself LLM output
+        # generated from untrusted notebook source content (see
+        # src/notebook_report_layouts.py), cached, and posted back verbatim.
+        # Escape guard-marker literals before it lands in this trusted zone
+        # of the message, or a malicious source document could steer the
+        # suggestion call into laundering guard markers into the
+        # report-generation call below.
+        safe_instruction = _escape_guard_markers(layout_instruction.strip())
+        layout_instruction_text = (
+            f"\n\nIndeling-instructie voor dit rapport: {safe_instruction} "
+            f"Volg deze instructie voor de structuur, stijl en toon van het rapport."
+        )
+        user_msg = {"role": user_msg["role"], "content": user_msg["content"] + layout_instruction_text}
     messages = [
         {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{spec['prompt']}"},
         user_msg,

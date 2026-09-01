@@ -793,6 +793,10 @@ def _migrate_add_notebook_source_url_column():
 def _migrate_add_notebook_cover_image_column():
     _add_column_if_missing('notebooks', 'cover_image', 'VARCHAR')
 
+def _migrate_add_notebook_report_layouts_columns():
+    _add_column_if_missing('notebooks', 'report_layouts_json', 'TEXT')
+    _add_column_if_missing('notebooks', 'report_layouts_fingerprint', 'VARCHAR')
+
 
 def _migrate_add_notebook_artifact_video_path_column():
     _add_column_if_missing('notebook_artifacts', 'video_path', 'VARCHAR')
@@ -1520,6 +1524,12 @@ class Notebook(TimestampMixin, Base):
     # Filename (uuid4-hex + extension) of an AI-generated cover image stored
     # in NOTEBOOK_COVERS_DIR. Null = no cover yet (card shows SVG fallback).
     cover_image = Column(String, nullable=True)
+    # Cached AI-recommended report layouts (Rapporten feature) — a JSON array
+    # of {title, description, instruction}, keyed by a fingerprint of the
+    # notebook's indexed sources so re-opening the modal doesn't re-run the
+    # LLM call when nothing changed. Both null until the first fetch.
+    report_layouts_json = Column(Text, nullable=True)
+    report_layouts_fingerprint = Column(String, nullable=True)
     sources = relationship("NotebookSource", cascade="all, delete-orphan",
                            backref="notebook")
     artifacts = relationship("NotebookArtifact", cascade="all, delete-orphan",
@@ -1769,6 +1779,7 @@ def init_db():
     _migrate_add_notebook_artifact_video_path_column()
     _migrate_add_notebook_source_url_column()
     _migrate_add_notebook_cover_image_column()
+    _migrate_add_notebook_report_layouts_columns()
     _migrate_add_last_message_at_column()
     _migrate_add_folder_column()
     _migrate_add_token_columns()
