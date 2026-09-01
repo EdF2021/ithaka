@@ -19,6 +19,13 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      # mcp 2.0 drops the Server.list_tools() decorator API that
+      # mcp_servers/* depend on (see CLAUDE.md's "Dependency pin" rule).
+      # Bumping the major version silently breaks local MCP servers and
+      # only shows up as a pytest collection failure in CI (see PR #83).
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
 
   # Frontend / tooling npm packages (package.json).
   - package-ecosystem: npm
