@@ -124,12 +124,11 @@ Geen wijziging aan `NotebookArtifact` nodig — een rapport is gewoon een artifa
 
 ## Frontend (`static/js/notebookWorkspace.js`)
 
-- Nieuwe tegel **"Report"** (Engelse tegellabel, consistent met de bestaande tegels — Slides,
-  Study guide, Briefing, etc. — de Nederlandse teksten uit het screenshot horen bij de modal-
-  inhoud, niet bij het tegel-label) met een eigen icoon in `_KIND_ICONS`, naast de bestaande
-  `ARTIFACT_KINDS`-tegels maar met een ander klikgedrag: opent de modal in plaats van direct te
-  genereren.
-- **`KIND_LABELS.report = 'Report'`**, **`_KIND_ICONS.report = ...`** (nieuw monochroom SVG-icoon,
+- Nieuwe tegel **"Rapporten"** (Nederlands — bevestigd door Ed, bewuste uitzondering op de
+  Engelse-tegellabel-conventie van de overige tegels) met een eigen icoon in `_KIND_ICONS`, naast
+  de bestaande `ARTIFACT_KINDS`-tegels maar met een ander klikgedrag: opent de modal in plaats
+  van direct te genereren.
+- **`KIND_LABELS.report = 'Rapporten'`**, **`_KIND_ICONS.report = ...`** (nieuw monochroom SVG-icoon,
   bestaande stijl) — nodig zodat al-gegenereerde rapport-artifacts correct gelabeld worden in de
   artifact-lijst.
 - **Modal "Rapport maken"**: bij openen `GET /report-layouts` ophalen; sectie *Indeling*
@@ -164,9 +163,7 @@ Geen wijziging aan `NotebookArtifact` nodig — een rapport is gewoon een artifa
   "Zelf rapport maken" met vrije tekst genereren, "Aanbevolen indeling" met echte
   notebook-bronnen bekijken — desktop én 360px mobiel, console-check.
 
-## Openstaande aanname (te bevestigen bij spec-review)
+## Besluit uit spec-review
 
-De keuze om de **tegel** "Report" te noemen (Engels, consistent met de bestaande tegels) terwijl
-de **modal-inhoud** Nederlands is (zoals het screenshot) is een bewuste, maar niet expliciet door
-Ed bevestigde, keuze — gebaseerd op de bestaande `KIND_LABELS`-conventie in
-`notebookWorkspace.js`. Kan bij spec-review worden omgezet naar "Rapporten" als dat beter aansluit.
+Tegellabel is **"Rapporten"** (Nederlands) — bevestigd door Ed, bewuste uitzondering op de
+Engelse-tegellabel-conventie van de overige Studio-tegels.
