@@ -815,3 +815,218 @@ def test_artifacts_generate_predicate_rejects_other_paths():
     # Bare prefix without a notebook id segment.
     assert artifacts.is_artifacts_generate_request("POST", "/api/notebooks/artifacts") is False
     assert artifacts.is_artifacts_generate_request("POST", "/api/notebooks//artifacts") is False
+
+
+# --------------------------------------------------------------------------
+# Fase 2: bron-niveau citaties in rapport-artifacts
+#
+# Only kind="report" gets numbered "=== BRON [n]: ... ===" headers and a
+# citation instruction; every other kind keeps the shared, ungenummerde
+# _SOURCE_HEADER via gather_source_text (see the cross-kind-isolation test
+# below, mirroring test_layout_instruction_ignored_for_other_kinds' shape).
+# --------------------------------------------------------------------------
+
+# --- gather_source_text_numbered ------------------------------------------
+
+def test_gather_numbered_headers_for_report():
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Bronnen")
+        make_source(s, nb, filename="een.txt", content="EERSTE")
+        make_source(s, nb, filename="twee.txt", content="TWEEDE")
+
+        text, count = artifacts.gather_source_text_numbered(nb, s)
+
+        assert count == 2
+        assert "=== BRON [1]: een.txt ===" in text
+        assert "=== BRON [2]: twee.txt ===" in text
+        assert "EERSTE" in text
+        assert "TWEEDE" in text
+    finally:
+        s.close()
+
+
+def test_gather_numbered_skips_failed_and_docless():
+    """Mirrors test_gather_skips_failed_and_docless for the numbered variant."""
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Bronnen")
+        make_source(s, nb, filename="goed.txt", content="GOEDE INHOUD")
+        make_source(s, nb, filename="stuk.txt", content="MISLUKT", status="failed")
+        make_source(s, nb, filename="leeg.txt", with_document=False)
+
+        text, count = artifacts.gather_source_text_numbered(nb, s)
+
+        assert count == 1
+        assert "=== BRON [1]: goed.txt ===" in text
+        assert "GOEDE INHOUD" in text
+        assert "stuk.txt" not in text
+        assert "leeg.txt" not in text
+    finally:
+        s.close()
+
+
+def test_gather_numbered_returns_empty_without_sources():
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Leeg")
+        text, count = artifacts.gather_source_text_numbered(nb, s)
+        assert text == ""
+        assert count == 0
+    finally:
+        s.close()
+
+
+def test_gather_numbered_cap_proportional_matches_unnumbered():
+    """Same water-filling truncation as gather_source_text (F2 regression
+    guard), just with numbered headers."""
+    s = _TS()
+    try:
+        nb = make_notebook(s, name="Groot")
+        make_source(s, nb, filename="a.txt", content="a" * 50_000)
+        make_source(s, nb, filename="b.txt", content="b" * 50_000)
+
+        text, count = artifacts.gather_source_text_numbered(nb, s)
+
+        assert count == 2
+        assert len(text) <= artifacts.MAX_CONTEXT_CHARS
+        blocks = text.split("\n\n")
+        assert len(blocks) == 2
+        for block in blocks:
+            assert block.endswith("(bron ingekort)")
+        assert blocks[0].startswith("=== BRON [1]: a.txt ===\n")
+        assert blocks[1].startswith("=== BRON [2]: b.txt ===\n")
+    finally:
+        s.close()
+
+
+# --- prompt wiring: numbered headers only for kind="report" ---------------
+
+async def test_report_prompt_gets_numbered_source_headers(monkeypatch):
+    s = _TS()
+    try:
+        fake = _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+        make_source(s, nb, filename="b.txt", content="tweede bron", owner="own")
+
+        await artifacts.generate_artifact(nb.id, "own", "report", s)
+
+        user = _user_content(fake.messages)
+        assert "=== BRON [1]: a.txt ===" in user
+        assert "=== BRON [2]: b.txt ===" in user
+    finally:
+        s.close()
+
+
+def test_report_instruction_mentions_citations_and_bronnen_section():
+    prompt = artifacts.ARTIFACT_KINDS["report"]["prompt"]
+    assert "=== BRON [n]:" in prompt
+    assert "[n]" in prompt
+    assert "## Bronnen" in prompt
+
+
+async def test_non_report_kind_keeps_unnumbered_headers(monkeypatch):
+    """Cross-kind isolation: any other kind must still get the shared,
+    ungenummerde "=== BRON: ... ===" header - mirrors
+    test_layout_instruction_ignored_for_other_kinds' isolation shape."""
+    s = _TS()
+    try:
+        fake = _patch_llm(monkeypatch, _FakeLLM())
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        await artifacts.generate_artifact(nb.id, "own", "faq", s)
+
+        user = _user_content(fake.messages)
+        assert "=== BRON: a.txt ===" in user
+        assert "=== BRON [1]:" not in user
+    finally:
+        s.close()
+
+
+# --- validate_report_markdown ----------------------------------------------
+
+def test_validate_report_accepts_citations_in_range():
+    text = "Bewering [1] en nog een [2] en [3] gecombineerd."
+    assert artifacts.validate_report_markdown(text, source_count=3) is None
+
+
+def test_validate_report_accepts_no_citations():
+    assert artifacts.validate_report_markdown("Gewone tekst zonder verwijzingen.", source_count=3) is None
+
+
+def test_validate_report_rejects_out_of_range_citation():
+    error = artifacts.validate_report_markdown("Bewering [7].", source_count=3)
+    assert error is not None
+    assert "[7]" in error
+
+
+def test_validate_report_rejects_zero_citation():
+    error = artifacts.validate_report_markdown("Bewering [0].", source_count=3)
+    assert error is not None
+    assert "[0]" in error
+
+
+def test_validate_report_ignores_markdown_links():
+    # "[tekst](url)" and a numeric-text link "[1](url)" are not citations.
+    text = "Zie [de bron](https://example.com) en ook [1](https://example.com/1)."
+    assert artifacts.validate_report_markdown(text, source_count=3) is None
+
+
+def test_validate_report_ignores_markdown_links_but_still_flags_real_citation():
+    text = "Zie [de bron](https://example.com) voor meer, en bewering [9] hier."
+    error = artifacts.validate_report_markdown(text, source_count=3)
+    assert error is not None
+    assert "[9]" in error
+
+
+# --- retry-seam: report regenerates on an out-of-range citation -----------
+
+async def test_generate_artifact_retries_report_on_out_of_range_citation(monkeypatch):
+    """Mirrors test_generate_artifact_retries_slide_deck_until_valid
+    (tests/test_notebook_slides.py) for the report kind's citation
+    validator."""
+    calls = []
+
+    async def fake_llm(messages, **kwargs):
+        calls.append(messages)
+        if len(calls) == 1:
+            return "# Rapport\n\nEen bewering die verwijst naar [9]."
+        return "# Rapport\n\nEen bewering die verwijst naar [1]."
+
+    monkeypatch.setattr(artifacts, "task_llm_call_async", fake_llm)
+    monkeypatch.setattr(artifacts, "fire_event", lambda *a, **k: None)
+    s = _TS()
+    try:
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        art = await artifacts.generate_artifact(nb.id, "own", "report", s)
+
+        assert art.kind == "report"
+        assert len(calls) == 2
+        # De correctie-retry voedt de fout en het foute antwoord terug.
+        joined = "\n".join(m["content"] for m in calls[1])
+        assert "[9]" in joined
+    finally:
+        s.close()
+
+
+async def test_generate_artifact_report_fails_after_max_attempts(monkeypatch):
+    async def fake_llm(messages, **kwargs):
+        return "# Rapport\n\nAltijd fout: [9]."
+
+    monkeypatch.setattr(artifacts, "task_llm_call_async", fake_llm)
+    monkeypatch.setattr(artifacts, "fire_event", lambda *a, **k: None)
+    s = _TS()
+    try:
+        nb = make_notebook(s, owner="own", name="Testboek")
+        make_source(s, nb, filename="a.txt", content="brontekst", owner="own")
+
+        with pytest.raises(RuntimeError):
+            await artifacts.generate_artifact(nb.id, "own", "report", s)
+
+        assert s.query(db.NotebookArtifact).filter_by(notebook_id=nb.id).count() == 0
+    finally:
+        s.close()
