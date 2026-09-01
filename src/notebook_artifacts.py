@@ -428,6 +428,14 @@ async def generate_artifact(
     leaves no Document and no artifact behind. Regenerating the same kind adds
     a new artifact rather than overwriting the old one.
 
+    `layout_instruction` is only used when kind="report" (the "Rapport
+    maken" flow in src/notebook_report_layouts.py): a fixed template's, an
+    AI-recommended layout's, or a user-typed instruction describing the
+    report's structure, style and tone. It is appended as extra instruction
+    in the user role (not the system role), escaped via
+    _escape_guard_markers first since it can carry LLM-generated text traced
+    back to untrusted source content.
+
     Raises ValueError for an unknown kind, an unknown/foreign notebook, or a
     notebook without usable sources; RuntimeError when the model returns
     nothing. Endpoint failures propagate from task_llm_call_async.

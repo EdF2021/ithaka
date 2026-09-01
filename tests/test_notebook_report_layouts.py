@@ -46,7 +46,10 @@ def test_fixed_templates_have_three_entries_with_required_fields():
     keys = {t["key"] for t in report_layouts.FIXED_TEMPLATES}
     assert keys == {"overview", "study_material", "blogpost"}
     for t in report_layouts.FIXED_TEMPLATES:
-        assert t["title"] and t["description"] and t["instruction"]
+        for field in ("key", "title", "description", "instruction"):
+            assert isinstance(t[field], str) and t[field].strip(), (
+                f'template {t.get("key")!r}: field "{field}" is missing or empty'
+            )
 
 
 def test_fingerprint_stable_for_same_entries_regardless_of_order():
@@ -92,6 +95,15 @@ def test_parse_layout_suggestions_caps_at_four():
     content = "```json\n" + json.dumps(items) + "\n```"
     result = report_layouts._parse_layout_suggestions(content)
     assert len(result) == 4
+
+
+def test_parse_layout_suggestions_single_line_fence_without_newline():
+    """_JSON_FENCE_RE previously required a newline right after the opening
+    ```json marker (\\s*\\n), so a fence the model puts entirely on one line
+    — no newline between ```json and the array — didn't match at all."""
+    content = '```json [{"title": "T1", "description": "D1", "instruction": "I1"}]```'
+    result = report_layouts._parse_layout_suggestions(content)
+    assert result == [{"title": "T1", "description": "D1", "instruction": "I1"}]
 
 
 async def test_get_recommended_layouts_no_sources_returns_empty_no_llm_call(monkeypatch):
