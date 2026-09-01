@@ -69,6 +69,23 @@ def test_notebook_search_is_scoped_and_k8():
     assert "ONLY those sources" in _system_text(preface)
 
 
+def test_notebook_retrieval_log_carries_notebook_and_source_ids(caplog):
+    """#112 diagnosability: the RAG-above-threshold logline must carry
+    notebook_id, source_ids and the used query so a prod log alone can show
+    whether a turn was source-filtered, without reading request payloads."""
+    hits = [{"document": "chunk text", "similarity": 0.9,
+             "metadata": {"filename": "a.pdf", "document_id": "doc-1"}}]
+    proc, _ = _mk_processor(hits)
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(proc, notebook_id="nb-1", source_ids=["doc-1", "doc-2"])
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert "notebook_id='nb-1'" in rag_lines[0]
+    assert "source_ids=['doc-1', 'doc-2']" in rag_lines[0]
+    assert "query='what is X?'" in rag_lines[0]
+
+
 def test_notebook_context_blocks_are_numbered_for_citation():
     """Citations only work if the injected blocks carry the same [n] numbers."""
     hits = [

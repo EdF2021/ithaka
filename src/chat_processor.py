@@ -403,7 +403,11 @@ class ChatProcessor:
                 # Filter by similarity threshold
                 relevant = [r for r in results if r.get("similarity", 0) >= self.RAG_SIMILARITY_THRESHOLD]
                 if relevant:
-                    logger.info(f"RAG: {len(relevant)}/{len(results)} results above threshold {self.RAG_SIMILARITY_THRESHOLD}")
+                    logger.info(
+                        f"RAG: {len(relevant)}/{len(results)} results above threshold "
+                        f"{self.RAG_SIMILARITY_THRESHOLD} (notebook_id={notebook_id!r}, "
+                        f"source_ids={source_ids!r}, query={search_query[:80]!r})"
+                    )
                     rag_sources = [
                         {
                             "index": i + 1,
