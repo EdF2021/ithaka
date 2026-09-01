@@ -41829,6 +41829,16 @@ body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
    10005 without needing !important. */
 body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
 
+/* #nbrp-modal (Rapport maken — _openReportModal, notebookWorkspace.js) is a
+   plain .modal (base z-index 250, not routed through modalManager.js), so it
+   normally renders behind #nbws-root's 10005 whenever it's opened from the
+   Studio tab. Desktop hides this by luck (#nbws-root's own middle column is
+   transparent there), but on mobile the active tab panel is opaque and
+   fills the viewport, so the modal is fully invisible until switching tabs
+   (#115). Same fix and value as .doc-editor-pane above: lift it just past
+   #nbws-root's 10005. */
+body.notebook-workspace-open #nbrp-modal { z-index: 10010; }
+
 /* ── Mobile tabs (Task 7, <=700px) — replaces the side-by-side
    sources/chat/studio columns with ONE full-width "page" at a time, switched
    by #nbws-tabbar's three buttons (wired in notebookWorkspace.js's
