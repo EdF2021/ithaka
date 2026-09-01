@@ -20,6 +20,8 @@
  * the original size.
  */
 
+import { zoomOf, toLocalPx } from './uiZoom.js';
+
 const EDGE_THRESHOLD_PX = 24;     // how close to an edge counts as "near"
 const TOP_FULL_STRIP_PX = 8;      // top strip → maximize
 
@@ -67,10 +69,17 @@ function _hideGhost() {
 
 function _showGhost(rect) {
   const g = _ensureGhost();
-  g.style.left = rect.left + 'px';
-  g.style.top  = rect.top  + 'px';
-  g.style.width  = rect.width  + 'px';
-  g.style.height = rect.height + 'px';
+  // UI text-scale zoom (:root.ui-scale-125) — rect is built from
+  // viewport-space measurements (window.inner*, getBoundingClientRect(), see
+  // _viewportSafeRect/_zoneForPointer below); divide before assigning as
+  // local px on this position:fixed, body-portaled ghost (see uiZoom.js,
+  // PR #76/#77). Converted once here, at the point of consumption — the
+  // zone-rect producers themselves stay in viewport space.
+  const _z = zoomOf(document.documentElement);
+  g.style.left   = toLocalPx(rect.left, _z)   + 'px';
+  g.style.top    = toLocalPx(rect.top, _z)    + 'px';
+  g.style.width  = toLocalPx(rect.width, _z)  + 'px';
+  g.style.height = toLocalPx(rect.height, _z) + 'px';
   g.classList.add('visible');
 }
 
@@ -182,6 +191,13 @@ function _applySnap(content, rect, zoneName) {
   const _fromRect = content.getBoundingClientRect();
   _clearEdgeDockResidue(_modal, content);
 
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+  // terms before assigning as local px (see uiZoom.js, PR #76/#77). Note:
+  // `content.style.left/top` (when non-empty) is already a local CSS value
+  // from a prior drag/snap — do NOT convert that branch again, only the
+  // `_fromRect` (getBoundingClientRect()) fallback.
+  const _z = zoomOf(document.documentElement);
+
   // Stash pre-snap geometry once; if we re-snap, keep the original. Capture a
   // CONCRETE fixed position (from the rendered rect when the inline value is
   // empty) and the position itself — otherwise un-snap restored empty left/top
@@ -189,8 +205,8 @@ function _applySnap(content, rect, zoneName) {
   if (!content.dataset._tilePreSnap) {
     content.dataset._tilePreSnap = JSON.stringify({
       position: 'fixed',
-      left:   content.style.left || (Math.round(_fromRect.left) + 'px'),
-      top:    content.style.top  || (Math.round(_fromRect.top)  + 'px'),
+      left:   content.style.left || (Math.round(toLocalPx(_fromRect.left, _z)) + 'px'),
+      top:    content.style.top  || (Math.round(toLocalPx(_fromRect.top, _z))  + 'px'),
       width:  content.style.width,
       height: content.style.height,
       maxHeight: content.style.maxHeight,
@@ -202,11 +218,11 @@ function _applySnap(content, rect, zoneName) {
   // and CSS that otherwise re-center the .modal-content, which made the snap
   // "jump back to the middle" on release.
   content.style.setProperty('position', 'fixed', 'important');
-  content.style.setProperty('left',   rect.left   + 'px', 'important');
-  content.style.setProperty('top',    rect.top    + 'px', 'important');
-  content.style.setProperty('width',  rect.width  + 'px', 'important');
-  content.style.setProperty('height', rect.height + 'px', 'important');
-  content.style.setProperty('max-height', rect.height + 'px', 'important');
+  content.style.setProperty('left',   toLocalPx(rect.left, _z)   + 'px', 'important');
+  content.style.setProperty('top',    toLocalPx(rect.top, _z)    + 'px', 'important');
+  content.style.setProperty('width',  toLocalPx(rect.width, _z)  + 'px', 'important');
+  content.style.setProperty('height', toLocalPx(rect.height, _z) + 'px', 'important');
+  content.style.setProperty('max-height', toLocalPx(rect.height, _z) + 'px', 'important');
   content.style.setProperty('margin', '0', 'important');
   content.style.setProperty('transform', 'none', 'important');
   content.dataset._tileZone = zoneName;
@@ -317,11 +333,15 @@ function _reclampAll(animate = false) {
       c.style.transition = 'left 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), height 0.22s cubic-bezier(0.34, 1.56, 0.64, 1)';
       setTimeout(() => { c.style.transition = ''; }, 250);
     }
-    c.style.setProperty('left', r.left + 'px', 'important');
-    c.style.setProperty('top',  r.top  + 'px', 'important');
-    c.style.setProperty('width', r.width + 'px', 'important');
-    c.style.setProperty('height', r.height + 'px', 'important');
-    c.style.setProperty('max-height', r.height + 'px', 'important');
+    // UI text-scale zoom (:root.ui-scale-125) — r is built fresh from
+    // viewport-space measurements each call (never a previously-converted
+    // value), so a single conversion here is safe (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    c.style.setProperty('left', toLocalPx(r.left, _z) + 'px', 'important');
+    c.style.setProperty('top',  toLocalPx(r.top, _z)  + 'px', 'important');
+    c.style.setProperty('width', toLocalPx(r.width, _z) + 'px', 'important');
+    c.style.setProperty('height', toLocalPx(r.height, _z) + 'px', 'important');
+    c.style.setProperty('max-height', toLocalPx(r.height, _z) + 'px', 'important');
   });
 }
 

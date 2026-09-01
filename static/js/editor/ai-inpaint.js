@@ -41,6 +41,7 @@
  * }} deps
  */
 import { state } from './state.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 export function wireInpaintButtons({
   buildMergedMaskCanvas, dilateMask, applyInpaintFeather,
@@ -101,9 +102,15 @@ export function wireInpaintButtons({
         const scaleY = mainRect.height / state.mainCanvas.height;
         const vpX = mainRect.left + cx * scaleX;
         const vpY = mainRect.top  + cy * scaleY;
+        // UI text-scale zoom (:root.ui-scale-125) — vpX/vpY are viewport-space
+        // (derived from getBoundingClientRect()); divide before assigning as
+        // local px (see uiZoom.js, PR #76/#77).
+        const _z = zoomOf(document.documentElement);
+        const localX = toLocalPx(vpX, _z);
+        const localY = toLocalPx(vpY, _z);
         canvasWp = spinnerModule.create('', 'clean', 'whirlpool');
         canvasWpEl = canvasWp.createElement();
-        canvasWpEl.style.cssText = `position:fixed;left:${vpX}px;top:${vpY}px;transform:translate(-50%,-50%);z-index:12;pointer-events:none;`;
+        canvasWpEl.style.cssText = `position:fixed;left:${localX}px;top:${localY}px;transform:translate(-50%,-50%);z-index:12;pointer-events:none;`;
         document.body.appendChild(canvasWpEl);
         canvasWp.start();
       }

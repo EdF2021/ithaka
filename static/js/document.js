@@ -17,6 +17,7 @@ import { openLibrary, closeLibrary, isLibraryOpen, initLibrary } from './documen
 import signatureModule from './signature.js';
 import * as Modals from './modalManager.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
   let API_BASE = '';
   let isOpen = false;
@@ -3150,12 +3151,17 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   function _positionIthakaAttachMenu(anchor, menu) {
     const r = anchor?.getBoundingClientRect?.();
     if (!r) return;
-    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 310))}px`;
-    menu.style.top = `${r.bottom + 6}px`;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term individually; 310 (the assumed menu width) stays
+    // local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    menu.style.left = `${Math.max(8, Math.min(toLocalPx(r.left, _z), vw - 310))}px`;
+    menu.style.top = `${toLocalPx(r.bottom + 6, _z)}px`;
     requestAnimationFrame(() => {
       const mr = menu.getBoundingClientRect();
       if (mr.bottom > window.innerHeight - 8) {
-        menu.style.top = `${Math.max(8, r.top - mr.height - 6)}px`;
+        menu.style.top = `${toLocalPx(Math.max(8, r.top - mr.height - 6), _z)}px`;
       }
     });
   }
@@ -4121,6 +4127,11 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
   function _showDocAiReplyChoice(btn) {
     _closeDocAiReplyChoice();
     if (!btn) return;
+    // UI text-scale zoom (:root.ui-scale-125) — left/top computed fully in
+    // viewport space below, divided once at final assignment (see uiZoom.js,
+    // PR #76/#77). menuMaxW stays as-is (sizing, not covered by the
+    // top/left/right/bottom pattern).
+    const _z = zoomOf(document.documentElement);
     const rect = btn.getBoundingClientRect();
     const menu = document.createElement('div');
     menu.className = 'doc-ai-reply-choice';
@@ -4134,8 +4145,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       : Math.max(8, rect.top - estHeight - 6);
     menu.style.cssText = [
       'position:fixed',
-      `left:${left}px`,
-      `top:${top}px`,
+      `left:${toLocalPx(left, _z)}px`,
+      `top:${toLocalPx(top, _z)}px`,
       `max-width:${menuMaxW}px`,
       'box-sizing:border-box',
       'z-index:10060',
@@ -4354,6 +4365,11 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     const modalContent = overlay.querySelector('.schedule-send-modal');
     const anchor = anchorEl || document.getElementById('doc-email-send-caret') || document.getElementById('doc-email-send-btn');
     if (modalContent && anchor) {
+      // UI text-scale zoom (:root.ui-scale-125) — left/top computed fully in
+      // viewport space below, divided once at final assignment (see
+      // uiZoom.js, PR #76/#77). width stays as-is (sizing, not covered by
+      // the top/left/right/bottom pattern).
+      const _z = zoomOf(document.documentElement);
       const rect = anchor.getBoundingClientRect();
       const gap = 8;
       const width = Math.min(400, Math.max(280, window.innerWidth - 16));
@@ -4367,8 +4383,8 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       const top = belowTop + estimatedHeight <= window.innerHeight - 8
         ? belowTop
         : Math.max(8, rect.top - estimatedHeight - gap);
-      modalContent.style.left = `${left}px`;
-      modalContent.style.top = `${top}px`;
+      modalContent.style.left = `${toLocalPx(left, _z)}px`;
+      modalContent.style.top = `${toLocalPx(top, _z)}px`;
     }
 
     const dtInput = overlay.querySelector('#sched-datetime');
@@ -5308,17 +5324,21 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         if (open) { _close(); return; }
         // Position the menu under the trigger (fixed so it escapes any
         // overflow-clipped ancestor like the footer).
+        // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+        // rect/window terms before assigning as local px (see uiZoom.js,
+        // PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const r = trigger.getBoundingClientRect();
         menu.style.display = 'block';
         menu.style.position = 'fixed';
-        menu.style.left = r.left + 'px';
-        menu.style.top = (r.bottom + 4) + 'px';
+        menu.style.left = toLocalPx(r.left, _z) + 'px';
+        menu.style.top = toLocalPx(r.bottom + 4, _z) + 'px';
         menu.style.minWidth = r.width + 'px';
         // If it would overflow the bottom of the viewport, flip above.
         requestAnimationFrame(() => {
           const mr = menu.getBoundingClientRect();
           if (mr.bottom > window.innerHeight - 8) {
-            menu.style.top = Math.max(8, r.top - mr.height - 4) + 'px';
+            menu.style.top = toLocalPx(Math.max(8, r.top - mr.height - 4), _z) + 'px';
           }
         });
         trigger.setAttribute('aria-expanded', 'true');
@@ -6436,14 +6456,17 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     const items = groups[kind];
     if (!items) return;
 
+    // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+    // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const rect = toggleBtn.getBoundingClientRect();
     const menu = document.createElement('div');
     menu.id = 'doc-md-dd-menu';
     menu.dataset.dd = kind;
     menu.className = 'doc-overflow-menu open';
     menu.style.position = 'fixed';
-    menu.style.top = (rect.bottom + 4) + 'px';
-    menu.style.left = rect.left + 'px';
+    menu.style.top = toLocalPx(rect.bottom + 4, _z) + 'px';
+    menu.style.left = toLocalPx(rect.left, _z) + 'px';
     menu.style.zIndex = '9999';
     items.forEach(([md, label, ico]) => {
       const it = document.createElement('button');
@@ -6587,10 +6610,14 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
         _mdMenuOpen = !_mdMenuOpen;
         if (_mdMenuOpen) {
           document.body.appendChild(overflowMenu);
+          // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+          // rect/window terms before assigning as local px (see uiZoom.js,
+          // PR #76/#77).
+          const _z = zoomOf(document.documentElement);
           const rect = overflowToggle.getBoundingClientRect();
           overflowMenu.style.position = 'fixed';
-          overflowMenu.style.top = (rect.bottom + 2) + 'px';
-          overflowMenu.style.right = (window.innerWidth - rect.right) + 'px';
+          overflowMenu.style.top = toLocalPx(rect.bottom + 2, _z) + 'px';
+          overflowMenu.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
           overflowMenu.style.left = 'auto';
         } else {
           overflowWrapper.appendChild(overflowMenu);
@@ -6727,10 +6754,14 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       if (_menuOpen) {
         // Move to body to escape overflow:hidden on doc-editor-pane
         document.body.appendChild(menu);
+        // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+        // rect/window terms before assigning as local px (see uiZoom.js,
+        // PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const rect = toggle.getBoundingClientRect();
         menu.style.position = 'fixed';
-        menu.style.top = (rect.bottom + 2) + 'px';
-        menu.style.right = (window.innerWidth - rect.right) + 'px';
+        menu.style.top = toLocalPx(rect.bottom + 2, _z) + 'px';
+        menu.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
         menu.style.left = 'auto';
       } else {
         wrapper.appendChild(menu);
@@ -8178,24 +8209,32 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
       const idx = text.indexOf(sugg.find);
       if (idx < 0) return;
 
+      // UI text-scale zoom (:root.ui-scale-125) — textareaRect.top/paneRect
+      // terms and window.inner* are viewport-space and get converted
+      // individually; paddingTop/lineH/scrollTop (from getComputedStyle/
+      // scrollTop, like offsetHeight) are already local (see uiZoom.js,
+      // PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const linesBefore = text.substring(0, idx).split('\n').length - 1;
       const lineH = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
       const textareaRect = textarea.getBoundingClientRect();
       const paddingTop = parseFloat(getComputedStyle(textarea).paddingTop) || 10;
-      const rawTop = textareaRect.top + paddingTop + (linesBefore * lineH) - textarea.scrollTop;
-      const clampedTop = Math.max(60, Math.min(rawTop, window.innerHeight - 220));
+      const rawTop = toLocalPx(textareaRect.top, _z) + paddingTop + (linesBefore * lineH) - textarea.scrollTop;
+      const vh = toLocalPx(window.innerHeight, _z);
+      const clampedTop = Math.max(60, Math.min(rawTop, vh - 220));
       card.style.position = 'fixed';
       card.style.top = clampedTop + 'px';
 
       const paneRect = pane.getBoundingClientRect();
       const isMobile = window.innerWidth <= 768;
       if (!isMobile) {
+        const vw = toLocalPx(window.innerWidth, _z);
         if (paneRect.right + 270 < window.innerWidth) {
-          card.style.left = (paneRect.right + 16) + 'px';
+          card.style.left = toLocalPx(paneRect.right, _z) + 16 + 'px';
           card.style.right = '';
         } else {
           card.style.left = '';
-          card.style.right = (window.innerWidth - paneRect.left + 16) + 'px';
+          card.style.right = vw - toLocalPx(paneRect.left, _z) + 16 + 'px';
         }
       }
 
@@ -9080,25 +9119,29 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     _docTabMenu._docId = docId;
 
     // Position: anchor to the tab bar bottom, aligned to button horizontally
+    // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+    // rect/window terms before assigning as local px (see uiZoom.js,
+    // PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const rect = _menuAnchorRect;
     const tabBar = document.getElementById('doc-tab-bar');
     const barBottom = tabBar ? tabBar.getBoundingClientRect().bottom : rect.bottom;
     _docTabMenu.style.position = 'fixed';
     _docTabMenu.style.zIndex = '1000';
-    _docTabMenu.style.left = rect.left + 'px';
-    _docTabMenu.style.top = (barBottom + 2) + 'px';
+    _docTabMenu.style.left = toLocalPx(rect.left, _z) + 'px';
+    _docTabMenu.style.top = toLocalPx(barBottom + 2, _z) + 'px';
 
     // Clamp to viewport edges
     requestAnimationFrame(() => {
       const menuRect = _docTabMenu.getBoundingClientRect();
       if (menuRect.right > window.innerWidth - 8) {
-        _docTabMenu.style.left = (window.innerWidth - menuRect.width - 8) + 'px';
+        _docTabMenu.style.left = toLocalPx(window.innerWidth - menuRect.width - 8, _z) + 'px';
       }
       if (menuRect.left < 8) {
-        _docTabMenu.style.left = '8px';
+        _docTabMenu.style.left = toLocalPx(8, _z) + 'px';
       }
       if (menuRect.bottom > window.innerHeight - 8) {
-        _docTabMenu.style.top = (barBottom - menuRect.height - 4) + 'px';
+        _docTabMenu.style.top = toLocalPx(barBottom - menuRect.height - 4, _z) + 'px';
       }
     });
 
@@ -9473,12 +9516,16 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     };
     const ext = extMap[lang] || '.txt';
 
+    // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+    // rect/window terms before assigning as local px (see uiZoom.js,
+    // PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const menu = document.createElement('div');
     menu.id = 'doc-export-menu';
     menu.className = 'doc-overflow-menu open';
     menu.style.position = 'fixed';
-    menu.style.top = (rect.bottom + 2) + 'px';
-    menu.style.right = (window.innerWidth - rect.right) + 'px';
+    menu.style.top = toLocalPx(rect.bottom + 2, _z) + 'px';
+    menu.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
     menu.style.left = 'auto';
     menu.style.zIndex = '9999';
 
@@ -9521,7 +9568,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
     const mh = menu.offsetHeight;
     if (rect.bottom + mh > window.innerHeight - 8) {
       menu.style.top = 'auto';
-      menu.style.bottom = (window.innerHeight - rect.top + 2) + 'px';
+      menu.style.bottom = toLocalPx(window.innerHeight - rect.top + 2, _z) + 'px';
     }
     // Outside-click AND Escape both route through the central esc-stack via
     // bindMenuDismiss; onClose owns the actual node removal.

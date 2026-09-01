@@ -10,6 +10,7 @@ import { topPortalZ } from './toolWindowZOrder.js';
 import { sortModelIds } from './modelSort.js';
 import { ordinalSuffix } from './util/ordinal.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 const API_BASE = window.location.origin;
 let _open = false;
@@ -1037,11 +1038,16 @@ function _showTaskDropdown(anchor, items) {
   // modal bring-to-front counter climbs unbounded, so a hardcoded z eventually
   // loses. topPortalZ() derives the value from the live tool-window stack.
   dd.style.zIndex = String(topPortalZ());
+  // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+  // rect/window term to local px individually; dd.offsetWidth/Height are
+  // already local (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = anchor.getBoundingClientRect();
-  let top = rect.bottom + 4;
-  let left = rect.right - dd.offsetWidth;
+  let top = toLocalPx(rect.bottom, _z) + 4;
+  let left = toLocalPx(rect.right, _z) - dd.offsetWidth;
   if (left < 8) left = 8;
-  if (top + dd.offsetHeight > window.innerHeight - 8) top = rect.top - dd.offsetHeight - 4;
+  const vh = toLocalPx(window.innerHeight, _z);
+  if (top + dd.offsetHeight > vh - 8) top = toLocalPx(rect.top, _z) - dd.offsetHeight - 4;
   dd.style.top = top + 'px';
   dd.style.left = left + 'px';
   const openedAt = performance.now();

@@ -11,6 +11,7 @@
  * @returns {{ toggleShortcuts: (show?: boolean) => void }}
  */
 import { shortcutsPopupHTML } from './build/popups.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 export function createShortcutsPopover() {
   let pop = null;
@@ -57,13 +58,17 @@ export function createShortcutsPopover() {
       });
       handle.addEventListener('pointermove', (e) => {
         if (!drag) return;
+        // UI text-scale zoom (:root.ui-scale-125) — the clamp stays in
+        // viewport space (clientX/Y, drag.dx/dy/w/h are all viewport-space);
+        // divide only the final assignment (see uiZoom.js, PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         let left = e.clientX - drag.dx;
         let top  = e.clientY - drag.dy;
         const m = 4;
         left = Math.max(m, Math.min(left, window.innerWidth  - drag.w - m));
         top  = Math.max(m, Math.min(top,  window.innerHeight - drag.h - m));
-        el.style.left = left + 'px';
-        el.style.top  = top + 'px';
+        el.style.left = toLocalPx(left, _z) + 'px';
+        el.style.top  = toLocalPx(top, _z) + 'px';
       });
       const endDrag = () => {
         if (!drag) return;
@@ -86,6 +91,10 @@ export function createShortcutsPopover() {
     // Place ABOVE the anchor, horizontally centred but clamped to
     // viewport. Falls back to BELOW if there's no room above.
     el.style.display = 'block';   // need a layout pass for accurate size
+    // UI text-scale zoom (:root.ui-scale-125) — the whole computation stays
+    // in viewport space (ar/pr are rects, not offsetWidth/Height); divide
+    // only the final assignment (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const ar = anchor.getBoundingClientRect();
     const pr = el.getBoundingClientRect();
     const margin = 8;
@@ -94,8 +103,8 @@ export function createShortcutsPopover() {
     if (top < margin) top = ar.bottom + margin;
     left = Math.max(margin, Math.min(left, window.innerWidth - pr.width - margin));
     top  = Math.max(margin, Math.min(top, window.innerHeight - pr.height - margin));
-    el.style.left = left + 'px';
-    el.style.top  = top + 'px';
+    el.style.left = toLocalPx(left, _z) + 'px';
+    el.style.top  = toLocalPx(top, _z) + 'px';
   }
 
   function toggleShortcuts(show) {
@@ -112,12 +121,15 @@ export function createShortcutsPopover() {
         el.style.top  = saved.top;
         // Re-clamp in case the viewport changed since the user dragged.
         requestAnimationFrame(() => {
+          // UI text-scale zoom — r is viewport-space (getBoundingClientRect);
+          // divide before assigning as local px (see uiZoom.js, PR #76/#77).
+          const _z = zoomOf(document.documentElement);
           const r = el.getBoundingClientRect();
           const m = 4;
-          if (r.right > window.innerWidth)  el.style.left = (window.innerWidth - r.width - m) + 'px';
-          if (r.bottom > window.innerHeight) el.style.top = (window.innerHeight - r.height - m) + 'px';
-          if (r.left < 0) el.style.left = m + 'px';
-          if (r.top  < 0) el.style.top  = m + 'px';
+          if (r.right > window.innerWidth)  el.style.left = toLocalPx(window.innerWidth - r.width - m, _z) + 'px';
+          if (r.bottom > window.innerHeight) el.style.top = toLocalPx(window.innerHeight - r.height - m, _z) + 'px';
+          if (r.left < 0) el.style.left = toLocalPx(m, _z) + 'px';
+          if (r.top  < 0) el.style.top  = toLocalPx(m, _z) + 'px';
         });
       } else {
         const anchor = document.getElementById('ge-shortcuts-btn');

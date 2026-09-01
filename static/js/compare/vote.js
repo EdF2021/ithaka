@@ -6,6 +6,7 @@ import { getModelCost } from '../chatRenderer.js';
 import uiModule from '../ui.js';
 import { VOTES_STORAGE_KEY, VOTES_MAX } from './icons.js';
 import { showScoreboard } from './scoreboard.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 var escapeHtml = uiModule.esc;
 
@@ -222,8 +223,17 @@ function handleVote(winnerIdx) {
   }
 }
 
-/** Spawn confetti particles from a point. */
+/** Spawn confetti particles from a point.
+ * @param {number} cx viewport-space x (e.g. a getBoundingClientRect() midpoint)
+ * @param {number} cy viewport-space y */
 function spawnConfetti(cx, cy, count) {
+  // UI text-scale zoom (:root.ui-scale-125) — every caller passes a
+  // viewport-space point (rect-derived); the pieces are position:fixed and
+  // body-portaled, so divide once before assigning local px (see uiZoom.js,
+  // PR #76/#77).
+  const _z = zoomOf(document.documentElement);
+  const localCx = toLocalPx(cx, _z);
+  const localCy = toLocalPx(cy, _z);
   const colors = ['#ffd700', '#ff6b6b', '#5b8def', '#51cf66', '#ff922b', '#cc5de8', '#22b8cf', '#fff'];
   for (let i = 0; i < count; i++) {
     const el = document.createElement('div');
@@ -235,8 +245,8 @@ function spawnConfetti(cx, cy, count) {
     el.style.height = (isCircle ? size : size * 0.6) + 'px';
     el.style.background = color;
     el.style.borderRadius = isCircle ? '50%' : '2px';
-    el.style.left = cx + 'px';
-    el.style.top = cy + 'px';
+    el.style.left = localCx + 'px';
+    el.style.top = localCy + 'px';
     const angle = Math.random() * Math.PI * 2;
     const speed = 60 + Math.random() * 160;
     const dx = Math.cos(angle) * speed;

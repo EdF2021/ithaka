@@ -12,6 +12,7 @@ import { snapModalToZone } from './tileManager.js';
 import { applyEdgeDock, clearDockSide } from './modalSnap.js';
 import { topToolWindowZ, topPortalZ } from './toolWindowZOrder.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 const API_BASE = window.location.origin;
 let _open = false;
@@ -97,8 +98,13 @@ function _showNotesFirstOpenHint(pane) {
   const place = () => {
     const r = pane.getBoundingClientRect();
     const hw = hint.offsetWidth || 260;
-    hint.style.top = Math.max(12, r.top + 58) + 'px';
-    hint.style.left = Math.min(window.innerWidth - hw - 12, Math.max(12, r.left + 18)) + 'px';
+    // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+    // rect/window terms before assigning as local px; hw (offsetWidth) is
+    // already local so it stays undivided (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    hint.style.top = toLocalPx(Math.max(12, r.top + 58), _z) + 'px';
+    hint.style.left = Math.min(vw - hw - 12, toLocalPx(Math.max(12, r.left + 18), _z)) + 'px';
   };
   const close = () => {
     window.removeEventListener('resize', place);
@@ -3258,14 +3264,18 @@ function _buildForm(note = null) {
     }
 
     function reposition() {
+      // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+      // rect/window term to local px individually; mw/mh (offsetWidth/Height)
+      // are already local (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const rect = anchor.getBoundingClientRect();
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
+      const vw = toLocalPx(window.innerWidth, _z);
+      const vh = toLocalPx(window.innerHeight, _z);
       const mw = menu.offsetWidth || 220;
       const mh = menu.offsetHeight || 280;
-      let top = rect.bottom + 4;
-      let left = rect.left;
-      if (top + mh > vh - 8) top = Math.max(8, rect.top - mh - 4);
+      let top = toLocalPx(rect.bottom, _z) + 4;
+      let left = toLocalPx(rect.left, _z);
+      if (top + mh > vh - 8) top = Math.max(8, toLocalPx(rect.top, _z) - mh - 4);
       if (left + mw > vw - 8) left = Math.max(8, vw - mw - 8);
       if (left < 8) left = 8;
       menu.style.top = top + 'px';
@@ -3463,15 +3473,19 @@ function _buildForm(note = null) {
     `;
     document.body.appendChild(menu);
     // Position next to the bell button
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; mw/mh (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const anchor = remindBtn || form.querySelector('.note-form-reminder-tags');
     const rect = anchor.getBoundingClientRect();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     const mw = menu.offsetWidth || 240;
     const mh = menu.offsetHeight || 200;
-    let top = rect.bottom + 4;
-    let left = rect.left;
-    if (top + mh > vh - 8) top = Math.max(8, rect.top - mh - 4);
+    let top = toLocalPx(rect.bottom, _z) + 4;
+    let left = toLocalPx(rect.left, _z);
+    if (top + mh > vh - 8) top = Math.max(8, toLocalPx(rect.top, _z) - mh - 4);
     if (left + mw > vw - 8) left = Math.max(8, vw - mw - 8);
     if (left < 8) left = 8;
     menu.style.top = top + 'px';
@@ -4411,16 +4425,20 @@ function _openNoteCornerMenu(btn) {
       <span>${note.agent_session_id ? 'Re-run agent' : 'Agent: solve this'}</span>
     </button>`;
   document.body.appendChild(menu);
+  // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+  // rect/window term to local px individually; mw/mh are already local
+  // (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const r = btn.getBoundingClientRect();
   // Right-align to the ⋯ button, clamped to the viewport.
   const mw = 168;
-  let left = Math.min(r.right - mw, window.innerWidth - mw - 8);
+  let left = Math.min(toLocalPx(r.right, _z) - mw, toLocalPx(window.innerWidth, _z) - mw - 8);
   left = Math.max(8, left);
   // Drop down by default; flip up if there isn't room below (the button
   // sits at the card's bottom edge now).
   const mh = menu.offsetHeight || 96;
   const below = window.innerHeight - r.bottom;
-  const top = (below < mh + 8 && r.top > mh + 8) ? (r.top - mh - 4) : (r.bottom + 4);
+  const top = (below < mh + 8 && r.top > mh + 8) ? (toLocalPx(r.top, _z) - mh - 4) : (toLocalPx(r.bottom, _z) + 4);
   menu.style.cssText += `position:fixed;z-index:${topPortalZ()};top:${Math.round(top)}px;left:${Math.round(left)}px;`;
   const close = bindMenuDismiss(menu, () => { menu.remove(); });
   menu.querySelector('[data-act="copy"]').addEventListener('click', () => { close(); _copyNote(id, btn); });
@@ -4429,12 +4447,14 @@ function _openNoteCornerMenu(btn) {
 
 function _positionNoteMenu(menu, btn, width = 196) {
   document.body.appendChild(menu);
+  // UI text-scale zoom (:root.ui-scale-125) — see _openNoteCornerMenu above.
+  const _z = zoomOf(document.documentElement);
   const r = btn.getBoundingClientRect();
-  let left = Math.min(r.right - width, window.innerWidth - width - 8);
+  let left = Math.min(toLocalPx(r.right, _z) - width, toLocalPx(window.innerWidth, _z) - width - 8);
   left = Math.max(8, left);
   const mh = menu.offsetHeight || 112;
   const below = window.innerHeight - r.bottom;
-  const top = (below < mh + 8 && r.top > mh + 8) ? (r.top - mh - 4) : (r.bottom + 4);
+  const top = (below < mh + 8 && r.top > mh + 8) ? (toLocalPx(r.top, _z) - mh - 4) : (toLocalPx(r.bottom, _z) + 4);
   menu.style.cssText += `position:fixed;z-index:${topPortalZ()};top:${Math.round(top)}px;left:${Math.round(left)}px;min-width:${width}px;`;
   const close = (ev) => {
     if (ev && menu.contains(ev.target)) return;
@@ -5068,12 +5088,19 @@ function _beginGrab(card, touch) {
   grid.insertBefore(placeholder, card);
 
   // Detach the card visually — fixed-position, anchored to the finger.
+  // UI text-scale zoom (:root.ui-scale-125) — the card stays inside the
+  // zoomed root once fixed, so viewport-space rect.left/top must be
+  // divided by zoom before assigning (see uiZoom.js, PR #76/#77).
+  const _zGrab = zoomOf(document.documentElement);
   card.classList.add('note-card-dragging');
   card.style.position = 'fixed';
-  card.style.left = rect.left + 'px';
-  card.style.top  = rect.top + 'px';
-  card.style.width  = rect.width + 'px';
-  card.style.height = rect.height + 'px';
+  card.style.left = toLocalPx(rect.left, _zGrab) + 'px';
+  card.style.top  = toLocalPx(rect.top, _zGrab) + 'px';
+  // Also divide width/height — the card is the same fixed-position element,
+  // and rect.width/height is just as much a viewport-space measurement as
+  // rect.left/top (fix-round-1, finding 3).
+  card.style.width  = toLocalPx(rect.width, _zGrab) + 'px';
+  card.style.height = toLocalPx(rect.height, _zGrab) + 'px';
   card.style.margin = '0';
   card.style.zIndex = '10001';
   // pointer-events:none so elementFromPoint sees the card BENEATH the finger
@@ -5093,12 +5120,16 @@ function _onDocTouchMove(e) {
   e.preventDefault();
   const touch = e.touches[0];
   const { card, placeholder, grid } = _dragState;
-  card.style.left = (touch.clientX - _dragState.grabOffsetX) + 'px';
+  // UI text-scale zoom — clamp math stays in viewport space (all terms here
+  // are rect/window/touch measurements), divide only the final assignment
+  // (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
+  card.style.left = toLocalPx(touch.clientX - _dragState.grabOffsetX, _z) + 'px';
   const quickAdd = grid.querySelector('.notes-quick-add');
   const minTop = quickAdd ? quickAdd.getBoundingClientRect().bottom + 4 : grid.getBoundingClientRect().top;
   const maxTop = Math.max(minTop, window.innerHeight - card.getBoundingClientRect().height - 8);
   const nextTop = Math.max(minTop, Math.min(maxTop, touch.clientY - _dragState.grabOffsetY));
-  card.style.top = nextTop + 'px';
+  card.style.top = toLocalPx(nextTop, _z) + 'px';
 
   const hitY = Math.max(minTop + 1, Math.min(window.innerHeight - 1, touch.clientY));
   const under = document.elementFromPoint(touch.clientX, hitY);
@@ -5133,10 +5164,12 @@ function _onDocTouchEnd() {
   // Animate the card from its current fixed position to where the
   // placeholder sits, then re-parent and clear inline styles. Drag
   // mode auto-exits once the snap finishes — release = done.
+  // UI text-scale zoom — see _beginGrab above.
+  const _zEnd = zoomOf(document.documentElement);
   const phRect = placeholder.getBoundingClientRect();
   card.style.transition = 'left 0.2s ease, top 0.2s ease';
-  card.style.left = phRect.left + 'px';
-  card.style.top  = phRect.top + 'px';
+  card.style.left = toLocalPx(phRect.left, _zEnd) + 'px';
+  card.style.top  = toLocalPx(phRect.top, _zEnd) + 'px';
   setTimeout(() => {
     placeholder.parentNode.insertBefore(card, placeholder);
     placeholder.remove();
@@ -5218,11 +5251,15 @@ function _beginChecklistGrab(row, container, touch) {
   placeholder.style.height = rect.height + 'px';
   container.insertBefore(placeholder, row);
 
+  // UI text-scale zoom (:root.ui-scale-125) — see _beginGrab above.
+  const _zGrab = zoomOf(document.documentElement);
   row.classList.add('note-cl-row-dragging');
   row.style.position = 'fixed';
-  row.style.left = rect.left + 'px';
-  row.style.top  = rect.top + 'px';
-  row.style.width = rect.width + 'px';
+  row.style.left = toLocalPx(rect.left, _zGrab) + 'px';
+  row.style.top  = toLocalPx(rect.top, _zGrab) + 'px';
+  // Also divide width — same reasoning as _beginGrab above (fix-round-1,
+  // finding 3).
+  row.style.width = toLocalPx(rect.width, _zGrab) + 'px';
   row.style.zIndex = '10002';
   row.style.pointerEvents = 'none';
 
@@ -5240,8 +5277,10 @@ function _onClTouchMove(e) {
   e.preventDefault();
   const t = e.touches[0];
   const { row, placeholder, container } = _clDrag;
-  row.style.left = (t.clientX - _clDrag.grabOffsetX) + 'px';
-  row.style.top  = (t.clientY - _clDrag.grabOffsetY) + 'px';
+  // UI text-scale zoom — see _onDocTouchMove above.
+  const _z = zoomOf(document.documentElement);
+  row.style.left = toLocalPx(t.clientX - _clDrag.grabOffsetX, _z) + 'px';
+  row.style.top  = toLocalPx(t.clientY - _clDrag.grabOffsetY, _z) + 'px';
 
   const under = document.elementFromPoint(t.clientX, t.clientY);
   const target = under && under.closest
@@ -5267,10 +5306,12 @@ function _onClTouchEnd() {
   if (!_clDrag) return;
   const { row, placeholder } = _clDrag;
   _clDrag = null;
+  // UI text-scale zoom — see _onDocTouchEnd above.
+  const _zEnd = zoomOf(document.documentElement);
   const phRect = placeholder.getBoundingClientRect();
   row.style.transition = 'left 0.18s ease, top 0.18s ease';
-  row.style.left = phRect.left + 'px';
-  row.style.top  = phRect.top + 'px';
+  row.style.left = toLocalPx(phRect.left, _zEnd) + 'px';
+  row.style.top  = toLocalPx(phRect.top, _zEnd) + 'px';
   setTimeout(() => {
     placeholder.parentNode.insertBefore(row, placeholder);
     placeholder.remove();
