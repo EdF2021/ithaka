@@ -8,6 +8,7 @@ import { providerLogo } from './providers.js';
 import { initModelPicker, updateModelPicker } from './modelPicker.js';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 const API_BASE = window.location.origin;
 
@@ -500,6 +501,11 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
     if (sub.style.display === 'block') {
       sub.style.display = 'none';
     } else {
+      // UI text-scale zoom (:root.ui-scale-125) — the clamp math stays in
+      // viewport space (rect/ddRect/subRect are all real getBoundingClientRect()
+      // measurements); divide only the final assignment (see uiZoom.js,
+      // PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const rect = moveItem.getBoundingClientRect();
       const isMobile = window.innerWidth <= 768;
       sub.style.top = '-9999px';
@@ -509,26 +515,26 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
       if (isMobile) {
         // On mobile: position below the dropdown, centered
         const ddRect = dropdown.getBoundingClientRect();
-        sub.style.left = Math.max(8, ddRect.left) + 'px';
+        sub.style.left = toLocalPx(Math.max(8, ddRect.left), _z) + 'px';
         sub.style.width = Math.min(ddRect.width, window.innerWidth - 16) + 'px';
         const topBelow = ddRect.bottom + 4;
         if (topBelow + subRect.height > window.innerHeight) {
-          sub.style.top = Math.max(8, ddRect.top - subRect.height - 4) + 'px';
+          sub.style.top = toLocalPx(Math.max(8, ddRect.top - subRect.height - 4), _z) + 'px';
         } else {
-          sub.style.top = topBelow + 'px';
+          sub.style.top = toLocalPx(topBelow, _z) + 'px';
         }
       } else {
         // Desktop: to the right
-        sub.style.left = rect.right + 2 + 'px';
+        sub.style.left = toLocalPx(rect.right + 2, _z) + 'px';
         sub.style.width = '';
         if (rect.top + subRect.height > window.innerHeight) {
-          sub.style.top = Math.max(2, window.innerHeight - subRect.height - 4) + 'px';
+          sub.style.top = toLocalPx(Math.max(2, window.innerHeight - subRect.height - 4), _z) + 'px';
         } else {
-          sub.style.top = rect.top + 'px';
+          sub.style.top = toLocalPx(rect.top, _z) + 'px';
         }
         // Clamp right edge
         if (rect.right + 2 + subRect.width > window.innerWidth - 8) {
-          sub.style.left = Math.max(8, rect.left - subRect.width - 2) + 'px';
+          sub.style.left = toLocalPx(Math.max(8, rect.left - subRect.width - 2), _z) + 'px';
         }
       }
     }
@@ -679,18 +685,22 @@ function createSessionItem(s) {
       if (dd) {
         // Close any other open dropdowns
         document.querySelectorAll('.dropdown').forEach(d => { if (d !== dd) d.style.display = 'none'; });
+        // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+        // rect/window terms before assigning as local px (see uiZoom.js,
+        // PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const rect = div.getBoundingClientRect();
         dd.style.position = 'fixed';
-        dd.style.left = rect.left + 'px';
-        dd.style.top = (rect.bottom + 4) + 'px';
+        dd.style.left = toLocalPx(rect.left, _z) + 'px';
+        dd.style.top = toLocalPx(rect.bottom + 4, _z) + 'px';
         dd.style.right = 'auto';
         dd.style.display = 'block';
         dd.style.zIndex = '1000';
         // Clamp to viewport
         requestAnimationFrame(() => {
           const mr = dd.getBoundingClientRect();
-          if (mr.bottom > window.innerHeight - 8) dd.style.top = (rect.top - mr.height - 4) + 'px';
-          if (mr.right > window.innerWidth - 8) { dd.style.left = 'auto'; dd.style.right = '8px'; }
+          if (mr.bottom > window.innerHeight - 8) dd.style.top = toLocalPx(rect.top - mr.height - 4, _z) + 'px';
+          if (mr.right > window.innerWidth - 8) { dd.style.left = 'auto'; dd.style.right = toLocalPx(8, _z) + 'px'; }
         });
         // Close on tap outside
         const close = (ev) => { if (!dd.contains(ev.target)) { dd.style.display = 'none'; document.removeEventListener('click', close, true); } };
@@ -869,18 +879,22 @@ function createSessionItem(s) {
       dropdown.style.display = 'none';
     } else {
       // Position the dropdown using viewport coords
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+      // rect/window terms before assigning as local px (see uiZoom.js,
+      // PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const rect = menuBtn.getBoundingClientRect();
       dropdown.style.left = '';
-      dropdown.style.right = (window.innerWidth - rect.right) + 'px';
+      dropdown.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
       // Show off-screen first to measure height
       dropdown.style.top = '-9999px';
       dropdown.style.display = 'block';
       const ddRect = dropdown.getBoundingClientRect();
       // Flip above if not enough room below
       if (rect.bottom + 2 + ddRect.height > window.innerHeight) {
-        dropdown.style.top = Math.max(2, rect.top - ddRect.height - 2) + 'px';
+        dropdown.style.top = toLocalPx(Math.max(2, rect.top - ddRect.height - 2), _z) + 'px';
       } else {
-        dropdown.style.top = rect.bottom + 2 + 'px';
+        dropdown.style.top = toLocalPx(rect.bottom + 2, _z) + 'px';
       }
     }
   });
@@ -2757,15 +2771,18 @@ function _showDropdown(anchorEl, items) {
   document.body.appendChild(dd);
 
   // Position using viewport coords (same pattern as session menus)
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+  // rect/window terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = anchorEl.getBoundingClientRect();
-  dd.style.right = (window.innerWidth - rect.right) + 'px';
+  dd.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
   dd.style.top = '-9999px';
   dd.style.display = 'block';
   const ddRect = dd.getBoundingClientRect();
   if (rect.bottom + 2 + ddRect.height > window.innerHeight) {
-    dd.style.top = Math.max(2, rect.top - ddRect.height - 2) + 'px';
+    dd.style.top = toLocalPx(Math.max(2, rect.top - ddRect.height - 2), _z) + 'px';
   } else {
-    dd.style.top = (rect.bottom + 2) + 'px';
+    dd.style.top = toLocalPx(rect.bottom + 2, _z) + 'px';
   }
 
   function close() { dd.remove(); }

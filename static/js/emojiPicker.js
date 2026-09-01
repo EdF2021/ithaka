@@ -9,6 +9,7 @@
  */
 
 import { topPortalZ } from './toolWindowZOrder.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 // Each entry: [char, label, svgPath OR svg]
 // SVG icons matching Lucide style (24x24 viewBox, 2 stroke)
@@ -156,16 +157,19 @@ function togglePicker(anchor, target) {
   _pickerOpenedAt = now;
   document.body.appendChild(_pickerEl);
 
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+  // rect/window terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = anchor.getBoundingClientRect();
   _pickerEl.style.position = 'fixed';
-  _pickerEl.style.top = (rect.bottom + 4) + 'px';
-  _pickerEl.style.left = rect.left + 'px';
+  _pickerEl.style.top = toLocalPx(rect.bottom + 4, _z) + 'px';
+  _pickerEl.style.left = toLocalPx(rect.left, _z) + 'px';
   _pickerEl.style.zIndex = String(topPortalZ());
 
   requestAnimationFrame(() => {
     const pr = _pickerEl.getBoundingClientRect();
     if (pr.right > window.innerWidth - 8) {
-      _pickerEl.style.left = Math.max(8, window.innerWidth - pr.width - 8) + 'px';
+      _pickerEl.style.left = toLocalPx(Math.max(8, window.innerWidth - pr.width - 8), _z) + 'px';
     }
     // Always open downward. If it would run past the bottom, cap its height so
     // it scrolls internally instead of flipping up (which got cut off at top).

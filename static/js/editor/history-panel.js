@@ -21,6 +21,7 @@ import { state } from './state.js';
 import modalManager from '../modalManager.js';
 import { HISTORY_ICON, relTime } from './layer-helpers.js';
 import { historyPanelHTML } from './build/popups.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 export function createHistoryPanel({ undo, redo }) {
   function jumpToHistory(offset) {
@@ -59,8 +60,12 @@ export function createHistoryPanel({ undo, redo }) {
       label: 'History',
       icon: HISTORY_ICON,
       restoreFn: () => {
-        panel.style.left = panel._stashLeft + 'px';
-        panel.style.top  = panel._stashTop  + 'px';
+        // UI text-scale zoom (:root.ui-scale-125) — _stashLeft/_stashTop
+        // were captured via getBoundingClientRect() (viewport-space);
+        // divide before reassigning as local px (see uiZoom.js, PR #76/#77).
+        const _z = zoomOf(document.documentElement);
+        panel.style.left = toLocalPx(panel._stashLeft, _z) + 'px';
+        panel.style.top  = toLocalPx(panel._stashTop, _z) + 'px';
         panel.style.display = '';
         state.historyPanelEl = panel;
         refreshHistoryPanelIfOpen();
@@ -83,9 +88,12 @@ export function createHistoryPanel({ undo, redo }) {
     state.historyPanelEl = panel;
     const btn = document.getElementById('ge-history-btn');
     if (btn) {
+      // UI text-scale zoom — divide viewport-space rect terms before
+      // assigning as local px (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const r = btn.getBoundingClientRect();
-      panel.style.top  = (r.bottom + 6) + 'px';
-      panel.style.left = Math.max(8, r.left) + 'px';
+      panel.style.top  = toLocalPx(r.bottom + 6, _z) + 'px';
+      panel.style.left = toLocalPx(Math.max(8, r.left), _z) + 'px';
     }
     panel.querySelector('.ge-adj-min').addEventListener('click', minimiseHistoryPanel);
     // Click anywhere outside the panel (or trigger button) closes it.
@@ -110,10 +118,14 @@ export function createHistoryPanel({ undo, redo }) {
       head.setPointerCapture(e.pointerId);
       head.style.cursor = 'grabbing';
       const onMove = (ev) => {
+        // UI text-scale zoom — the clamp stays in viewport space (r0 and
+        // clientX/Y are all viewport-space); divide only the final
+        // assignment (see uiZoom.js, PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const nx = Math.max(0, Math.min(window.innerWidth - 60, r0.left + (ev.clientX - startX)));
         const ny = Math.max(0, Math.min(window.innerHeight - 30, r0.top  + (ev.clientY - startY)));
-        panel.style.left = nx + 'px';
-        panel.style.top  = ny + 'px';
+        panel.style.left = toLocalPx(nx, _z) + 'px';
+        panel.style.top  = toLocalPx(ny, _z) + 'px';
       };
       const onUp = () => {
         head.releasePointerCapture(e.pointerId);

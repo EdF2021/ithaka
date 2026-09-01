@@ -4,6 +4,8 @@
 // their .value stays the source of truth, and we dispatch 'input'
 // events so existing listeners keep working.
 
+import { zoomOf, toLocalPx } from './uiZoom.js';
+
 const LS_RECENT = 'ithaka-recent-colors';
 const MAX_RECENT = 12;
 
@@ -291,6 +293,10 @@ function commitCurrent() {
 
 // ── Open / close ──────────────────────────────────────────────────────
 function position(p, anchor) {
+  // UI text-scale zoom (:root.ui-scale-125) — the clamp stays in viewport
+  // space (rect/pRect are both real getBoundingClientRect() measurements);
+  // divide only the final assignment (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = anchor.getBoundingClientRect();
   const pRect = p.getBoundingClientRect();
   let left = rect.left;
@@ -299,8 +305,8 @@ function position(p, anchor) {
   if (top + pRect.height > window.innerHeight - 8) top = rect.top - pRect.height - 6;
   if (left < 8) left = 8;
   if (top < 8) top = 8;
-  p.style.left = left + 'px';
-  p.style.top = top + 'px';
+  p.style.left = toLocalPx(left, _z) + 'px';
+  p.style.top = toLocalPx(top, _z) + 'px';
 }
 
 let _onEsc = null;

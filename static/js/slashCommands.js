@@ -22,6 +22,7 @@ import settingsModule from './settings.js';
 import cookbookModule from './cookbook.js';
 import { EVAL_PROMPTS } from './compare/index.js';
 import { PROVIDER_DEVICE_FLOWS, formatDeviceFlowError, runProviderDeviceFlow } from './providerDeviceFlow.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 // ── Module state ──────────────────────────────────────────────────────
 
@@ -2202,6 +2203,10 @@ async function _cmdDemo(args, ctx) {
   function positionTooltip(target) {
     // Remove old arrow
     tooltip.querySelector('.tour-arrow')?.remove();
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; ttW (a fixed constant) and
+    // ttH (offsetHeight) are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const r = target.getBoundingClientRect();
     const ttW = 280;
     tooltip.style.visibility = 'hidden';
@@ -2214,38 +2219,47 @@ async function _cmdDemo(args, ctx) {
     const gap = 12;
     let top, left, arrowSide;
 
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
+
     // Prefer below
-    if (r.bottom + gap + ttH < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - ttW / 2;
+    if (rBottom + gap + ttH < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - ttW / 2;
       arrowSide = 'top';
     // Try above
-    } else if (r.top - gap - ttH > 10) {
-      top = r.top - gap - ttH;
-      left = r.left + r.width / 2 - ttW / 2;
+    } else if (rTop - gap - ttH > 10) {
+      top = rTop - gap - ttH;
+      left = rLeft + rWidth / 2 - ttW / 2;
       arrowSide = 'bottom';
     // Try right
     } else {
-      top = r.top + r.height / 2 - ttH / 2;
-      left = r.right + gap;
+      top = rTop + rHeight / 2 - ttH / 2;
+      left = rRight + gap;
       arrowSide = 'left';
     }
 
     // Clamp to viewport
-    if (left + ttW > window.innerWidth - 10) left = window.innerWidth - ttW - 10;
+    if (left + ttW > vw - 10) left = vw - ttW - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
 
     tooltip.style.top = top + 'px';
     tooltip.style.left = left + 'px';
 
-    // Position arrow pointing at target
+    // Position arrow pointing at target (all terms already local at this point)
     if (arrowSide === 'top') {
-      arrow.style.cssText = `top:-6px;left:${Math.min(Math.max(r.left + r.width / 2 - left - 5, 10), ttW - 20)}px;border-right:none;border-bottom:none`;
+      arrow.style.cssText = `top:-6px;left:${Math.min(Math.max(rLeft + rWidth / 2 - left - 5, 10), ttW - 20)}px;border-right:none;border-bottom:none`;
     } else if (arrowSide === 'bottom') {
-      arrow.style.cssText = `bottom:-6px;left:${Math.min(Math.max(r.left + r.width / 2 - left - 5, 10), ttW - 20)}px;border-left:none;border-top:none`;
+      arrow.style.cssText = `bottom:-6px;left:${Math.min(Math.max(rLeft + rWidth / 2 - left - 5, 10), ttW - 20)}px;border-left:none;border-top:none`;
     } else {
-      arrow.style.cssText = `left:-6px;top:${Math.min(Math.max(r.top + r.height / 2 - top - 5, 10), ttH - 20)}px;border-right:none;border-top:none`;
+      arrow.style.cssText = `left:-6px;top:${Math.min(Math.max(rTop + rHeight / 2 - top - 5, 10), ttH - 20)}px;border-right:none;border-top:none`;
     }
     tooltip.appendChild(arrow);
     tooltip.style.visibility = '';
@@ -2282,8 +2296,13 @@ async function _cmdDemo(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -2601,8 +2620,13 @@ async function _cmdTourCompare(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -2632,25 +2656,37 @@ async function _cmdTourCompare(args, ctx) {
   };
 
   function _positionTooltip(target) {
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const r = target.getBoundingClientRect();
     tooltip.style.visibility = 'hidden';
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -2761,7 +2797,11 @@ async function _cmdTourCompare(args, ctx) {
     requestAnimationFrame(() => _positionTooltip(startBtn));
   } else {
     // Fallback: park near the top if the start button isn't around (yet).
-    tooltip.style.left = ((window.innerWidth / 2) - 140) + 'px';
+    // UI text-scale zoom (:root.ui-scale-125) — 140 (half the tooltip's
+    // assumed width) stays local; window.innerWidth is converted
+    // individually (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    tooltip.style.left = (toLocalPx(window.innerWidth, _z) / 2 - 140) + 'px';
     tooltip.style.top  = '20px';
   }
 
@@ -2882,8 +2922,13 @@ async function _cmdTourCookbook(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -2914,30 +2959,42 @@ async function _cmdTourCookbook(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
       // Centered horizontally, sitting in the upper third of the viewport.
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -3111,8 +3168,13 @@ async function _cmdTourTheme(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -3143,29 +3205,41 @@ async function _cmdTourTheme(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -3355,8 +3429,13 @@ async function _cmdTourSettings(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -3395,29 +3474,41 @@ async function _cmdTourSettings(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -3588,8 +3679,13 @@ async function _cmdTourGallery(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -3627,29 +3723,41 @@ async function _cmdTourGallery(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -3801,8 +3909,13 @@ async function _cmdTourNotes(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -3840,29 +3953,41 @@ async function _cmdTourNotes(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -4001,8 +4126,13 @@ async function _cmdTourBrain(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -4040,29 +4170,41 @@ async function _cmdTourBrain(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -4215,8 +4357,13 @@ async function _runTaskTour(steps, doneText, opts) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top = (r.top - 4) + 'px';
-      halo.style.left = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -4253,13 +4400,23 @@ async function _runTaskTour(steps, doneText, opts) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const r = target.getBoundingClientRect();
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rWidth = toLocalPx(r.width, _z);
     const gap = 12;
-    let top = r.bottom + gap;
-    let left = r.left + r.width / 2 - tw / 2;
-    if (top + th > window.innerHeight - 10) top = r.top - gap - th;
+    let top = rBottom + gap;
+    let left = rLeft + rWidth / 2 - tw / 2;
+    if (top + th > vh - 10) top = rTop - gap - th;
     if (top < 10) top = 10;
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     tooltip.style.top = top + 'px';
     tooltip.style.left = left + 'px';
@@ -4321,10 +4478,14 @@ async function _runTaskTour(steps, doneText, opts) {
     // Centered in the upper third of the viewport.
     tooltip.style.visibility = 'hidden';
     requestAnimationFrame(() => {
+      // UI text-scale zoom (:root.ui-scale-125) — tw/th (offsetWidth/Height)
+      // are local; window.innerWidth/Height are converted individually
+      // before combining with them (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const tw = tooltip.offsetWidth || 260;
       const th = tooltip.offsetHeight || 100;
-      tooltip.style.top = Math.max(10, window.innerHeight * 0.32 - th / 2) + 'px';
-      tooltip.style.left = Math.max(10, window.innerWidth / 2 - tw / 2) + 'px';
+      tooltip.style.top = Math.max(10, toLocalPx(window.innerHeight, _z) * 0.32 - th / 2) + 'px';
+      tooltip.style.left = Math.max(10, toLocalPx(window.innerWidth, _z) / 2 - tw / 2) + 'px';
       tooltip.style.visibility = '';
       tooltip.classList.add('tour-fade-in');
     });
@@ -4446,8 +4607,13 @@ async function _cmdTourResearch(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -4478,29 +4644,41 @@ async function _cmdTourResearch(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -4660,8 +4838,13 @@ async function _cmdTourLibrary(args, ctx) {
     document.body.appendChild(halo);
     const update = () => {
       const r = target.getBoundingClientRect();
-      halo.style.top    = (r.top - 4) + 'px';
-      halo.style.left   = (r.left - 4) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+      // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+      // width/height are left as-is (sizing, not covered by the
+      // top/left/right/bottom pattern) — a known residual under zoom.
+      const _z = zoomOf(document.documentElement);
+      halo.style.top    = (toLocalPx(r.top, _z) - 4) + 'px';
+      halo.style.left   = (toLocalPx(r.left, _z) - 4) + 'px';
       halo.style.width  = (r.width + 8) + 'px';
       halo.style.height = (r.height + 8) + 'px';
     };
@@ -4692,29 +4875,41 @@ async function _cmdTourLibrary(args, ctx) {
     tooltip.style.display = '';
     const tw = tooltip.offsetWidth || 260;
     const th = tooltip.offsetHeight || 100;
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; tw/th (offsetWidth/Height)
+    // are already local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
+    const vw = toLocalPx(window.innerWidth, _z);
+    const vh = toLocalPx(window.innerHeight, _z);
     if (placement === 'center-above') {
-      const top = Math.max(10, window.innerHeight * 0.32 - th / 2);
-      const left = Math.max(10, window.innerWidth / 2 - tw / 2);
+      const top = Math.max(10, vh * 0.32 - th / 2);
+      const left = Math.max(10, vw / 2 - tw / 2);
       tooltip.style.top = top + 'px';
       tooltip.style.left = left + 'px';
       tooltip.style.visibility = '';
       return;
     }
     const r = target.getBoundingClientRect();
+    const rTop = toLocalPx(r.top, _z);
+    const rBottom = toLocalPx(r.bottom, _z);
+    const rLeft = toLocalPx(r.left, _z);
+    const rRight = toLocalPx(r.right, _z);
+    const rWidth = toLocalPx(r.width, _z);
+    const rHeight = toLocalPx(r.height, _z);
     const gap = 12;
     let top, left;
-    if (r.bottom + gap + th < window.innerHeight - 10) {
-      top = r.bottom + gap;
-      left = r.left + r.width / 2 - tw / 2;
-    } else if (r.top - gap - th > 10) {
-      top = r.top - gap - th;
-      left = r.left + r.width / 2 - tw / 2;
+    if (rBottom + gap + th < vh - 10) {
+      top = rBottom + gap;
+      left = rLeft + rWidth / 2 - tw / 2;
+    } else if (rTop - gap - th > 10) {
+      top = rTop - gap - th;
+      left = rLeft + rWidth / 2 - tw / 2;
     } else {
-      top = r.top + r.height / 2 - th / 2;
-      left = r.right + gap;
-      if (left + tw > window.innerWidth - 10) left = r.left - tw - gap;
+      top = rTop + rHeight / 2 - th / 2;
+      left = rRight + gap;
+      if (left + tw > vw - 10) left = rLeft - tw - gap;
     }
-    if (left + tw > window.innerWidth - 10) left = window.innerWidth - tw - 10;
+    if (left + tw > vw - 10) left = vw - tw - 10;
     if (left < 10) left = 10;
     if (top < 10) top = 10;
     tooltip.style.top = top + 'px';
@@ -4948,8 +5143,13 @@ function _showSetupSpotlight(selector, duration = 1800, options = {}) {
   document.body.appendChild(halo);
   const update = () => {
     const r = target.getBoundingClientRect();
-    halo.style.top = (r.top - 5) + 'px';
-    halo.style.left = (r.left - 5) + 'px';
+    // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+    // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+    // width/height are left as-is (sizing, not covered by the
+    // top/left/right/bottom pattern) — a known residual under zoom.
+    const _z = zoomOf(document.documentElement);
+    halo.style.top = (toLocalPx(r.top, _z) - 5) + 'px';
+    halo.style.left = (toLocalPx(r.left, _z) - 5) + 'px';
     halo.style.width = (r.width + 10) + 'px';
     halo.style.height = (r.height + 10) + 'px';
   };

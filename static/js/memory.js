@@ -7,6 +7,7 @@ import spinnerModule from './spinner.js';
 import { makeWindowDraggable } from './windowDrag.js';
 import { snapModalToZone } from './tileManager.js';
 import { topPortalZ } from './toolWindowZOrder.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 var escapeHtml = uiModule.esc;
 
@@ -861,10 +862,14 @@ export function renderMemoryList() {
         e.stopPropagation();
         // Close any other open dropdowns
         document.querySelectorAll('.memory-item-dropdown').forEach(d => d.remove());
+        // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+        // rect/window terms before assigning as local px (see uiZoom.js,
+        // PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const rect = menuBtn.getBoundingClientRect();
         dropdown.style.position = 'fixed';
-        dropdown.style.top = rect.bottom + 2 + 'px';
-        dropdown.style.right = (window.innerWidth - rect.right) + 'px';
+        dropdown.style.top = toLocalPx(rect.bottom + 2, _z) + 'px';
+        dropdown.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
         dropdown.style.left = 'auto';
         // Portaled to <body>, so it must outrank the Brain modal it belongs to.
         // Tool modals get a monotonically increasing z-index from modalManager's
@@ -879,10 +884,10 @@ export function renderMemoryList() {
         // bottom, clamp the left edge, cap height as a last resort.
         const dr = dropdown.getBoundingClientRect();
         if (dr.bottom > window.innerHeight - 6) {
-          dropdown.style.top = Math.max(6, rect.top - dr.height - 2) + 'px';
+          dropdown.style.top = toLocalPx(Math.max(6, rect.top - dr.height - 2), _z) + 'px';
         }
         if (dr.left < 6) {
-          dropdown.style.right = Math.max(6, window.innerWidth - 6 - dr.width) + 'px';
+          dropdown.style.right = toLocalPx(Math.max(6, window.innerWidth - 6 - dr.width), _z) + 'px';
         }
         const dr2 = dropdown.getBoundingClientRect();
         if (dr2.bottom > window.innerHeight - 6) {

@@ -46,6 +46,7 @@ import {
   defaultAdjParams,
 } from '../layer-helpers.js';
 import { drawHistogram } from './histogram.js';
+import { zoomOf, toLocalPx } from '../../uiZoom.js';
 
 export function createAdjPopupSystem({ composite, saveState, renderLayerPanel }) {
   function suppressLayerGhostTap() {
@@ -176,17 +177,25 @@ export function createAdjPopupSystem({ composite, saveState, renderLayerPanel })
       menu.style.right = '';
       menu.style.bottom = '';
     } else if (r) {
+      // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+      // rect/window term to local px individually; menuW (a fixed constant)
+      // and menuH (offsetHeight) are already local (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const menuW = 220;
       const menuH = menu.offsetHeight || 200;
-      const rightX = r.right + 4;
-      const leftX  = r.left - menuW - 4;
-      const fitsRight = rightX + menuW <= window.innerWidth - 8;
+      const vw = toLocalPx(window.innerWidth, _z);
+      const rectRight = toLocalPx(r.right, _z);
+      const rectLeft = toLocalPx(r.left, _z);
+      const rightX = rectRight + 4;
+      const leftX  = rectLeft - menuW - 4;
+      const fitsRight = rightX + menuW <= vw - 8;
       let left = fitsRight ? rightX : Math.max(8, leftX);
-      left = Math.min(window.innerWidth - menuW - 8, Math.max(8, left));
+      left = Math.min(vw - menuW - 8, Math.max(8, left));
       menu.style.left = left + 'px';
-      let top = r.top;
-      if (top + menuH > window.innerHeight - 8) top = r.bottom - menuH;
-      top = Math.min(window.innerHeight - menuH - 8, Math.max(8, top));
+      const vh = toLocalPx(window.innerHeight, _z);
+      let top = toLocalPx(r.top, _z);
+      if (top + menuH > vh - 8) top = toLocalPx(r.bottom, _z) - menuH;
+      top = Math.min(vh - menuH - 8, Math.max(8, top));
       menu.style.top = top + 'px';
     }
     menu.querySelectorAll('.ge-fx-menu-item').forEach(btn => {
@@ -227,8 +236,12 @@ export function createAdjPopupSystem({ composite, saveState, renderLayerPanel })
       label: adjLayerLabel(type),
       icon: ADJ_ICONS[type] || '',
       restoreFn: () => {
-        pop.style.left = pop._stashLeft + 'px';
-        pop.style.top  = pop._stashTop  + 'px';
+        // UI text-scale zoom (:root.ui-scale-125) — _stashLeft/_stashTop
+        // were captured via getBoundingClientRect() (viewport-space);
+        // divide before reassigning as local px (see uiZoom.js, PR #76/#77).
+        const _z = zoomOf(document.documentElement);
+        pop.style.left = toLocalPx(pop._stashLeft, _z) + 'px';
+        pop.style.top  = toLocalPx(pop._stashTop, _z) + 'px';
         pop.style.display = '';
         if (state.adjPopupEl && state.adjPopupEl !== pop) {
           const other = state.adjPopupEl;
@@ -312,19 +325,24 @@ export function createAdjPopupSystem({ composite, saveState, renderLayerPanel })
     document.body.appendChild(pop);
     state.adjPopupEl = pop;
 
+    // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+    // rect/window term to local px individually; pw (a fixed constant) stays
+    // local (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const r = anchorEl?.getBoundingClientRect?.();
     const pw = type === 'color-balance' ? 340 : 320;
     // Prefer right of anchor; fall back to left if no room.
     let left;
     if (r) {
-      const rightX = r.right + 8;
-      const leftX  = r.left - pw - 8;
-      const fitsRight = rightX + pw <= window.innerWidth - 8;
+      const vw = toLocalPx(window.innerWidth, _z);
+      const rightX = toLocalPx(r.right, _z) + 8;
+      const leftX  = toLocalPx(r.left, _z) - pw - 8;
+      const fitsRight = rightX + pw <= vw - 8;
       left = fitsRight ? rightX : Math.max(8, leftX);
     } else {
-      left = (window.innerWidth - pw) / 2;
+      left = (toLocalPx(window.innerWidth, _z) - pw) / 2;
     }
-    const top = r ? Math.max(8, r.top - 20) : 60;
+    const top = r ? Math.max(8, toLocalPx(r.top, _z) - 20) : 60;
     pop.style.left = left + 'px';
     pop.style.top  = top  + 'px';
 
@@ -338,17 +356,23 @@ export function createAdjPopupSystem({ composite, saveState, renderLayerPanel })
     const head = pop.querySelector('[data-adj-drag]');
     if (head) {
       const isMobile = window.matchMedia('(max-width: 820px)').matches;
+      // `x`/`y` are viewport-space (see onMove below); UI text-scale zoom
+      // (:root.ui-scale-125) — divide once here before assigning as local
+      // px (see uiZoom.js, PR #76/#77).
       const setPos = (x, y) => {
+        const _z = zoomOf(document.documentElement);
+        const lx = toLocalPx(x, _z) + 'px';
+        const ly = toLocalPx(y, _z) + 'px';
         if (isMobile) {
-          pop.style.setProperty('left', x + 'px', 'important');
-          pop.style.setProperty('top', y + 'px', 'important');
+          pop.style.setProperty('left', lx, 'important');
+          pop.style.setProperty('top', ly, 'important');
           pop.style.setProperty('right', 'auto', 'important');
           pop.style.setProperty('bottom', 'auto', 'important');
           pop.style.setProperty('width', 'auto', 'important');
           pop.style.setProperty('max-width', 'calc(100vw - 16px)', 'important');
         } else {
-          pop.style.left = x + 'px';
-          pop.style.top = y + 'px';
+          pop.style.left = lx;
+          pop.style.top = ly;
         }
       };
       head.style.touchAction = 'none';
@@ -596,6 +620,13 @@ export function createAdjPopupSystem({ composite, saveState, renderLayerPanel })
     if (!wrap || !canvas) return;
     const handles = bodyEl.querySelectorAll('.ge-adj-hist-handle');
     const placeHandles = () => {
+      // `w` is the canvas's rendered (viewport-space) width, so xB/xW/xG
+      // derived from it are viewport-space too, even though the handles are
+      // position:absolute (not fixed) — UI text-scale zoom (:root.ui-scale-125)
+      // still re-multiplies any px assigned from a viewport-space measurement
+      // onto a zoomed-root descendant. Divide once before assigning (see
+      // uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const w = canvas.getBoundingClientRect().width;
       const p = layer._stagedAdj.params;
       const xB = (p.inBlack  / 255) * w;
@@ -606,7 +637,7 @@ export function createAdjPopupSystem({ composite, saveState, renderLayerPanel })
       const xG = xB + (xW - xB) * gammaT;
       const set = (sel, x) => {
         const el = bodyEl.querySelector(sel);
-        if (el) el.style.left = (x - 6) + 'px';
+        if (el) el.style.left = toLocalPx(x - 6, _z) + 'px';
       };
       set('.hist-h-black', xB);
       set('.hist-h-gamma', xG);

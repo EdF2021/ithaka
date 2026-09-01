@@ -40,6 +40,7 @@ import themeModule from '../theme.js';
 import presetsModule from '../presets.js';
 import markdownModule from '../markdown.js';
 import { bindMenuDismiss } from '../escMenuStack.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 var escapeHtml = uiModule.esc;
 
@@ -1066,10 +1067,13 @@ let _exportMenuEl = null;
 let _closeExportMenu = () => {};
 function _toggleExportMenu(btn) {
   if (_exportMenuEl) { _closeExportMenu(); return; }
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+  // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const r = btn.getBoundingClientRect();
   const m = document.createElement('div');
   m.className = 'compare-export-menu';
-  m.style.cssText = 'position:fixed;z-index:10001;top:' + (r.bottom + 4) + 'px;left:' + r.left + 'px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;display:flex;flex-direction:column;min-width:170px;';
+  m.style.cssText = 'position:fixed;z-index:10001;top:' + toLocalPx(r.bottom + 4, _z) + 'px;left:' + toLocalPx(r.left, _z) + 'px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;display:flex;flex-direction:column;min-width:170px;';
   const opts = [
     { label: 'Copy as Markdown', fn: () => _exportCopyMarkdown(btn) },
     { label: 'Download .md',     fn: () => _exportDownloadMarkdown() },

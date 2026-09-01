@@ -19,6 +19,7 @@
  * }} deps
  */
 import { state } from './state.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 export function wireSliderUx({ registerDocClickAway }) {
   const container = state.container;
@@ -54,12 +55,15 @@ export function wireSliderUx({ registerDocClickAway }) {
     // overflow:hidden / overflow:auto on the row's ancestors. The
     // bubble's X is CLAMPED to the slider's track so it can't follow
     // a finger that drags way past either end.
+    // UI text-scale zoom (:root.ui-scale-125) — the clamp stays in viewport
+    // space; divide only the final assignment (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const sliderRect = slider.getBoundingClientRect();
     const minX = sliderRect.left + 8;
     const maxX = sliderRect.right - 8;
     const x = Math.max(minX, Math.min(maxX, cursorX));
-    sliderBubble.style.left = x + 'px';
-    sliderBubble.style.top  = (sliderRect.top - 8) + 'px';
+    sliderBubble.style.left = toLocalPx(x, _z) + 'px';
+    sliderBubble.style.top  = toLocalPx(sliderRect.top - 8, _z) + 'px';
   }
   function showSliderBubble(slider, e) {
     if (sliderBubble.parentElement !== document.body) document.body.appendChild(sliderBubble);

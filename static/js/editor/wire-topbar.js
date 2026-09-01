@@ -35,6 +35,7 @@
  * }} deps
  */
 import { state } from './state.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 const TOPBAR_MENU_IDS = ['ge-image-menu', 'ge-filter-menu', 'ge-resize-menu', 'ge-save-menu'];
 const TOPBAR_TRIGGER_IDS = ['ge-image-menu-btn', 'ge-filter-menu-btn', 'ge-resize-menu-btn', 'ge-save-menu-btn'];
@@ -91,9 +92,13 @@ export function wireTopbar(deps) {
         saveTopbar?.classList.toggle('ge-topbar-menu-open', !!open);
       };
       const positionSaveMenu = () => {
+        // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+        // rect/window terms before assigning as local px (see uiZoom.js,
+        // PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const r = saveBtn.getBoundingClientRect();
-        saveMenu.style.top = `${r.bottom + 2}px`;
-        saveMenu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+        saveMenu.style.top = `${toLocalPx(r.bottom + 2, _z)}px`;
+        saveMenu.style.right = `${toLocalPx(Math.max(8, window.innerWidth - r.right), _z)}px`;
         saveMenu.style.left = 'auto';
       };
       saveBtn.addEventListener('click', (e) => {
