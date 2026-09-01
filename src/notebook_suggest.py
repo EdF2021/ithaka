@@ -8,7 +8,11 @@ from src.task_endpoint import task_llm_call_async
 
 logger = logging.getLogger(__name__)
 
-_SUGGEST_TIMEOUT_S = 8
+# The Background Tasks model is a reasoning model (Qwen3-14B) — even warm,
+# a suggestion call routinely exceeds a few seconds of reasoning tokens
+# before the JSON answer (issue #56). 30s gives it room without hanging the
+# chat-flow response for too long.
+_SUGGEST_TIMEOUT_S = 30
 _JSON_ARRAY_RE = re.compile(r"\[[^\[\]]*\]", re.S)
 
 _PROMPT = (
