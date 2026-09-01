@@ -41198,6 +41198,7 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   gap: 6px;
 }
 .nbrp-section-head:first-child { margin-top: 0; }
+.nbrp-recommended-head svg { flex-shrink: 0; }
 .nbrp-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
