@@ -1652,14 +1652,21 @@ function _handleMindmapNodeClick(e) {
   const label = e.data.label;
   if (!label) return;
   _closeArtifactViewer();
-  closeNotebookWorkspace();
   const msg = `Geef een samenvatting en uitleg over "${label}" op basis van de bronnen van dit notebook.`;
   const msgInput = document.getElementById('message');
   if (!msgInput) return;
   msgInput.value = msg;
   msgInput.dispatchEvent(new Event('input', { bubbles: true }));
   const form = document.getElementById('chat-form');
+  // Dispatch submit before closing the workspace: chat.js's handleChatSubmit
+  // source_ids gate reads isNotebookWorkspaceOpen() synchronously before its
+  // first await, so the workspace must still read as open at dispatch time
+  // or source_ids silently drops for this entry point (#112). Note: the
+  // separate issue-#22 fail-closed guard sits further down, past an await in
+  // the hasPendingChat() branch — this reorder does not reach far enough to
+  // restore that guard for this entry point; it stays a known gap.
   if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+  closeNotebookWorkspace();
 }
 
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks

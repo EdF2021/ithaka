@@ -432,3 +432,21 @@ def test_podcast_phase_text_surfaces_a_script_retry():
     body = _between(_WS, "function _podcastPhaseText", "\n}\n")
     assert "script_attempt > 1" in body
     assert "attempt" in body.lower()
+
+
+def test_mindmap_node_click_submits_before_closing_workspace():
+    """Regression for #112: closeNotebookWorkspace() must run AFTER the
+    submit dispatch, not before. chat.js's handleChatSubmit source_ids gate
+    reads isNotebookWorkspaceOpen() synchronously, before any await, while
+    handling the submit event — if the workspace is closed first, that gate
+    always reads "closed" and source_ids silently drops for this entry point
+    regardless of the user's checked sources. This assertion fails on the
+    old (broken) ordering. (Note: the separate issue-#22 fail-closed guard
+    sits past an await elsewhere in handleChatSubmit and is NOT restored by
+    this reorder — that remains a known gap for this entry point.)"""
+    fn = _between(_WS, "function _handleMindmapNodeClick", "\n}\n")
+    assert "form.dispatchEvent(new Event('submit'" in fn
+    assert "closeNotebookWorkspace();" in fn
+    submit_idx = fn.index("form.dispatchEvent(new Event('submit'")
+    close_idx = fn.index("closeNotebookWorkspace();")
+    assert submit_idx < close_idx
