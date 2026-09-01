@@ -172,6 +172,7 @@ def _hide_unlinked_calendar_tags(emails: list[dict]) -> None:
 
 
 def _clear_done_response_tags(owner: str, account_id: str | None, folder: str, uid: str) -> None:
+    conn = None
     try:
         conn = _sql3.connect(SCHEDULED_DB)
         owner_clause, owner_params = _email_tag_owner_clause(account_id, owner)
@@ -194,9 +195,11 @@ def _clear_done_response_tags(owner: str, account_id: str | None, folder: str, u
             if kept != tags:
                 conn.execute("UPDATE email_tags SET tags=? WHERE rowid=?", (json.dumps(kept), rowid))
         conn.commit()
-        conn.close()
     except Exception as e:
         logger.debug(f"clear done response tags skipped: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _record_email_received_events(owner: str, account_id: str | None, folder: str, emails: list[dict]):
@@ -1499,6 +1502,7 @@ def setup_email_routes():
                 _tag_name = filter_[len("tag:"):].strip().lower()
                 _tag_message_ids = []
                 _tag_seq_fallback = []
+                _ct = None
                 try:
                     import sqlite3 as _sql3t
                     _ct = _sql3t.connect(SCHEDULED_DB)
@@ -1567,9 +1571,11 @@ def setup_email_routes():
                                         _tag_seq_fallback.append(str(r[1]).strip())
                             except Exception:
                                 continue
-                    _ct.close()
                 except Exception as _te:
                     logger.warning(f"tag filter lookup failed: {_te}")
+                finally:
+                    if _ct is not None:
+                        _ct.close()
                 if not _tag_message_ids and not _tag_seq_fallback:
                     return {"emails": [], "total": 0, "folder": folder}
                 # Prefer stable Message-ID rows. Older tag rows may have only
@@ -1614,6 +1620,7 @@ def setup_email_routes():
 
             # Preload tag rows once — keyed by uid (as str) for the emails we'll render
             _tag_by_uid = {}
+            _c = None
             try:
                 import sqlite3 as _sql3
                 _c = _sql3.connect(SCHEDULED_DB)
@@ -1635,9 +1642,11 @@ def setup_email_routes():
                         if isinstance(tg, list):
                             tg = _sanitize_visible_email_tags(tg)
                         _tag_by_uid[r[0]] = {"tags": tg, "spam": bool(r[2])}
-                _c.close()
             except Exception as e:
                 logger.warning(f"Tag preload failed: {e}")
+            finally:
+                if _c is not None:
+                    _c.close()
 
             # Batch fetch ALL requested UIDs in a single IMAP round-trip.
             # Per-UID fetch was the dominant cost — N round-trips × (~5-20ms
@@ -1667,6 +1676,7 @@ def setup_email_routes():
                     return {"emails": [], "total": total, "folder": folder, "offset": offset}
 
                 _tag_by_message_id = {}
+                _cm = None
                 try:
                     header_ids = []
                     for _, raw_header in grouped:
@@ -1687,7 +1697,6 @@ def setup_email_routes():
                             f"AND message_id IN ({_mid_ph})",
                             [folder, *_owner_params_m, *_account_params_m, *header_ids],
                         ).fetchall()
-                        _cm.close()
                         for mid, tags_raw, spam_raw in rows_m:
                             try:
                                 tags = json.loads(tags_raw or "[]")
@@ -1701,6 +1710,9 @@ def setup_email_routes():
                             }
                 except Exception as e:
                     logger.warning(f"Message-ID tag preload failed: {e}")
+                finally:
+                    if _cm is not None:
+                        _cm.close()
 
                 for meta_b, raw_header in grouped:
                     parsed = _parse_email_list_record(meta_b, raw_header)
@@ -1724,6 +1736,7 @@ def setup_email_routes():
                 emails.sort(key=lambda x: x.get("date_epoch") or 0.0, reverse=True)
 
             if emails:
+                _ci = None
                 try:
                     import sqlite3 as _sql3i
                     _ci = _sql3i.connect(SCHEDULED_DB)
@@ -1759,7 +1772,6 @@ def setup_email_routes():
                                 tag_by_uid[str(uid_i)] = entry_i
                             if mid_i:
                                 tag_by_mid[str(mid_i).strip()] = entry_i
-                    _ci.close()
                     for e in emails:
                         tag_entry = tag_by_mid.get((e.get("message_id") or "").strip()) or tag_by_uid.get(str(e.get("uid") or ""))
                         if tag_entry:
@@ -1767,7 +1779,11 @@ def setup_email_routes():
                             e["is_spam_verdict"] = tag_entry.get("spam", False)
                 except Exception as e:
                     logger.debug(f"email index tag merge skipped: {e}")
+                finally:
+                    if _ci is not None:
+                        _ci.close()
 
+                _ccal = None
                 try:
                     import sqlite3 as _sql3c
                     ids = [(e.get("message_id") or "").strip() for e in emails if e.get("message_id")]
@@ -1780,7 +1796,6 @@ def setup_email_routes():
                             f"WHERE message_id IN ({ph}) AND {owner_clause}",
                             (*ids, *owner_params),
                         ).fetchall()
-                        _ccal.close()
                         by_mid = {}
                         for mid, raw_uids in cal_rows:
                             try:
@@ -1795,6 +1810,9 @@ def setup_email_routes():
                                 e["calendar_event_uids"] = event_uids
                 except Exception as e:
                     logger.debug(f"email calendar event link attach skipped: {e}")
+                finally:
+                    if _ccal is not None:
+                        _ccal.close()
 
                 _hide_unlinked_calendar_tags(emails)
                 if filter_ and filter_.startswith("tag:") and filter_ != "tag:spam":
@@ -1811,6 +1829,7 @@ def setup_email_routes():
 
             # Bulk-attach cached AI summaries by Message-ID so the frontend
             # can show them on hover (avoids a per-card round-trip).
+            _c = None
             try:
                 ids = [e.get("message_id", "") for e in emails if e.get("message_id")]
                 if ids:
@@ -1823,7 +1842,6 @@ def setup_email_routes():
                         f"WHERE message_id IN ({placeholders}) AND {owner_clause}",
                         (*ids, *owner_params),
                     ).fetchall()
-                    _c.close()
                     by_id = {r[0]: r[1] for r in rows}
                     for e in emails:
                         s = by_id.get(e.get("message_id", ""))
@@ -1831,6 +1849,9 @@ def setup_email_routes():
                             e["cached_summary"] = s
             except Exception as _summary_err:
                 logger.debug(f"Bulk summary attach skipped: {_summary_err}")
+            finally:
+                if _c is not None:
+                    _c.close()
 
             return {
                 "emails": emails,
@@ -2050,6 +2071,7 @@ def setup_email_routes():
     @router.post("/{uid}/unflag-spam")
     async def unflag_spam(uid: str, owner: str = Depends(require_owner)):
         """User override — mark email as not spam."""
+        _c = None
         try:
             owner_clause, owner_params = _email_tag_owner_clause(None, owner)
             _c = _sql3.connect(SCHEDULED_DB)
@@ -2058,11 +2080,13 @@ def setup_email_routes():
                 [uid, *owner_params],
             )
             _c.commit()
-            _c.close()
             return {"ok": True}
         except Exception as e:
             logger.error(f"unflag-spam failed: {e}")
             return {"ok": False, "error": "Mail operation failed"}
+        finally:
+            if _c is not None:
+                _c.close()
 
     @router.get("/contacts")
     async def list_contacts(
@@ -2076,6 +2100,7 @@ def setup_email_routes():
         cheap SQL read; people you've never received a tagged email from
         won't appear yet."""
         ql = (q or "").strip().lower()
+        conn = None
         try:
             conn = _sql3.connect(SCHEDULED_DB)
             owner_clause, owner_params = _email_tag_owner_clause(None, owner)
@@ -2083,7 +2108,6 @@ def setup_email_routes():
                 f"SELECT sender FROM email_tags WHERE sender IS NOT NULL AND sender != '' AND {owner_clause}",
                 owner_params,
             ).fetchall()
-            conn.close()
             seen = {}
             for (s,) in rows:
                 try:
@@ -2108,6 +2132,9 @@ def setup_email_routes():
         except Exception as e:
             logger.error(f"contacts list failed: {e}")
             return {"contacts": [], "error": "Mail operation failed"}
+        finally:
+            if conn is not None:
+                conn.close()
 
     @router.get("/search")
     # Sync def: the body is blocking IMAP I/O with no awaits. As `async def` it ran
@@ -2348,6 +2375,7 @@ def setup_email_routes():
             cached_summary = None
             cached_ai_reply = None
             cached_boundaries = None
+            _c = None
             try:
                 import sqlite3 as _sql3
                 _c = _sql3.connect(SCHEDULED_DB)
@@ -2403,9 +2431,11 @@ def setup_email_routes():
                                 cached_turns = _parsed["turns"]
                         except Exception:
                             cached_turns = None
-                _c.close()
             except Exception:
                 pass
+            finally:
+                if _c is not None:
+                    _c.close()
 
             # If no cached turns, parse on-the-fly so the client never has
             # to do the heavy lifting. Cheap on a 50KB body, free for short
@@ -3543,6 +3573,7 @@ def setup_email_routes():
         """Schedule an email to be sent at a specific time. ISO8601 UTC."""
         import sqlite3
         import uuid as _uuid
+        conn = None
         try:
             send_at = req.get("send_at")
             if not send_at:
@@ -3597,17 +3628,20 @@ def setup_email_routes():
                 owner or "",
             ))
             conn.commit()
-            conn.close()
             logger.info(f"Scheduled email {sid} for {send_at}")
             return {"success": True, "id": sid, "send_at": send_at}
         except Exception as e:
             logger.error(f"Failed to schedule email: {e}")
             return {"success": False, "error": "Mail operation failed"}
+        finally:
+            if conn is not None:
+                conn.close()
 
     @router.get("/scheduled")
     async def list_scheduled(owner: str = Depends(require_owner)):
         """List all scheduled (pending) emails."""
         import sqlite3
+        conn = None
         try:
             conn = sqlite3.connect(SCHEDULED_DB)
             rows = conn.execute("""
@@ -3616,7 +3650,6 @@ def setup_email_routes():
                 WHERE status IN ('pending', 'failed') AND owner = ?
                 ORDER BY send_at ASC
             """, (owner or "",)).fetchall()
-            conn.close()
             return {"scheduled": [
                 {
                     "id": r[0], "to": r[1], "cc": r[2], "subject": r[3],
@@ -3626,11 +3659,15 @@ def setup_email_routes():
         except Exception as e:
             logger.error(f"list_scheduled failed: {e}")
             return {"scheduled": [], "error": "Mail operation failed"}
+        finally:
+            if conn is not None:
+                conn.close()
 
     @router.delete("/scheduled/{sid}")
     async def cancel_scheduled(sid: str, owner: str = Depends(require_owner)):
         """Cancel a scheduled email."""
         import sqlite3
+        conn = None
         try:
             conn = sqlite3.connect(SCHEDULED_DB)
             conn.execute(
@@ -3638,11 +3675,13 @@ def setup_email_routes():
                 (sid, owner or ""),
             )
             conn.commit()
-            conn.close()
             return {"success": True}
         except Exception as e:
             logger.error(f"cancel_scheduled {sid!r} failed: {e}")
             return {"success": False, "error": "Mail operation failed"}
+        finally:
+            if conn is not None:
+                conn.close()
 
     # ── Agent send-confirm: list/approve/cancel ──────────────────────────
     # When `agent_email_confirm` is on, the MCP send_email tool drops the
@@ -3654,6 +3693,7 @@ def setup_email_routes():
     @router.get("/pending")
     async def list_pending_agent_drafts(owner: str = Depends(require_owner)):
         import sqlite3
+        conn = None
         try:
             conn = sqlite3.connect(SCHEDULED_DB)
             conn.row_factory = sqlite3.Row
@@ -3664,11 +3704,13 @@ def setup_email_routes():
                    ORDER BY created_at DESC""",
                 (owner or "",),
             ).fetchall()
-            conn.close()
             return {"pending": [dict(r) for r in rows]}
         except Exception as e:
             logger.error(f"list_pending_agent_drafts failed: {e}")
             return {"pending": [], "error": "Mail operation failed"}
+        finally:
+            if conn is not None:
+                conn.close()
 
     @router.post("/pending/{sid}/approve")
     async def approve_agent_draft(sid: str, owner: str = Depends(require_owner)):
@@ -3676,6 +3718,7 @@ def setup_email_routes():
         backdate send_at so the scheduled-send poller picks it up
         immediately."""
         import sqlite3
+        conn = None
         try:
             conn = sqlite3.connect(SCHEDULED_DB)
             cur = conn.execute(
@@ -3686,18 +3729,21 @@ def setup_email_routes():
             )
             conn.commit()
             affected = cur.rowcount
-            conn.close()
             if not affected:
                 return {"success": False, "error": "Draft not found or already handled"}
             return {"success": True}
         except Exception as e:
             logger.error(f"approve_agent_draft {sid!r} failed: {e}")
             return {"success": False, "error": "Mail operation failed"}
+        finally:
+            if conn is not None:
+                conn.close()
 
     @router.delete("/pending/{sid}")
     async def cancel_agent_draft(sid: str, owner: str = Depends(require_owner)):
         """Discard a draft the agent staged for approval."""
         import sqlite3
+        conn = None
         try:
             conn = sqlite3.connect(SCHEDULED_DB)
             cur = conn.execute(
@@ -3707,13 +3753,15 @@ def setup_email_routes():
             )
             conn.commit()
             affected = cur.rowcount
-            conn.close()
             if not affected:
                 return {"success": False, "error": "Draft not found or already handled"}
             return {"success": True}
         except Exception as e:
             logger.error(f"cancel_agent_draft {sid!r} failed: {e}")
             return {"success": False, "error": "Mail operation failed"}
+        finally:
+            if conn is not None:
+                conn.close()
 
     @router.get("/resolve-contact")
     async def resolve_contact(name: str = Query(..., description="Name to search for"), owner: str = Depends(require_owner)):
@@ -4219,6 +4267,7 @@ def setup_email_routes():
             # Cache the summary if we have a message_id
             mid = data.get("message_id", "")
             if mid:
+                _c = None
                 try:
                     import sqlite3 as _sql3
                     _c = _sql3.connect(SCHEDULED_DB)
@@ -4231,9 +4280,11 @@ def setup_email_routes():
                         subject, sender, content, model, datetime.utcnow().isoformat(),
                     ))
                     _c.commit()
-                    _c.close()
                 except Exception as e:
                     logger.warning(f"Failed to cache summary: {e}")
+                finally:
+                    if _c is not None:
+                        _c.close()
 
             return {"success": True, "summary": content, "model_used": model}
         except Exception as e:
@@ -4260,6 +4311,7 @@ def setup_email_routes():
                 return {"success": False, "error": "No body provided"}
 
             body_hash = email_translation_body_hash(body)
+            _c = None
             try:
                 _c = _sql3.connect(SCHEDULED_DB)
                 owner_clause, owner_params = _email_cache_owner_clause(owner)
@@ -4268,7 +4320,6 @@ def setup_email_routes():
                     f"WHERE body_hash = ? AND target_language = ? AND {owner_clause}",
                     (body_hash, target_language, *owner_params),
                 ).fetchone()
-                _c.close()
                 if row:
                     if int(row[1] or 0):
                         return {
@@ -4288,6 +4339,9 @@ def setup_email_routes():
                         }
             except Exception as e:
                 logger.warning(f"Failed to read email translation cache: {e}")
+            finally:
+                if _c is not None:
+                    _c.close()
 
             candidates = []
             seen = set()
@@ -4346,6 +4400,7 @@ def setup_email_routes():
             content = (content or "").strip()
             content = _extract_reply(content)
             if "<<<SAME_LANGUAGE>>>" in content:
+                _c = None
                 try:
                     _c = _sql3.connect(SCHEDULED_DB)
                     _c.execute("""
@@ -4358,9 +4413,11 @@ def setup_email_routes():
                         subject, sender, "", 1, model, datetime.utcnow().isoformat(),
                     ))
                     _c.commit()
-                    _c.close()
                 except Exception as e:
                     logger.warning(f"Failed to cache same-language email translation: {e}")
+                finally:
+                    if _c is not None:
+                        _c.close()
                 return {"success": True, "same_language": True, "language": target_language, "model_used": model}
             marker = re.search(r"<<<TRANSLATION>>>\s*(.*?)\s*<<<END>>>", content, re.S | re.I)
             if marker:
@@ -4370,6 +4427,7 @@ def setup_email_routes():
                 content = re.sub(r"\s*<<<END>>>\s*$", "", content, flags=re.I).strip()
             if not content:
                 return {"success": False, "error": "Empty response from model"}
+            _c = None
             try:
                 _c = _sql3.connect(SCHEDULED_DB)
                 _c.execute("""
@@ -4382,9 +4440,11 @@ def setup_email_routes():
                     subject, sender, content, 0, model, datetime.utcnow().isoformat(),
                 ))
                 _c.commit()
-                _c.close()
             except Exception as e:
                 logger.warning(f"Failed to cache email translation: {e}")
+            finally:
+                if _c is not None:
+                    _c.close()
             return {"success": True, "translation": content, "language": target_language, "model_used": model}
         except Exception as e:
             logger.error(f"Failed to translate email: {e}")
@@ -4414,6 +4474,7 @@ def setup_email_routes():
             # cached generic reply doesn't reflect the instructions and
             # would silently override them.
             if message_id and not user_hint:
+                _c = None
                 try:
                     _c = _sql3.connect(SCHEDULED_DB)
                     owner_clause, owner_params = _email_cache_owner_clause(owner)
@@ -4421,7 +4482,6 @@ def setup_email_routes():
                         f"SELECT reply, model_used FROM email_ai_replies WHERE message_id = ? AND {owner_clause}",
                         (message_id, *owner_params),
                     ).fetchone()
-                    _c.close()
                     if _row and _row[0]:
                         cached_reply = _apply_email_style_mechanics(_extract_reply(_row[0] or ""))
                         if cached_reply:
@@ -4433,6 +4493,9 @@ def setup_email_routes():
                             }
                 except Exception as e:
                     logger.warning(f"AI reply cache lookup failed: {e}")
+                finally:
+                    if _c is not None:
+                        _c.close()
 
             settings = _load_settings()
             style = settings.get("email_writing_style", "")
@@ -4665,6 +4728,7 @@ def setup_email_routes():
 
             # Cache so next click is instant
             if message_id:
+                _c = None
                 try:
                     _c = _sql3.connect(SCHEDULED_DB)
                     _c.execute("""
@@ -4673,9 +4737,11 @@ def setup_email_routes():
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (message_id, owner, source_uid, source_folder, reply, model, datetime.utcnow().isoformat()))
                     _c.commit()
-                    _c.close()
                 except Exception as e:
                     logger.warning(f"Failed to cache ai_reply: {e}")
+                finally:
+                    if _c is not None:
+                        _c.close()
 
             return {"success": True, "reply": reply, "model_used": model}
         except Exception as e:
