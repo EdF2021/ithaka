@@ -220,3 +220,75 @@ async def test_source_text_never_in_system_role(monkeypatch):
 def test_dutch_output_rule_in_suggestion_prompt():
     from src.notebook_language import DUTCH_OUTPUT_RULE
     assert DUTCH_OUTPUT_RULE in report_layouts._LAYOUT_SUGGESTION_PROMPT
+
+
+def test_gather_excerpt_text_caps_per_source():
+    s = _TS()
+    try:
+        nb = make_notebook(s)
+        long_text = "X" * 5000
+        make_source(s, nb, filename="lang.txt", content=long_text)
+        excerpt = report_layouts._gather_excerpt_text(nb, s, max_chars_per_source=2000)
+        assert "(bron ingekort)" in excerpt
+        assert len(excerpt) < len(long_text)
+        # The excerpt content itself (before the truncation marker) must not
+        # exceed the cap.
+        body = excerpt.split("\n", 1)[1].replace("\n(bron ingekort)", "")
+        assert len(body) <= 2000
+    finally:
+        s.close()
+
+
+async def test_get_recommended_layouts_sends_excerpt_not_full_source_text(monkeypatch):
+    """The suggestion call must use the small per-source excerpt, not
+    gather_source_text's full-context payload — a notebook with a lot of
+    source material must not blow the 45s request timeout on GET
+    /report-layouts (which has no timeout exemption, unlike POST
+    /artifacts)."""
+    content = '```json\n[{"title": "T1", "description": "D1", "instruction": "I1"}]\n```'
+    captured = {}
+
+    async def _fake_llm(messages, **kwargs):
+        captured["messages"] = messages
+        return content
+
+    monkeypatch.setattr(report_layouts, "task_llm_call_async", _fake_llm)
+    s = _TS()
+    try:
+        nb = make_notebook(s)
+        long_text = "Y" * 10_000
+        make_source(s, nb, filename="groot.txt", content=long_text)
+        await report_layouts.get_recommended_layouts(nb, s, "ed")
+        user_content = _user_content(captured["messages"])
+        # The full 10,000-char source text must not have been sent whole —
+        # only a <=2000-char excerpt plus the truncation marker.
+        assert long_text not in user_content
+        assert "(bron ingekort)" in user_content
+        assert len(user_content) < len(long_text)
+    finally:
+        s.close()
+
+
+async def test_get_recommended_layouts_passes_wait_for_quiet_and_workload(monkeypatch):
+    """Same self-deadlock gotcha generate_artifact avoids (see the comment
+    at its task_llm_call_async call site in src/notebook_artifacts.py):
+    the suggestion call also runs inside a tracked foreground request, so
+    it must skip the interactive-quiet gate and use the foreground
+    workload."""
+    content = '```json\n[{"title": "T1", "description": "D1", "instruction": "I1"}]\n```'
+    captured = {}
+
+    async def _fake_llm(messages, **kwargs):
+        captured["kwargs"] = kwargs
+        return content
+
+    monkeypatch.setattr(report_layouts, "task_llm_call_async", _fake_llm)
+    s = _TS()
+    try:
+        nb = make_notebook(s)
+        make_source(s, nb)
+        await report_layouts.get_recommended_layouts(nb, s, "ed")
+        assert captured["kwargs"].get("wait_for_quiet") is False
+        assert captured["kwargs"].get("workload") == "foreground"
+    finally:
+        s.close()

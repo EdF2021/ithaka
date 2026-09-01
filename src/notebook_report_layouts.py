@@ -21,10 +21,10 @@ import logging
 import re
 
 from src.notebook_artifacts import (
+    _SOURCE_HEADER,
     _source_entries,
     _strip_think_blocks,
     _VALIDATION_ATTEMPTS,
-    gather_source_text,
 )
 from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
@@ -87,6 +87,25 @@ Lever exact één codefence met taalaanduiding "json" en daarin één JSON-array
 Gebruik geen markdown binnen de JSON-strings; alleen platte tekst."""
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+
+
+def _gather_excerpt_text(notebook, db_session, max_chars_per_source: int = 2000) -> str:
+    """Small per-source excerpt payload for the layout-suggestion call —
+    deliberately far below MAX_CONTEXT_CHARS. Four differentiated report
+    angles depend on breadth across sources, not depth within any one of
+    them, and capping here (rather than adding a timeout exemption) keeps
+    GET /report-layouts comfortably under app.py's 45s hard request
+    timeout even with many/large sources."""
+    entries = _source_entries(notebook, db_session)
+    if not entries:
+        return ""
+    blocks = []
+    for filename, text in entries:
+        excerpt = text[:max_chars_per_source]
+        if len(text) > max_chars_per_source:
+            excerpt += "\n(bron ingekort)"
+        blocks.append(_SOURCE_HEADER.format(filename=filename) + "\n" + excerpt)
+    return "\n\n".join(blocks)
 
 
 def _fingerprint_sources(entries: list[tuple[str, str]]) -> str:
@@ -160,7 +179,7 @@ async def get_recommended_layouts(notebook, db_session, owner: str) -> list[dict
         except (json.JSONDecodeError, TypeError):
             pass  # fall through and regenerate
 
-    source_text = gather_source_text(notebook, db_session)
+    source_text = _gather_excerpt_text(notebook, db_session)
     user_msg = untrusted_context_message(f"notebook-bronnen: {notebook.name}", source_text)
     messages = [
         {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{_LAYOUT_SUGGESTION_PROMPT}"},

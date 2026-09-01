@@ -30,7 +30,11 @@ from src.notebook_infographic import validate_infographic_markdown
 from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_mindmap import validate_mindmap_markdown
 from src.notebook_slides import extract_slide_deck
-from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
+from src.prompt_security import (
+    UNTRUSTED_CONTEXT_POLICY,
+    _escape_guard_markers,
+    untrusted_context_message,
+)
 from src.task_endpoint import task_llm_call_async
 
 logger = logging.getLogger(__name__)
@@ -460,8 +464,17 @@ async def generate_artifact(
         )
         user_msg = {"role": user_msg["role"], "content": user_msg["content"] + focus_instruction}
     if kind == "report" and layout_instruction and layout_instruction.strip():
+        # layout_instruction isn't always user-typed: it can be an
+        # AI-recommended layout's `instruction` field, itself LLM output
+        # generated from untrusted notebook source content (see
+        # src/notebook_report_layouts.py), cached, and posted back verbatim.
+        # Escape guard-marker literals before it lands in this trusted zone
+        # of the message, or a malicious source document could steer the
+        # suggestion call into laundering guard markers into the
+        # report-generation call below.
+        safe_instruction = _escape_guard_markers(layout_instruction.strip())
         layout_instruction_text = (
-            f"\n\nIndeling-instructie voor dit rapport: {layout_instruction.strip()} "
+            f"\n\nIndeling-instructie voor dit rapport: {safe_instruction} "
             f"Volg deze instructie voor de structuur, stijl en toon van het rapport."
         )
         user_msg = {"role": user_msg["role"], "content": user_msg["content"] + layout_instruction_text}

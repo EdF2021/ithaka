@@ -328,6 +328,37 @@ def test_video_tile_and_job_flow_registered_client_side():
     assert "video: '<svg" in icons
 
 
+def test_report_tile_and_modal_registered_client_side():
+    # KIND_LABELS.report is a deliberate, already-reviewed distinction: the
+    # tile shows the Dutch literal "Rapporten", but KIND_LABELS.report
+    # itself must stay English 'Report' since it also feeds the
+    # Files-list/viewer kind pills (see the comment above KIND_LABELS).
+    labels = _between(_WS, "const KIND_LABELS = {", "\n};")
+    assert "report: 'Report'," in labels
+    assert "report: 'Rapporten'," not in labels
+    icons = _between(_WS, "const _KIND_ICONS = {", "\n};")
+    assert "report: '<svg" in icons
+    skeleton = _between(_WS, "function _studioPanelSkeleton", "\n}\n")
+    assert 'class="nbws-tile notebook-report-open-btn nbws-tile--report"' in skeleton
+    # The tile's own label is a hardcoded Dutch literal, mirroring the
+    # podcast tile's literal "Audio" label — not ${_esc(KIND_LABELS.report)}.
+    assert '<span class="nbws-tile-label">Rapporten</span>' in skeleton
+    assert '${_esc(KIND_LABELS.report)}' not in skeleton
+    # Defect Task 6's own review round already caught once: the report
+    # modal's Escape-key listener and DOM node must be torn down on
+    # workspace close.
+    assert "registerCloseHook(_closeReportModal);" in _WS
+    # Row-click dispatch must NOT special-case 'report' the way
+    # 'podcast'/'video' are special-cased — it falls through to the same
+    # _openArtifactReport(row) path every other plain-text kind uses.
+    handler = _between(
+        _WS,
+        "row.addEventListener('click', (e) => {",
+        "\n  });\n  box.querySelectorAll('.notebook-artifact-del')",
+    )
+    assert "kind === 'report'" not in handler
+
+
 def test_slide_deck_kind_registered_client_side_as_first_tile():
     kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
     assert kinds.split("[", 1)[-1].strip().startswith("'slide_deck'")

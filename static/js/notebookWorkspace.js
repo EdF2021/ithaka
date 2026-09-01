@@ -1932,7 +1932,7 @@ function _openReportEditor(item) {
   body.innerHTML = `
     <button type="button" class="nbrp-back" id="nbrp-editor-back">&larr; Terug</button>
     <div class="nbrp-editor-title">${_esc(item.title)}</div>
-    <textarea id="nbrp-editor-instruction" class="nbrp-editor-textarea" rows="6"
+    <textarea id="nbrp-editor-instruction" class="nbrp-editor-textarea" rows="6" maxlength="2000"
       placeholder="Beschrijf structuur, stijl en toon in eigen woorden…">${_esc(item.instruction || '')}</textarea>
     <div class="nbrp-editor-error" id="nbrp-editor-error"></div>
     <button type="button" class="dashboard-action-btn nbrp-generate-btn" id="nbrp-generate-btn">Genereer</button>`;
@@ -1972,6 +1972,7 @@ async function _generateReport() {
 
 function _openReportModal() {
   if (!_state.notebook) return;
+  if (document.getElementById('nbrp-modal')) return;
   const epoch = ++_reportModalEpoch;
   const modal = document.createElement('div');
   modal.className = 'modal';
