@@ -66,6 +66,13 @@ logger = logging.getLogger(__name__)
 ITHAKA_MAIL_ORIGIN = "ithaka-ui"
 EMAIL_READ_ATTACHMENT_VERSION = 2
 
+# /api/email/unread-state cache freshness window: the local message index is
+# only filled lazily when the mail-list UI is opened, so a widget-only user
+# can sit on a stale count indefinitely. Index rows younger than this are
+# trusted as-is (fast path); older rows trigger a live IMAP UNSEEN recount
+# so the dashboard badge tracks the actual mailbox instead of the last UI visit.
+_UNREAD_STATE_TTL_S = 120
+
 
 def _safe_attachment_zip_name(name: str, fallback: str) -> str:
     """Return a zip entry filename without path traversal or empty names."""
@@ -400,6 +407,25 @@ def _group_uid_fetch_records(msg_data) -> list:
 
 def _account_cache_key(account_id: str | None, owner: str = "") -> str:
     return (account_id or "default").strip() or f"default:{owner or ''}"
+
+
+def _unread_index_is_fresh(updated_at: str | None, ttl_s: float = _UNREAD_STATE_TTL_S) -> bool:
+    """Is an `email_message_index.updated_at` timestamp within the TTL?
+
+    `updated_at` is written as `datetime.utcnow().isoformat() + "Z"` by
+    `_email_index_upsert`. A missing/unparseable value is treated as stale
+    so we fail toward a live recount rather than trusting bad data.
+    """
+    if not updated_at:
+        return False
+    try:
+        ts = str(updated_at)
+        if ts.endswith("Z"):
+            ts = ts[:-1]
+        age_s = (datetime.utcnow() - datetime.fromisoformat(ts)).total_seconds()
+        return age_s <= ttl_s
+    except Exception:
+        return False
 
 
 def _parse_email_list_record(meta_b: bytes, raw_header: bytes | None) -> dict | None:
@@ -2003,9 +2029,15 @@ def setup_email_routes():
         """Cheap unread summary for notification dots.
 
         Reads the local message index first so periodic UI polling does not
-        trigger Gmail SEARCH/LIST round-trips. If no local index exists for the
-        account/folder yet, do one tiny IMAP fallback and then cache naturally
-        through the list path.
+        trigger Gmail SEARCH/LIST round-trips — but that index is only ever
+        filled lazily when the mail-list UI is opened (`_email_index_upsert`
+        via `_list_emails_sync`), so a widget-only user could sit on a stale
+        count indefinitely. To keep the dashboard badge honest without paying
+        an IMAP round-trip on every poll, index rows are trusted as-is only
+        while younger than `_UNREAD_STATE_TTL_S`; older (or missing) rows
+        trigger a live IMAP UNSEEN recount, with the stale index value kept
+        as a fallback if that live check fails (slow/broken IMAP → cached
+        number, not a 5xx).
         """
         fixture_result = _fixture_email_list(folder, 1, 0, "unread", None, owner)
         if fixture_result is not None:
@@ -2014,7 +2046,10 @@ def setup_email_routes():
                 "max_uid": max([int(e.get("uid") or 0) for e in _fixture_email_rows(owner)] or [0]),
                 "folder": folder,
                 "sync": {"source": "fixture"},
+                "fresh": True,
             }
+
+        cached_state = None
         try:
             account_key = _account_cache_key(account_id, owner)
             conn = _sql3.connect(SCHEDULED_DB)
@@ -2038,34 +2073,59 @@ def setup_email_routes():
                 conn.close()
             indexed_total = int((total_row or [0])[0] or 0)
             if indexed_total:
-                return {
+                updated_at = (total_row or [None, None])[1]
+                cached_state = {
                     "unread_count": int((row or [0])[0] or 0),
                     "max_uid": int((row or [0, 0])[1] or 0),
                     "folder": folder,
                     "sync": {
                         "source": "index",
                         "indexed": indexed_total,
-                        "updated_at": (total_row or [None, None])[1],
+                        "updated_at": updated_at,
                     },
                 }
+                if _unread_index_is_fresh(updated_at):
+                    cached_state["fresh"] = True
+                    return cached_state
+                cached_state["fresh"] = False
         except Exception:
             logger.debug("unread-state index lookup skipped", exc_info=True)
 
-        result = await _asyncio.to_thread(
-            _list_emails_sync, folder, 1, 0, "unread", account_id, None, False, owner,
-        )
-        emails = (result or {}).get("emails") or []
-        max_uid = 0
-        if emails:
-            try:
-                max_uid = max(int(e.get("uid") or 0) for e in emails)
-            except Exception:
-                max_uid = 0
+        try:
+            result = await _asyncio.to_thread(
+                _list_emails_sync, folder, 1, 0, "unread", account_id, None, False, owner,
+            )
+        except Exception:
+            logger.debug("unread-state live IMAP fallback failed", exc_info=True)
+            result = None
+
+        if result and not result.get("error"):
+            emails = result.get("emails") or []
+            max_uid = 0
+            if emails:
+                try:
+                    max_uid = max(int(e.get("uid") or 0) for e in emails)
+                except Exception:
+                    max_uid = 0
+            return {
+                "unread_count": int(result.get("total") or len(emails) or 0),
+                "max_uid": max_uid,
+                "folder": folder,
+                "sync": {"source": "imap_fallback"},
+                "fresh": True,
+            }
+
+        # Live recount failed (or a `_list_emails_sync`-caught error, e.g.
+        # a slow/broken IMAP connection) — prefer a stale-but-known count
+        # over a 5xx so the widget doesn't just break.
+        if cached_state is not None:
+            return cached_state
         return {
-            "unread_count": int((result or {}).get("total") or len(emails) or 0),
-            "max_uid": max_uid,
+            "unread_count": 0,
+            "max_uid": 0,
             "folder": folder,
-            "sync": {"source": "imap_fallback"},
+            "sync": {"source": "imap_fallback_failed"},
+            "fresh": False,
         }
 
     @router.post("/{uid}/unflag-spam")
