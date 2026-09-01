@@ -1484,6 +1484,11 @@ registerCloseHook(_stopVideoPoll);
 // Same reasoning: close the in-panel artifact viewer so no stale iframe
 // persists across a workspace close/reopen.
 registerCloseHook(_closeArtifactViewer);
+// Same reasoning again: the report layout-picker modal is appended straight
+// to document.body (not the studio panel), so nothing else tears it down —
+// without this it would survive a workspace close and keep showing layout
+// choices for a notebook that's no longer open.
+registerCloseHook(_closeReportModal);
 
 /**
  * Open a generated artifact in the document viewer, as an overlay ABOVE the
@@ -1724,6 +1729,17 @@ async function _openImpl(nb) {
   // Re-opening the SAME notebook keeps the poll: _loadArtifacts below repaints
   // the list and the next tick restores the pending row, so progress survives.
   if (_state.notebook && _state.notebook.id !== nb.id) _stopPodcastPoll();
+
+  // Same open()-not-close() gap for the report modal: it's an independent
+  // document.body overlay, unaffected by _wireStudioPanel/_loadArtifacts
+  // repainting the studio panel below it. Unlike the podcast poll this isn't
+  // just cosmetic — _generateReport reads _state.notebook.id fresh at POST
+  // time, so a still-open modal left over from the notebook being switched
+  // away from would silently generate a report against the *new* notebook
+  // using layout choices picked for the old one. Close it outright rather
+  // than leaving it to the registerCloseHook(_closeReportModal) above, which
+  // only fires on an actual closeNotebookWorkspace() call.
+  if (_state.notebook && _state.notebook.id !== nb.id) _closeReportModal();
 
   _state.notebook = nb;
   _state.sources = [];
