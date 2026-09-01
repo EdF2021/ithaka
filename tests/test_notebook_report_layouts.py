@@ -46,7 +46,10 @@ def test_fixed_templates_have_three_entries_with_required_fields():
     keys = {t["key"] for t in report_layouts.FIXED_TEMPLATES}
     assert keys == {"overview", "study_material", "blogpost"}
     for t in report_layouts.FIXED_TEMPLATES:
-        assert t["title"] and t["description"] and t["instruction"]
+        for field in ("key", "title", "description", "instruction"):
+            assert isinstance(t[field], str) and t[field].strip(), (
+                f'template {t.get("key")!r}: field "{field}" is missing or empty'
+            )
 
 
 def test_fingerprint_stable_for_same_entries_regardless_of_order():
