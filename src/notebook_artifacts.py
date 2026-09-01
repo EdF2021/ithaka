@@ -349,24 +349,26 @@ def _source_entries(notebook: Notebook, db_session) -> list[tuple[str, str]]:
     return entries
 
 
-def gather_source_text(notebook: Notebook, db_session) -> str:
-    """Build the source payload for the model, capped at MAX_CONTEXT_CHARS.
+def _assemble_source_blocks(headers: list[str], entries: list[tuple[str, str]]) -> str:
+    """Water-filling assembly shared by gather_source_text and
+    gather_source_text_numbered, capped at MAX_CONTEXT_CHARS.
 
-    Blocks are "=== BRON: <filename> ===" headers followed by the document's
-    full text. When the total exceeds the cap, only the sources that would
-    not fit their fair share of the remaining budget are truncated (and
-    marked with "(bron ingekort)"); a source that fits is kept complete and
-    unmarked, even while a larger sibling gets cut. This is a water-filling
-    pass over sources sorted ascending by length: each source in turn either
-    keeps its full text (consuming only what it needs, so leftover budget
-    grows for the sources still to come) or is cut to that step's fair
-    share. Returns "" when the notebook has no usable sources.
+    Joins each header with its entry's document text. When the total exceeds
+    the cap, only the sources that would not fit their fair share of the
+    remaining budget are truncated (and marked with "(bron ingekort)"); a
+    source that fits is kept complete and unmarked, even while a larger
+    sibling gets cut. This is a water-filling pass over sources sorted
+    ascending by length: each source in turn either keeps its full text
+    (consuming only what it needs, so leftover budget grows for the sources
+    still to come) or is cut to that step's fair share.
+
+    `headers` and `entries` must be the same length and in the same order —
+    the truncation math only looks at `entries`' text lengths, so the two
+    callers differ solely in what header string they hand in per source
+    (unnumbered "=== BRON: ... ===" vs. numbered "=== BRON [n]: ... ===");
+    factored out here so that difference can't let the shared truncation
+    logic drift between them.
     """
-    entries = _source_entries(notebook, db_session)
-    if not entries:
-        return ""
-
-    headers = [_SOURCE_HEADER.format(filename=name) + "\n" for name, _ in entries]
     # The cap covers the whole payload, so headers and separators are spent
     # before any text budget is handed out.
     overhead = sum(len(h) for h in headers) + len(_BLOCK_SEPARATOR) * (len(entries) - 1)
@@ -419,13 +421,29 @@ def gather_source_text(notebook: Notebook, db_session) -> str:
     return result
 
 
+def gather_source_text(notebook: Notebook, db_session) -> str:
+    """Build the source payload for the model, capped at MAX_CONTEXT_CHARS.
+
+    Blocks are "=== BRON: <filename> ===" headers followed by the document's
+    full text; the water-filling truncation strategy is
+    _assemble_source_blocks (see its docstring). Returns "" when the
+    notebook has no usable sources.
+    """
+    entries = _source_entries(notebook, db_session)
+    if not entries:
+        return ""
+
+    headers = [_SOURCE_HEADER.format(filename=name) + "\n" for name, _ in entries]
+    return _assemble_source_blocks(headers, entries)
+
+
 # --------------------------------------------------------------------------
 # Report-kind source collection (numbered headers for citations)
 #
 # Only kind="report" uses this. Every other kind keeps calling
-# gather_source_text/_SOURCE_HEADER above, byte-for-byte unchanged - this is
-# a parallel build, not a refactor of it, so the shared function's behavior
-# and tests stay untouched.
+# gather_source_text/_SOURCE_HEADER above, whose output stays byte-for-byte
+# unchanged - the two share only the water-filling truncation math
+# (_assemble_source_blocks); each builds its own header strings.
 # --------------------------------------------------------------------------
 
 _SOURCE_HEADER_NUMBERED = "=== BRON [{n}]: {filename} ==="
@@ -435,9 +453,9 @@ def gather_source_text_numbered(notebook: Notebook, db_session) -> tuple[str, in
     """Report-kind variant of gather_source_text: numbered source headers.
 
     Same water-filling truncation, cap (MAX_CONTEXT_CHARS) and skip rules as
-    gather_source_text (see its docstring), but headers are
-    "=== BRON [n]: filename ===" (n = 1-based position in source order,
-    matching _source_entries' ordering) instead of the shared
+    gather_source_text (both delegate to _assemble_source_blocks), but
+    headers are "=== BRON [n]: filename ===" (n = 1-based position in source
+    order, matching _source_entries' ordering) instead of the shared
     "=== BRON: filename ===", so the report kind's citation instruction
     (_KIND_INSTRUCTIONS["report"]) can point "[n]" back at a specific
     numbered source.
@@ -455,47 +473,7 @@ def gather_source_text_numbered(notebook: Notebook, db_session) -> tuple[str, in
         _SOURCE_HEADER_NUMBERED.format(n=i, filename=name) + "\n"
         for i, (name, _) in enumerate(entries, start=1)
     ]
-    overhead = sum(len(h) for h in headers) + len(_BLOCK_SEPARATOR) * (len(entries) - 1)
-    total_text = sum(len(text) for _, text in entries)
-
-    if overhead + total_text <= MAX_CONTEXT_CHARS:
-        return (
-            _BLOCK_SEPARATOR.join(
-                header + text for header, (_, text) in zip(headers, entries)
-            ),
-            len(entries),
-        )
-
-    text_budget = max(MAX_CONTEXT_CHARS - overhead, 0)
-    marker_cost = len(_TRUNCATION_MARKER)
-
-    limits = [None] * len(entries)
-    marked = [False] * len(entries)
-    order = sorted(range(len(entries)), key=lambda i: len(entries[i][1]))
-    remaining_budget = text_budget
-    remaining_count = len(entries)
-    for idx in order:
-        text_len = len(entries[idx][1])
-        fair_share = remaining_budget // remaining_count if remaining_count else 0
-        if text_len <= fair_share:
-            remaining_budget -= text_len
-        else:
-            marked[idx] = True
-            limits[idx] = max(fair_share - marker_cost, 0)
-            remaining_budget -= fair_share
-        remaining_count -= 1
-
-    blocks = []
-    for header, (idx, (_, text)) in zip(headers, enumerate(entries)):
-        if marked[idx]:
-            blocks.append(header + text[: limits[idx]] + _TRUNCATION_MARKER)
-        else:
-            blocks.append(header + text)
-    result = _BLOCK_SEPARATOR.join(blocks)
-
-    if len(result) > MAX_CONTEXT_CHARS:
-        result = result[:MAX_CONTEXT_CHARS]
-    return result, len(entries)
+    return _assemble_source_blocks(headers, entries), len(entries)
 
 
 # --------------------------------------------------------------------------
