@@ -184,6 +184,54 @@ def test_migrate_add_notebook_artifact_title_column_missing_db_is_noop(tmp_path,
     db._migrate_add_notebook_artifact_title_column()
 
 
+def test_migrate_add_notebook_report_layouts_columns(tmp_path, monkeypatch):
+    """Mirrors test_migrate_add_notebook_artifact_title_column."""
+    import sqlite3
+
+    db_path = tmp_path / "app.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE notebooks (
+            id TEXT PRIMARY KEY,
+            owner TEXT NOT NULL,
+            name TEXT NOT NULL,
+            created_at DATETIME,
+            updated_at DATETIME
+        );
+        INSERT INTO notebooks(id, owner, name) VALUES ('n1', 'ed', 'Thesis');
+        """
+    )
+    conn.close()
+
+    monkeypatch.setattr(db, "DATABASE_URL", f"sqlite:///{db_path}")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns_before = [row[1] for row in conn.execute("PRAGMA table_info(notebooks)")]
+    finally:
+        conn.close()
+    assert "report_layouts_json" not in columns_before
+    assert "report_layouts_fingerprint" not in columns_before
+
+    db._migrate_add_notebook_report_layouts_columns()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        columns_after = [row[1] for row in conn.execute("PRAGMA table_info(notebooks)")]
+        assert "report_layouts_json" in columns_after
+        assert "report_layouts_fingerprint" in columns_after
+        row = conn.execute(
+            "SELECT report_layouts_json, report_layouts_fingerprint FROM notebooks WHERE id = 'n1'"
+        ).fetchone()
+        assert row == (None, None)
+    finally:
+        conn.close()
+
+    # Idempotent: running it again on an already-migrated DB must not raise.
+    db._migrate_add_notebook_report_layouts_columns()
+
+
 def test_artifact_cascade_on_document_delete():
     s = _TS()
     try:
