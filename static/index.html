@@ -224,7 +224,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/style.css?v=20260728readability">
-  <link rel="modulepreload" href="/static/app.js?v=20260630mdfontsize">
+  <link rel="modulepreload" href="/static/app.js?v=20260828menuzoom2">
   <link rel="modulepreload" href="/static/js/chat.js">
   <link rel="modulepreload" href="/static/js/ui.js">
   <link rel="modulepreload" href="/static/js/sessions.js">
@@ -990,6 +990,10 @@
        around it. Panel bodies (#nbws-sources-body / #nbws-studio-body) start
        empty — Task 4 fills sources, Task 5 the session picker, Task 6 studio. -->
   <div id="nbws-root" aria-hidden="true">
+    <div id="nbws-hero" class="nbws-hero" style="display:none">
+      <div class="nbws-hero-overlay"></div>
+      <span id="nbws-hero-name" class="nbws-hero-name"></span>
+    </div>
     <div id="nbws-topbar" class="nbws-panel">
       <button type="button" id="nbws-back-btn" class="nbws-back-btn" title="Close workspace" aria-label="Close workspace"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg></button>
       <span id="nbws-notebook-name" class="nbws-notebook-name"></span>
@@ -2632,7 +2636,7 @@
 <script type="module" src="/static/js/document.js"></script>
 <script type="module" src="/static/js/notebookWorkspace.js"></script>
 <script type="module" src="/static/js/gallery.js"></script>
-<script type="module" src="/static/js/chatRenderer.js?v=20260630toolmetrics"></script>
+<script type="module" src="/static/js/chatRenderer.js?v=20260828menuzoom2"></script>
 <script type="module" src="/static/js/codeRunner.js"></script>
 <script type="module" src="/static/js/chatStream.js"></script>
 <script type="module" src="/static/js/chat.js?v=20260630toolmetrics"></script>
@@ -2646,7 +2650,7 @@
 <script type="module" src="/static/js/settings.js"></script>
 <script type="module" src="/static/js/admin.js"></script>
 <script type="module" src="/static/js/assistant.js"></script>
-<script type="module" src="/static/app.js?v=20260630mdfontsize"></script>  <!-- app.js must be LAST -->
+<script type="module" src="/static/app.js?v=20260828menuzoom2"></script>  <!-- app.js must be LAST -->
 <script type="module" src="/static/js/init.js"></script>
 <script type="module" src="/static/js/a11y.js"></script>
 <script nonce="{{CSP_NONCE}}">if('serviceWorker' in navigator){navigator.serviceWorker.register('/static/sw.js').catch(()=>{});}</script>

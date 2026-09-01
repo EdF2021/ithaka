@@ -1630,6 +1630,9 @@ def setup_document_routes(session_manager, upload_handler=None) -> APIRouter:
 
         user = get_current_user(request)
         db = SessionLocal()
+        # Temp PDFs get cleaned up in this handler's finally so a raise between
+        # fill_fields and the COMPOSE_UPLOADS_DIR copy can't leak them on disk.
+        _to_unlink: list[str] = []
         try:
             doc = db.query(Document).filter(Document.id == doc_id).first()
             if not doc:
@@ -1676,7 +1679,6 @@ def setup_document_routes(session_manager, upload_handler=None) -> APIRouter:
                         pass
 
             import os
-            _to_unlink: list[str] = []
             filled_path = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False).name
             _to_unlink.append(filled_path)
             fill_fields(pdf_path, filled_path, text_values)
@@ -1727,15 +1729,8 @@ def setup_document_routes(session_manager, upload_handler=None) -> APIRouter:
             token = f"{_uuid.uuid4().hex}_{filename}"
             dest = _COMPOSE_DIR / token
             shutil.copyfile(out_path, str(dest))
-            # Unlink the intermediate temp PDFs now that they've been
-            # copied into COMPOSE_UPLOADS_DIR.
-            for _p in _to_unlink:
-                try:
-                    os.unlink(_p)
-                except FileNotFoundError:
-                    pass
-                except Exception as _e:
-                    logger.warning(f"Could not unlink temp PDF {_p}: {_e}")
+            # Intermediate temp PDFs are unlinked in the finally below, so they
+            # are cleaned up on the error paths too.
 
             # 3) Fetch the source email's headers so we can build a clean reply
             #    context (To/Subject/In-Reply-To/References).
@@ -1794,6 +1789,14 @@ def setup_document_routes(session_manager, upload_handler=None) -> APIRouter:
                 },
             }
         finally:
+            import os as _os
+            for _p in _to_unlink:
+                try:
+                    _os.unlink(_p)
+                except FileNotFoundError:
+                    pass
+                except Exception as _e:
+                    logger.warning(f"Could not unlink temp PDF {_p}: {_e}")
             db.close()
 
     return router

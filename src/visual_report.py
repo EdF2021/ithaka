@@ -247,8 +247,7 @@ _TEMPLATE = """\
 <meta property="og:description" content="{description}">
 <meta property="og:type" content="article">
 {og_image_meta}
-<meta name="theme-color" content="#b8543a" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#131214" media="(prefers-color-scheme: dark)">
+{theme_color_meta}
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>O</text></svg>">
 <style>
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -279,19 +278,7 @@ _TEMPLATE = """\
   --max-w: 760px;
 }}
 
-@media (prefers-color-scheme: dark) {{
-  :root {{
-    --bg: #131214; --bg-surface: #1c1a1e; --bg-surface-alt: #25232a;
-    --border: rgba(255,255,255,0.07); --border-strong: rgba(255,255,255,0.16);
-    --text: #ece8e2; --text-dim: #a8a39c; --text-muted: #6f6b66;
-    --accent: #e88f73; --accent-light: #f4ad95; --accent-bg: rgba(232,143,115,0.09);
-    --gold: #e8c05a; --gold-bg: rgba(232,192,90,0.09);
-    --aurora-a: rgba(232,143,115,0.13);
-    --aurora-b: rgba(232,192,90,0.09);
-    --aurora-c: rgba(125,180,224,0.10);
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow-md: 0 4px 28px rgba(0,0,0,0.55);
-  }}
-}}
+{dark_theme_css}
 
 html {{
   scroll-behavior: smooth;
@@ -1725,6 +1712,32 @@ def _is_icon_or_logo_url(url: str) -> bool:
     return bool(_ICON_LOGO_RE.search(url or ""))
 
 
+# The dark palette lives outside the template so callers can opt out of it:
+# notebook artifact viewers render always-light (matching the dedicated
+# mindmap/flashcards/slides viewers) via force_light, while research reports
+# keep following the viewer's color-scheme preference.
+_DARK_THEME_CSS = """@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131214; --bg-surface: #1c1a1e; --bg-surface-alt: #25232a;
+    --border: rgba(255,255,255,0.07); --border-strong: rgba(255,255,255,0.16);
+    --text: #ece8e2; --text-dim: #a8a39c; --text-muted: #6f6b66;
+    --accent: #e88f73; --accent-light: #f4ad95; --accent-bg: rgba(232,143,115,0.09);
+    --gold: #e8c05a; --gold-bg: rgba(232,192,90,0.09);
+    --aurora-a: rgba(232,143,115,0.13);
+    --aurora-b: rgba(232,192,90,0.09);
+    --aurora-c: rgba(125,180,224,0.10);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow-md: 0 4px 28px rgba(0,0,0,0.55);
+  }
+}"""
+
+_THEME_COLOR_META = (
+    '<meta name="theme-color" content="#b8543a" media="(prefers-color-scheme: light)">\n'
+    '<meta name="theme-color" content="#131214" media="(prefers-color-scheme: dark)">'
+)
+
+_THEME_COLOR_META_LIGHT = '<meta name="theme-color" content="#b8543a">'
+
+
 def generate_visual_report(
     question: str,
     report_markdown: str,
@@ -1735,6 +1748,7 @@ def generate_visual_report(
     hidden_images: Optional[List[str]] = None,
     report_type_label: Optional[str] = None,
     generated_by_label: Optional[str] = None,
+    force_light: bool = False,
 ) -> str:
     sources = sources or []
     stats = stats or {}
@@ -1931,6 +1945,8 @@ def generate_visual_report(
         spare_images_js=_json_for_script(spare_images),
         report_type_label=html.escape(report_type_label or "Deep Research Report"),
         generated_by_label=html.escape(generated_by_label or "Ithaka Deep Research"),
+        dark_theme_css="" if force_light else _DARK_THEME_CSS,
+        theme_color_meta=_THEME_COLOR_META_LIGHT if force_light else _THEME_COLOR_META,
     )
 
 

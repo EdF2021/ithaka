@@ -1,7 +1,7 @@
 /**
  * Dageraad intro choreography — Fase 3 of the Dageraad port.
  *
- * A short cinematic overlay (~3.5-4.2s) that plays once per page load, only
+ * A short cinematic overlay (~5.6s) that plays once per page load, only
  * when the Dageraad theme is active and the visitor hasn't asked for
  * reduced motion. Purely visual, layered on top of the already-initialized
  * app — never blocks session loading. Pattern mirrored from dashboard.js:
@@ -15,11 +15,15 @@
  */
 
 // [delayMs, phaseClass] — mirrors the mockup's PHASES timeline, compacted.
+// The title→collapse gap is wide enough for the tagline to be read: the
+// tagline reaches full opacity ~650ms after phase-title fires, so at 600ms
+// it's readable from ~1250ms until collapse. The 4000ms collapse gives
+// ~3.25s of readable time for the 7-word tagline.
 const PHASES = [
   [200, 'dageraad-intro-phase-warm'],
   [600, 'dageraad-intro-phase-title'],
-  [2600, 'dageraad-intro-phase-collapse'],
-  [3500, 'dageraad-intro-phase-done'],
+  [4000, 'dageraad-intro-phase-collapse'],
+  [4900, 'dageraad-intro-phase-done'],
 ];
 // How long after the last phase fires before the overlay is torn down —
 // gives the opacity/transform transitions kicked off at that phase time to

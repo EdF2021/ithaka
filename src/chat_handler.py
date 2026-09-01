@@ -268,6 +268,10 @@ class ChatHandler:
                             cached_desc = _load_vision_cache(att_id)
                         except Exception:
                             cached_desc = None
+                            logger.warning(
+                                "vision cache read failed for %s; re-running VL",
+                                att_id, exc_info=True,
+                            )
                         if cached_desc and not cached_desc.startswith("["):
                             vl_desc = cached_desc
                             _sync_upload_vision_to_gallery(file_info, owner, vl_desc)

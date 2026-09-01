@@ -239,133 +239,140 @@ _TEMPLATE = """\
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
 }}
 
-@media (prefers-color-scheme: dark) {{
-  :root {{
-    --bg: #131214; --bg-surface: #1c1a1e;
-    --border: rgba(255,255,255,0.07);
-    --text: #ece8e2; --text-dim: #a8a39c; --text-muted: #6f6b66;
-    --accent: #e88f73;
-    --gold: #e8c05a; --gold-bg: rgba(232,192,90,0.09);
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
-  }}
-}}
+/* No dark palette: notebook viewers render always-light, matching the
+   mindmap/flashcards/slides templates. */
 
 body {{
   font-family: var(--font-body);
   background: var(--bg);
   color: var(--text);
-  line-height: 1.55;
-  font-size: 16px;
+  line-height: 1.5;
+  font-size: 15px;
   -webkit-font-smoothing: antialiased;
 }}
 
-.ig-wrap {{ max-width: 900px; margin: 0 auto; padding: 2.5rem 1.5rem 3rem; }}
+.ig-wrap {{ max-width: 1180px; margin: 0 auto; padding: 2.25rem 1.75rem 2.5rem; }}
 
-.ig-hero {{ text-align: center; padding: 1.5rem 0 2rem; }}
+.ig-hero {{ text-align: center; padding: 0.25rem 0 1.9rem; }}
 .ig-hero-label {{
-  text-transform: uppercase; letter-spacing: 0.28em; font-size: 0.68rem;
-  font-weight: 600; color: var(--accent); margin-bottom: 1rem;
+  text-transform: uppercase; letter-spacing: 0.28em; font-size: 0.66rem;
+  font-weight: 600; color: var(--accent); margin-bottom: 0.8rem;
 }}
 .ig-hero h1 {{
   font-family: var(--font-display);
-  font-size: clamp(1.7rem, 4.5vw, 2.5rem);
-  font-weight: 700; line-height: 1.15; color: var(--text);
+  font-size: clamp(1.6rem, 3.4vw, 2.4rem);
+  font-weight: 700; line-height: 1.12; color: var(--text);
   letter-spacing: -0.02em;
+  max-width: 60ch; margin: 0 auto;
 }}
 
-.ig-eyebrow {{
-  text-transform: uppercase; letter-spacing: 0.18em; font-size: 0.72rem;
-  font-weight: 600; color: var(--text-muted); margin: 0 0 0.9rem;
-  text-align: center;
-}}
-
-.ig-stats-grid {{
+/* ── Poster grid: sections left/right, hero + bars center ─────────── */
+.ig-grid {{
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2.25rem;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 1.5rem 2.25rem;
+  align-items: start;
 }}
-.ig-stat-card {{
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.25rem 1rem;
-  text-align: center;
-  box-shadow: var(--shadow-sm);
-}}
-.ig-stat-value {{
-  font-family: var(--font-display);
-  font-size: clamp(1.5rem, 4vw, 2.1rem);
-  font-weight: 700; color: var(--accent); line-height: 1.1;
-  word-break: break-word;
-}}
-.ig-stat-label {{ margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-dim); }}
+.ig-grid.ig-single {{ grid-template-columns: 1fr; max-width: 640px; margin: 0 auto; }}
+.ig-col-left, .ig-col-right {{ display: flex; flex-direction: column; gap: 1.9rem; }}
+.ig-center {{ display: flex; flex-direction: column; gap: 1.4rem; align-items: center; }}
 
-.ig-sections-grid {{
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.25rem;
-  margin-bottom: 1rem;
+.ig-panel {{ text-align: center; }}
+.ig-icon {{
+  width: 58px; height: 58px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--pc-tint); color: var(--pc);
+  margin-bottom: 0.65rem;
 }}
-@media (max-width: 700px) {{
-  .ig-sections-grid {{ grid-template-columns: 1fr; }}
+.ig-icon svg {{ width: 28px; height: 28px; }}
+.ig-panel h2 {{
+  font-size: 0.86rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.45rem;
 }}
-.ig-card {{
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.4rem 1.5rem;
-  box-shadow: var(--shadow-sm);
+.ig-panel ul {{ list-style: none; margin: 0; padding: 0; text-align: left; }}
+.ig-panel li {{
+  margin-bottom: 0.4rem; color: var(--text-dim); font-size: 0.86rem;
+  padding-left: 0.9rem; position: relative;
 }}
-.ig-card h2 {{
-  font-family: var(--font-display);
-  font-size: 1.1rem; font-weight: 700; margin-bottom: 0.7rem; color: var(--text);
+.ig-panel li::before {{
+  content: ""; position: absolute; left: 0; top: 0.52em;
+  width: 0.4rem; height: 2px; background: var(--pc);
 }}
-.ig-card ul {{ margin: 0; padding-left: 1.1rem; }}
-.ig-card li {{ margin-bottom: 0.4rem; color: var(--text-dim); }}
-.ig-card li::marker {{ color: var(--accent); }}
-.ig-card p {{ margin-bottom: 0.5rem; color: var(--text-dim); }}
-.ig-card p:last-child {{ margin-bottom: 0; }}
-.ig-card strong {{ color: var(--text); }}
-/* A single card (e.g. the fallback "Content" card with nothing else
-   recognized) would otherwise sit half-width in the 2-column grid. */
-.ig-sections-grid.ig-single-card {{ grid-template-columns: 1fr; }}
+.ig-panel p {{ color: var(--text-dim); font-size: 0.86rem; margin-bottom: 0.45rem; text-align: left; }}
+.ig-panel strong {{ color: var(--text); }}
+
+.ig-hero-art {{ width: min(100%, 300px); margin: 0.25rem auto 0; }}
+.ig-hero-art svg {{ width: 100%; height: auto; display: block; }}
 
 .ig-takeaway {{
-  margin: 2rem 0 1.5rem;
-  padding: 1.1rem 1.6rem;
+  padding: 0.9rem 1.3rem;
   border-left: 3px solid var(--gold);
   background: var(--gold-bg);
   border-radius: 0 var(--radius) var(--radius) 0;
   font-family: var(--font-display);
   font-style: italic;
-  font-size: 1.05rem;
+  font-size: 0.98rem;
   text-align: center;
   color: var(--text);
 }}
 
+/* ── Capacity bars (Key numbers) ──────────────────────────────────── */
+.ig-bars {{ width: 100%; }}
+.ig-eyebrow {{
+  text-transform: uppercase; letter-spacing: 0.18em; font-size: 0.7rem;
+  font-weight: 700; color: var(--text); margin: 0 0 0.8rem;
+  text-align: center;
+}}
+.ig-bar-row {{
+  display: grid; grid-template-columns: minmax(72px, auto) 1fr;
+  gap: 0.3rem 0.8rem; align-items: center; margin-bottom: 0.7rem;
+}}
+.ig-bar-label {{
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--text); text-align: right;
+  line-height: 1.25;
+}}
+.ig-bar-track {{
+  height: 18px; border-radius: 9px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  overflow: hidden; position: relative;
+}}
+.ig-bar-fill {{ height: 100%; border-radius: 9px; }}
+.ig-bar-value {{
+  grid-column: 2; font-size: 0.76rem; color: var(--text-dim);
+  padding-left: 0.2rem;
+}}
+
 .ig-meta {{
   text-align: center; font-size: 0.75rem; color: var(--text-muted);
-  margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border);
+  margin-top: 2.25rem; padding-top: 1rem; border-top: 1px solid var(--border);
+}}
+
+@media (max-width: 900px) {{
+  .ig-grid {{ grid-template-columns: 1fr; }}
+  .ig-center {{ order: -1; }}
+  .ig-hero-art {{ width: min(60%, 240px); }}
+}}
+
+@media (max-width: 480px) {{
+  .ig-bar-row {{ grid-template-columns: 1fr; gap: 0.25rem; }}
+  .ig-bar-label {{ text-align: left; }}
+  .ig-bar-value {{ grid-column: 1; }}
 }}
 
 @media print {{
-  /* Force the light palette on paper regardless of the viewer's dark
-     preference — printing whatever prefers-color-scheme picked would risk
-     light text on a white page. */
+  /* Plain white on paper: flatten the tinted page background so
+     ink-friendly output stays crisp. */
   body {{ background: #fff !important; color: #1a1817 !important; }}
-  .ig-card, .ig-stat-card {{
-    box-shadow: none !important; background: #fff !important;
-    border-color: rgba(0,0,0,0.16) !important;
-  }}
-  .ig-card h2, .ig-card li, .ig-card p {{ color: #1a1817 !important; }}
-  .ig-hero-label, .ig-stat-value {{ color: #b8543a !important; }}
-  .ig-stat-label {{ color: #5a5651 !important; }}
+  .ig-panel h2, .ig-panel li, .ig-panel p {{ color: #1a1817 !important; }}
+  .ig-hero-label {{ color: #b8543a !important; }}
   .ig-takeaway {{
     background: rgba(201,149,46,0.09) !important;
     border-left-color: #c9952e !important; color: #1a1817 !important;
   }}
   .ig-meta {{ color: #8a8580 !important; }}
+  .ig-bar-track {{ border-color: rgba(0,0,0,0.2) !important; }}
 }}
 
 @media (max-width: 360px) {{
@@ -379,14 +386,108 @@ body {{
     <div class="ig-hero-label">Ithaka &mdash; Infographic</div>
     <h1>{title}</h1>
   </div>
-  {stats_html}
-  {sections_html}
-  {takeaway_html}
+  {grid_html}
   <div class="ig-meta">{notebook_name} &middot; {date}</div>
 </div>
 </body>
 </html>
 """
+
+
+# ---------------------------------------------------------------------------
+# Poster building blocks: palette, icons, hero art
+# ---------------------------------------------------------------------------
+
+# One (stroke, tint) pair per panel, cycled in order — mirrors the varied
+# pastel icon clusters of the NotebookLM-style reference poster.
+_PALETTE = [
+    ("#2a9d8f", "rgba(42,157,143,0.13)"),   # teal
+    ("#4a7fb5", "rgba(74,127,181,0.13)"),   # blue
+    ("#e76f51", "rgba(231,111,81,0.13)"),   # orange
+    ("#7d6bb0", "rgba(125,107,176,0.13)"),  # purple
+    ("#b8543a", "rgba(184,84,58,0.12)"),    # accent red
+    ("#c9952e", "rgba(201,149,46,0.13)"),   # gold
+]
+
+_ICON_ATTRS = (
+    'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"'
+)
+
+# Keyword → icon body (24x24 stroke icons). Keys are matched against the
+# lowercased section heading, Dutch and English variants together.
+_ICONS = {
+    "sources": '<path d="M4 16a4 4 0 0 1 .8-7.9A5.5 5.5 0 0 1 15.5 6a4.5 4.5 0 0 1 4.3 6.9"/><path d="M12 12v8"/><path d="m8.5 15.5 3.5-3.5 3.5 3.5"/>',
+    "audio": '<path d="M4 13a8 8 0 0 1 16 0"/><rect x="3" y="13" width="4" height="6" rx="1.5"/><rect x="17" y="13" width="4" height="6" rx="1.5"/>',
+    "video": '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
+    "chat": '<path d="M4 5h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" transform="translate(1.5 0)"/><path d="M8.5 9h7"/><path d="M8.5 12h4.5"/>',
+    "graph": '<circle cx="12" cy="12" r="2.2"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="6" r="1.8"/><circle cx="5" cy="18" r="1.8"/><circle cx="19" cy="18" r="1.8"/><path d="M10.4 10.6 6.4 7.3M13.6 10.6l4-3.3M10.4 13.4l-4 3.3M13.6 13.4l4 3.3"/>',
+    "bars": '<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-8"/><path d="M22 20H2"/>',
+    "target": '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/>',
+    "warning": '<path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5"/><path d="M12 17.4v.1"/>',
+    "gear": '<path d="M4 6h8a3.5 3.5 0 0 1 0 7H9a3.5 3.5 0 0 0 0 7h11"/><circle cx="4" cy="6" r="1.6"/><circle cx="20" cy="20" r="1.6"/>',
+    "people": '<circle cx="9" cy="8.5" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9.5" r="2.4"/><path d="M15.5 14.2a4.6 4.6 0 0 1 5.5 4.3"/>',
+    "doc": '<path d="M6 2.5h8l4 4V21a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z"/><path d="M14 2.5v4h4"/><path d="M8.5 12h7M8.5 15.5h7M8.5 8.5H11"/>',
+    "search": '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5.5 5.5"/>',
+    "spark": '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="2.6"/>',
+}
+
+_ICON_KEYWORDS = [
+    ("sources", ("bron", "source", "input", "upload", "materiaal")),
+    ("audio", ("audio", "podcast", "geluid", "spraak")),
+    ("video", ("video", "film")),
+    ("chat", ("chat", "vraag", "vragen", "gesprek", "antwoord", "q&a", "faq")),
+    ("graph", ("mindmap", "concept", "relatie", "structuur", "verband", "netwerk")),
+    ("bars", ("cijfer", "number", "getal", "data", "stat", "meting", "kern")),
+    # people before target: "doelgroep" must match here, not on "doel".
+    ("people", ("student", "gebruiker", "mens", "team", "doelgroep", "begeleid", "docent", "stakeholder", "rol")),
+    ("target", ("doel", "goal", "missie", "visie", "ambitie", "resultaat")),
+    ("warning", ("risico", "risk", "uitdaging", "knelpunt", "pijnpunt", "probleem", "aandachtspunt")),
+    ("gear", ("stap", "proces", "werkwijze", "aanpak", "fase", "workflow", "implementatie", "planning")),
+    ("doc", ("document", "rapport", "artifact", "output", "deliverable", "verslag")),
+    ("search", ("zoek", "onderzoek", "analyse", "research", "verkenning")),
+]
+
+
+def _pick_icon(heading: str) -> str:
+    """Return the inline-SVG body for a section heading via keyword match."""
+    low = (heading or "").lower()
+    for name, keywords in _ICON_KEYWORDS:
+        if any(k in low for k in keywords):
+            return _ICONS[name]
+    return _ICONS["spark"]
+
+
+# Central hero: an abstract knowledge-hub network in the panel palette —
+# the poster's focal point, standing in for the reference's illustration.
+_HERO_ART = (
+    '<svg viewBox="0 0 300 260" ' + _ICON_ATTRS.replace('stroke-width="1.8"', 'stroke-width="2"') + '>'
+    '<defs><radialGradient id="ig-hub" cx="0.5" cy="0.45" r="0.65">'
+    '<stop offset="0" stop-color="#7d6bb0" stop-opacity="0.35"/>'
+    '<stop offset="1" stop-color="#4a7fb5" stop-opacity="0.06"/></radialGradient>'
+    '<linearGradient id="ig-core" x1="0" y1="0" x2="1" y2="1">'
+    '<stop offset="0" stop-color="#4a7fb5"/><stop offset="1" stop-color="#7d6bb0"/></linearGradient></defs>'
+    '<circle cx="150" cy="128" r="112" fill="url(#ig-hub)" stroke="none"/>'
+    '<g stroke="#a9a29a" stroke-width="1.6">'
+    '<path d="M150 128 74 62"/><path d="M150 128 226 62"/><path d="M150 128 44 140"/>'
+    '<path d="M150 128 256 140"/><path d="M150 128 92 208"/><path d="M150 128 208 208"/>'
+    '</g>'
+    '<circle cx="74" cy="62" r="13" fill="#2a9d8f" stroke="none"/>'
+    '<circle cx="226" cy="62" r="13" fill="#e76f51" stroke="none"/>'
+    '<circle cx="44" cy="140" r="11" fill="#c9952e" stroke="none"/>'
+    '<circle cx="256" cy="140" r="11" fill="#b8543a" stroke="none"/>'
+    '<circle cx="92" cy="208" r="12" fill="#4a7fb5" stroke="none"/>'
+    '<circle cx="208" cy="208" r="12" fill="#7d6bb0" stroke="none"/>'
+    '<circle cx="150" cy="128" r="34" fill="url(#ig-core)" stroke="none"/>'
+    '<g stroke="#ffffff" stroke-width="2">'
+    '<path d="M141 137l9-9 6 6 8-12"/>'
+    '<circle cx="141" cy="137" r="2.4" fill="#ffffff" stroke="none"/>'
+    '<circle cx="150" cy="128" r="2.4" fill="#ffffff" stroke="none"/>'
+    '<circle cx="156" cy="134" r="2.4" fill="#ffffff" stroke="none"/>'
+    '<circle cx="164" cy="122" r="2.4" fill="#ffffff" stroke="none"/>'
+    '</g>'
+    '</svg>'
+)
 
 
 def _esc_bold(text: str) -> str:
@@ -402,41 +503,98 @@ def _esc_bold(text: str) -> str:
     return _BOLD_RE.sub(r'<strong>\1</strong>', escaped)
 
 
+_NUMBER_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
 def _render_stats_html(stats: List[Tuple[str, str]]) -> str:
+    """Render the key numbers as horizontal capacity bars.
+
+    Widths are RANK-based, not linearly value-based: stat magnitudes in one
+    poster routinely span unrelated units ("3 varianten" next to "85%" next
+    to "1000 studenten"), so a linear scale flattens everything but the
+    peak. Ranking keeps the visual ordering honest (bigger number = longer
+    bar) while every bar stays readable — the same stylized staggering the
+    reference poster uses. Stats without a parseable number get full width.
+    """
     if not stats:
         return ""
-    cards = "".join(
-        f'<div class="ig-stat-card">'
-        f'<div class="ig-stat-value">{_esc_bold(number)}</div>'
-        f'<div class="ig-stat-label">{_esc_bold(label)}</div>'
-        f'</div>'
-        for number, label in stats
-    )
+    values: List[Optional[float]] = []
+    for number, _label in stats:
+        m = _NUMBER_RE.search(number.replace(",", "."))
+        values.append(abs(float(m.group(0))) if m else None)
+    ordered = sorted({v for v in values if v is not None})
+    span = max(len(ordered) - 1, 1)
+
+    rows = []
+    for i, (number, label) in enumerate(stats):
+        color, _tint = _PALETTE[i % len(_PALETTE)]
+        next_color, _ = _PALETTE[(i + 1) % len(_PALETTE)]
+        v = values[i]
+        width = 100.0 if v is None else 34.0 + 66.0 * (ordered.index(v) / span)
+        rows.append(
+            '<div class="ig-bar-row">'
+            f'<div class="ig-bar-label">{_esc_bold(label) or "&nbsp;"}</div>'
+            '<div class="ig-bar-track">'
+            f'<div class="ig-bar-fill" style="width:{width:.0f}%;'
+            f'background:linear-gradient(90deg,{color},{next_color})"></div>'
+            "</div>"
+            f'<div class="ig-bar-value">{_esc_bold(number)}</div>'
+            "</div>"
+        )
     return (
-        '<div class="ig-eyebrow">Key numbers</div>'
-        f'<div class="ig-stats-grid">{cards}</div>'
+        '<div class="ig-bars"><div class="ig-eyebrow">Key numbers</div>'
+        + "".join(rows)
+        + "</div>"
     )
 
 
-def _render_card_html(heading: str, bullets: List[str], extra: List[str]) -> str:
-    body = "".join(f'<p>{_esc_bold(p)}</p>' for p in extra)
+def _render_panel_html(heading: str, bullets: List[str], extra: List[str], index: int) -> str:
+    color, tint = _PALETTE[index % len(_PALETTE)]
+    icon = _pick_icon(heading)
+    body = "".join(f"<p>{_esc_bold(p)}</p>" for p in extra)
     if bullets:
         body += "<ul>" + "".join(f"<li>{_esc_bold(b)}</li>" for b in bullets) + "</ul>"
-    return f'<div class="ig-card"><h2>{_esc_bold(heading)}</h2>{body}</div>'
+    return (
+        f'<div class="ig-panel" style="--pc:{color};--pc-tint:{tint}">'
+        f'<div class="ig-icon"><svg {_ICON_ATTRS}>{icon}</svg></div>'
+        f"<h2>{_esc_bold(heading)}</h2>{body}</div>"
+    )
 
 
-def _render_sections_html(
-    sections: List[Tuple[str, List[str], List[str]]],
-    leftover_bullets: List[str],
-    leftover_paragraphs: List[str],
-) -> str:
-    cards = [_render_card_html(heading, bullets, extra) for heading, bullets, extra in sections]
-    if leftover_bullets or leftover_paragraphs:
-        cards.append(_render_card_html("Content", leftover_bullets, leftover_paragraphs))
-    if not cards:
-        return ""
-    grid_class = "ig-sections-grid" + (" ig-single-card" if len(cards) == 1 else "")
-    return f'<div class="{grid_class}">{"".join(cards)}</div>'
+def _render_grid_html(parsed: dict) -> str:
+    """Compose the three-zone poster grid from the parsed markdown."""
+    sections = list(parsed["sections"])
+    if parsed["leftover_bullets"] or parsed["leftover_paragraphs"]:
+        sections.append(("Content", parsed["leftover_bullets"], parsed["leftover_paragraphs"]))
+
+    panels = [
+        _render_panel_html(heading, bullets, extra, i)
+        for i, (heading, bullets, extra) in enumerate(sections)
+    ]
+    stats_html = _render_stats_html(parsed["stats"])
+    takeaway_html = (
+        f'<div class="ig-takeaway">{_esc_bold(parsed["takeaway"])}</div>'
+        if parsed["takeaway"] else ""
+    )
+
+    # Degenerate input (one fallback panel, nothing else): a single centered
+    # column reads better than an empty poster skeleton.
+    if len(panels) <= 1 and not stats_html and not takeaway_html:
+        inner = "".join(panels)
+        return f'<div class="ig-grid ig-single">{inner}</div>'
+
+    left = "".join(panels[0::2])
+    right = "".join(panels[1::2])
+    center = (
+        f'<div class="ig-hero-art">{_HERO_ART}</div>{takeaway_html}{stats_html}'
+    )
+    return (
+        '<div class="ig-grid">'
+        f'<div class="ig-col-left">{left}</div>'
+        f'<div class="ig-center">{center}</div>'
+        f'<div class="ig-col-right">{right}</div>'
+        "</div>"
+    )
 
 
 def generate_infographic(
@@ -459,20 +617,9 @@ def generate_infographic(
     parsed = _parse_infographic_markdown(markdown)
     effective_title = parsed["title"] or (title or "").strip() or "Infographic"
 
-    stats_html = _render_stats_html(parsed["stats"])
-    sections_html = _render_sections_html(
-        parsed["sections"], parsed["leftover_bullets"], parsed["leftover_paragraphs"]
-    )
-    takeaway_html = (
-        f'<div class="ig-takeaway">{_esc_bold(parsed["takeaway"])}</div>'
-        if parsed["takeaway"] else ""
-    )
-
     return _TEMPLATE.format(
         title=html.escape(effective_title),
-        stats_html=stats_html,
-        sections_html=sections_html,
-        takeaway_html=takeaway_html,
+        grid_html=_render_grid_html(parsed),
         notebook_name=html.escape(notebook_name or ""),
         date=html.escape(generated_at.strftime("%B %d, %Y")),
     )

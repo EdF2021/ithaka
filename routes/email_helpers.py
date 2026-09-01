@@ -297,7 +297,15 @@ def _require_auth(request: Request) -> str:
     caller on a half-configured deploy. Now: anonymous callers in
     unconfigured mode are only honoured if they're coming from
     localhost; everyone else gets 401.
+
+    Bearer API tokens resolve (via middleware) to a shared "api"
+    pseudo-user whose scopes this dependency has no way to check, so scope
+    enforcement belongs in the scope-aware /api/codex/* proxy
+    (`_scope_owner` in routes/codex_routes.py), not here. Mirrors the same
+    gate in src.auth_helpers.require_user.
     """
+    if getattr(request.state, "api_token", False):
+        raise HTTPException(403, "API tokens must use a scope-aware API route")
     u = get_current_user(request)
     if u:
         return u
@@ -853,9 +861,9 @@ def _init_scheduled_db():
                 finally:
                     _db.close()
             except Exception:
-                pass
+                logger.warning("scheduled_emails owner backfill failed", exc_info=True)
     except Exception:
-        pass
+        logger.warning("scheduled_emails lazy migration failed", exc_info=True)
     # Lazy migration: add turns_json to email_boundaries for server-side
     # thread parsing cache (talon-style precomputed reply chain).
     try:
@@ -863,7 +871,7 @@ def _init_scheduled_db():
         if "turns_json" not in cols:
             conn.execute("ALTER TABLE email_boundaries ADD COLUMN turns_json TEXT")
     except Exception:
-        pass
+        logger.warning("email_boundaries.turns_json migration failed", exc_info=True)
     # Per-sender signature cache. Populated by `learn_sender_signatures`.
     # Message sender addresses are global, so signatures must be scoped to the
     # mailbox owner before `/read` returns them to the renderer.

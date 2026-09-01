@@ -31,6 +31,8 @@ from src.integrations import (
     get_integration,
     mask_integration_secret,
     execute_api_call,
+    validate_ntfy_base_url,
+    check_ntfy_reachable,
     INTEGRATION_PRESETS,
     migrate_from_settings,
 )
@@ -699,6 +701,14 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         if not user or not auth_manager.is_admin(user):
             raise HTTPException(403, "Admin only")
         body = await request.json()
+        if str(body.get("preset") or "").lower() == "ntfy" and body.get("base_url"):
+            try:
+                candidate = validate_ntfy_base_url(body["base_url"])
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            probe_error = await check_ntfy_reachable(candidate)
+            if probe_error:
+                raise HTTPException(400, probe_error)
         item = add_integration(body)
         return {"ok": True, "integration": mask_integration_secret(item)}
 
@@ -709,6 +719,18 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         if not user or not auth_manager.is_admin(user):
             raise HTTPException(403, "Admin only")
         body = await request.json()
+        existing = get_integration(integration_id)
+        if not existing:
+            raise HTTPException(404, "Integration not found")
+        preset = str(body.get("preset") or existing.get("preset") or "").lower()
+        if preset == "ntfy" and body.get("base_url"):
+            try:
+                candidate = validate_ntfy_base_url(body["base_url"])
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            probe_error = await check_ntfy_reachable(candidate)
+            if probe_error:
+                raise HTTPException(400, probe_error)
         item = update_integration(integration_id, body)
         if not item:
             raise HTTPException(404, "Integration not found")

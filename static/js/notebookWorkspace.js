@@ -1213,11 +1213,16 @@ async function _generateArtifact(kind, btn) {
   if (label) label.textContent = 'Generating…';
   _showArtifactError('');
   const epoch = _openEpoch;
+  const payload = { kind };
+  if (kind === 'mindmap') {
+    const focusInput = document.getElementById('nbws-mindmap-focus');
+    if (focusInput && focusInput.value.trim()) payload.focus = focusInput.value.trim();
+  }
   try {
     await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind }),
+      body: JSON.stringify(payload),
     });
     if (epoch === _openEpoch) await _loadArtifacts();
   } catch (e) {
@@ -1464,6 +1469,9 @@ async function _generateVideo(btn) {
 
 // Same close-hook reasoning as the podcast poll above.
 registerCloseHook(_stopVideoPoll);
+// Same reasoning: close the in-panel artifact viewer so no stale iframe
+// persists across a workspace close/reopen.
+registerCloseHook(_closeArtifactViewer);
 
 /**
  * Open a generated artifact in the document viewer, as an overlay ABOVE the
@@ -1510,10 +1518,53 @@ function _openArtifactReport(row) {
   if (!_state.notebook) return;
   const artId = row.dataset.artId;
   if (!artId) return;
-  window.open(
-    `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artId)}/report`,
-    '_blank'
-  );
+  // Relative URL so it works regardless of how the app is reached
+  // (Tailscale serve, localhost, etc.) — same origin as the page itself.
+  const url = `/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts/${encodeURIComponent(artId)}/report`;
+  _showArtifactViewer(url, row.dataset.kind);
+}
+
+/** Show the artifact report in an in-panel iframe, hiding the Generate/Files
+ *  sections. A back button restores the studio panel. The iframe takes the
+ *  full studio body height. */
+function _showArtifactViewer(url, kind) {
+  const body = document.getElementById('nbws-studio-body');
+  if (!body) return;
+  // Hide the generate+files sections
+  const sections = body.querySelectorAll('.nbws-studio-section');
+  sections.forEach(s => s.style.display = 'none');
+  // Remove any existing viewer
+  const old = document.getElementById('nbws-artifact-viewer');
+  if (old) old.remove();
+  // Build the viewer chrome
+  const viewer = document.createElement('div');
+  viewer.id = 'nbws-artifact-viewer';
+  viewer.className = 'nbws-artifact-viewer';
+  const kindLabel = KIND_LABELS[kind] || 'Artifact';
+  viewer.innerHTML = `
+    <div class="nbws-artifact-viewer-bar">
+      <button type="button" class="nbws-artifact-viewer-back" id="nbws-artifact-viewer-back" title="Back to studio">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+        <span>Studio</span>
+      </button>
+      <span class="nbws-artifact-viewer-kind">${_esc(kindLabel)}</span>
+    </div>
+    <iframe class="nbws-artifact-viewer-frame" src="${_esc(url)}" title="${_esc(kindLabel)}"></iframe>`;
+  body.appendChild(viewer);
+  viewer.querySelector('#nbws-artifact-viewer-back')?.addEventListener('click', _closeArtifactViewer);
+  document.getElementById('nbws-studio')?.classList.add('nbws-artifact-viewer-active');
+}
+
+/** Restore the studio panel's Generate + Files sections, removing the
+ *  in-panel iframe viewer. Called from the back button and on workspace
+ *  close so no stale iframe persists. */
+function _closeArtifactViewer() {
+  const body = document.getElementById('nbws-studio-body');
+  if (!body) return;
+  const viewer = document.getElementById('nbws-artifact-viewer');
+  if (viewer) viewer.remove();
+  body.querySelectorAll('.nbws-studio-section').forEach(s => s.style.display = '');
+  document.getElementById('nbws-studio')?.classList.remove('nbws-artifact-viewer-active');
 }
 
 // Two visually distinct sections (Task B): "Generate" is the row of action
@@ -1543,6 +1594,11 @@ function _studioPanelSkeleton() {
         ${ARTIFACT_KINDS.map(kind => `<button type="button" class="nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}"
                 data-kind="${_esc(kind)}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
       </div>
+      <div class="nbws-mindmap-focus-wrap" id="nbws-mindmap-focus-wrap">
+        <input type="text" id="nbws-mindmap-focus" class="nbws-mindmap-focus-input"
+               placeholder="Focus mindmap op onderwerp…" maxlength="200" />
+        <span class="nbws-mindmap-focus-hint">Optioneel — laat leeg voor een algemene mindmap</span>
+      </div>
     </div>
     <div class="nbws-studio-section nbws-studio-files">
       <div class="nbws-studio-section-head">Files</div>
@@ -1567,6 +1623,23 @@ function _wireStudioPanel() {
   });
   document.getElementById('nbws-podcast-btn')?.addEventListener('click', (e) => _generatePodcast(e.currentTarget));
   document.getElementById('nbws-video-btn')?.addEventListener('click', (e) => _generateVideo(e.currentTarget));
+
+  window.addEventListener('message', _handleMindmapNodeClick);
+}
+
+function _handleMindmapNodeClick(e) {
+  if (!e.data || e.data.type !== 'nbws-mindmap-node-click') return;
+  const label = e.data.label;
+  if (!label) return;
+  _closeArtifactViewer();
+  closeNotebookWorkspace();
+  const msg = `Geef een samenvatting en uitleg over "${label}" op basis van de bronnen van dit notebook.`;
+  const msgInput = document.getElementById('message');
+  if (!msgInput) return;
+  msgInput.value = msg;
+  msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+  const form = document.getElementById('chat-form');
+  if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
 }
 
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks
@@ -1644,6 +1717,27 @@ async function _openImpl(nb) {
   const nameEl = document.getElementById('nbws-notebook-name');
   if (nameEl) nameEl.textContent = nb.name || '(untitled)';
 
+  // Hero banner: show the AI-generated cover image full-width with the
+  // notebook name overlaid. Falls back to hidden when no cover exists.
+  const hero = document.getElementById('nbws-hero');
+  const heroName = document.getElementById('nbws-hero-name');
+  if (hero && heroName) {
+    const coverUrl = nb.cover_image
+      ? `${window.location.origin}/api/notebook-cover/${encodeURIComponent(nb.cover_image)}`
+      : '';
+    if (coverUrl) {
+      hero.style.backgroundImage = `url('${coverUrl}')`;
+      hero.style.display = '';
+      heroName.textContent = nb.name || '(untitled)';
+      const mobile = window.matchMedia('(max-width: 768px)').matches;
+      root.style.setProperty('--nbws-hero-h', mobile ? '70px' : '90px');
+    } else {
+      hero.style.backgroundImage = '';
+      hero.style.display = 'none';
+      root.style.setProperty('--nbws-hero-h', '0px');
+    }
+  }
+
   _clearChips();
   _wireSessionSelect();
   _populateSessionSelect();
@@ -1688,14 +1782,12 @@ export function closeNotebookWorkspace() {
   );
   const root = _root();
   if (root) {
-    // A collapse/back button inside #nbws-root can still hold focus at this
-    // point (e.g. the button that was just clicked to trigger this close) —
-    // setting aria-hidden on an ancestor of the focused element is invalid
-    // (browsers log a warning and refuse to apply it), so drop focus out of
-    // the subtree first.
     if (root.contains(document.activeElement)) document.activeElement.blur();
     root.setAttribute('aria-hidden', 'true');
+    root.style.setProperty('--nbws-hero-h', '0px');
   }
+  const hero = document.getElementById('nbws-hero');
+  if (hero) { hero.style.display = 'none'; hero.style.backgroundImage = ''; }
   _resetPanel('sources');
   _resetPanel('studio');
   document.body.classList.remove(

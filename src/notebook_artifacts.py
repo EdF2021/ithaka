@@ -404,7 +404,7 @@ def gather_source_text(notebook: Notebook, db_session) -> str:
 # --------------------------------------------------------------------------
 
 async def generate_artifact(
-    notebook_id: str, owner: str, kind: str, db_session
+    notebook_id: str, owner: str, kind: str, db_session, focus: str | None = None
 ) -> NotebookArtifact:
     """Generate one artifact for `notebook_id` and return its NotebookArtifact.
 
@@ -438,9 +438,18 @@ async def generate_artifact(
     if not source_text:
         raise ValueError("Geen geïndexeerde bronnen")
 
+    user_msg = untrusted_context_message(f"notebook-bronnen: {notebook.name}", source_text)
+    if focus and focus.strip():
+        focus_instruction = (
+            f"\n\nAanvullende instructie: focus de mindmap op het volgende "
+            f"onderwerp of aspect: {focus.strip()}. Pas de structuur en "
+            f"inhoud van de mindmap aan zodat dit aspect centraal staat, "
+            f"maar behoud het mermaid-mindmap formaat."
+        )
+        user_msg = {"role": user_msg["role"], "content": user_msg["content"] + focus_instruction}
     messages = [
         {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{spec['prompt']}"},
-        untrusted_context_message(f"notebook-bronnen: {notebook.name}", source_text),
+        user_msg,
     ]
     # This call runs inside the artifacts-POST request itself, which the
     # interactive-activity middleware already counts as a tracked foreground

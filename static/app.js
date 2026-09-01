@@ -42,6 +42,7 @@ import cookbookModule from './js/cookbook.js';
 import groupModule from './js/group.js';
 import * as researchPanelModule from './js/research/panel.js?v=20260630researchthumb';
 import ttsModule from './js/tts-ai.js';
+import { zoomOf, toLocalPx } from './js/uiZoom.js';
 import spinnerModule from './js/spinner.js';
 import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
 import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js';
@@ -429,10 +430,15 @@ function initializeEventListeners() {
       } else {
         // Move menu to body so it's not affected by ancestor transforms
         if (exportMenu.parentElement !== document.body) document.body.appendChild(exportMenu);
+        // UI text-scale zoom (:root.ui-scale-125) renders local px assigned
+        // to top/left/right multiplied by the zoom — divide viewport-space
+        // rect/window measurements before assigning (see uiZoom.js, PR
+        // #76/#77).
+        const _z = zoomOf(document.documentElement);
         const rect = exportDlBtn.getBoundingClientRect();
-        exportMenu.style.top = (rect.bottom + 4) + 'px';
+        exportMenu.style.top = toLocalPx(rect.bottom + 4, _z) + 'px';
         exportMenu.style.left = 'auto';
-        exportMenu.style.right = (window.innerWidth - rect.right) + 'px';
+        exportMenu.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
         exportMenu.classList.add('open');
       }
     });
@@ -2073,20 +2079,27 @@ function initializeEventListeners() {
     // portaled to <body>). Only cap height + show a scrollbar when the list is
     // genuinely taller than the room above the button.
     function positionMenu() {
+      // UI text-size scale (`:root.ui-scale-125 { zoom: 1.25 }`) skews the
+      // coordinate spaces: getBoundingClientRect() returns real viewport px,
+      // but the px we assign to top/left render multiplied by the zoom (the
+      // menu lives inside the zoomed root, portal or not). Divide measured
+      // coords by the effective zoom so set-px and rendered-px line up again
+      // (scrollHeight is already in the element's own, unzoomed px).
+      const z = menu.currentCSSZoom || 1;
       const r = plusBtn.getBoundingClientRect();
-      menu.style.left = r.left + 'px';
+      menu.style.left = (r.left / z) + 'px';
       menu.style.right = 'auto';
       menu.style.bottom = 'auto';
       menu.style.maxHeight = '';      // reset so we can measure the natural height
       menu.style.overflowY = '';
-      const avail = r.top - 16;        // room above the chevron
+      const avail = r.top / z - 16;    // room above the chevron
       const natural = menu.scrollHeight;
       const h = Math.min(natural, avail);
       if (natural > avail) {           // only cap + scroll when it doesn't fit
         menu.style.maxHeight = avail + 'px';
         menu.style.overflowY = 'auto';
       }
-      menu.style.top = (r.top - 8 - h) + 'px';
+      menu.style.top = (r.top / z - 8 - h) + 'px';
     }
     // Tapping the chevron must NOT steal focus from the message box, or the
     // mobile keyboard collapses. preventDefault on pointerdown keeps the

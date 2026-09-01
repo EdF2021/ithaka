@@ -3,12 +3,124 @@
 
 import io
 import logging
+import re
+import subprocess
 import httpx
 import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+# Whisper's `language` parameter expects an ISO-639-1 code. The STT settings
+# card exposes a free-text field, so a Dutch user naturally types a language
+# *name* ("Nederlands") — which the OpenAI /audio/transcriptions API rejects
+# with a 400, silently breaking voice input. Map the names we expect to their
+# codes; pass through anything that already looks like a 2-letter code.
+_LANGUAGE_NAME_TO_ISO = {
+    "nederlands": "nl", "dutch": "nl", "vlaams": "nl", "flemish": "nl",
+    "engels": "en", "english": "en",
+    "duits": "de", "german": "de", "deutsch": "de",
+    "frans": "fr", "french": "fr", "francais": "fr", "français": "fr",
+    "spaans": "es", "spanish": "es", "espanol": "es", "español": "es",
+    "italiaans": "it", "italian": "it", "italiano": "it",
+    "portugees": "pt", "portuguese": "pt",
+}
+
+
+def normalize_stt_language(language: str) -> str:
+    """Coerce a user-supplied STT language to an ISO-639-1 code Whisper accepts.
+
+    Returns "" (auto-detect) for empty or unrecognized input, so an invalid
+    free-text value falls back to auto-detection instead of a hard 400 error.
+    """
+    if not language:
+        return ""
+    lang = language.strip().lower()
+    if not lang:
+        return ""
+    if lang in _LANGUAGE_NAME_TO_ISO:
+        return _LANGUAGE_NAME_TO_ISO[lang]
+    if len(lang) == 2 and lang.isalpha():
+        return lang
+    logger.warning("Unrecognized STT language %r — falling back to auto-detect", language)
+    return ""
+
+
+# Whisper (every size, every provider) was trained on YouTube subtitles and,
+# when fed silence or non-speech noise, hallucinates the credit lines that
+# closed those subtitle files — "Ondertiteld door de Amara.org gemeenschap",
+# "Thanks for watching", ZDF-credits, etc. In continuous voice mode such a
+# phantom transcript auto-sends as a chat message. Strip the known phrases;
+# a transcript that consists only of them collapses to "" (the voice-mode
+# client ignores empty input). The local provider additionally suppresses
+# the trigger at the source via faster-whisper's built-in VAD filter.
+_HALLUCINATION_PATTERNS = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"ondertitel(s|d|ing)?( ingediend)?( door)? de amara\.org gemeenschap",
+        r"subtitles by the amara\.org community",
+        r"sous-titres r[ée]alis[ée]s? .{0,20}la communaut[ée] d'amara\.org",
+        r"untertitel(ung)?( im auftrag)? des zdf f[üu]r funk,? ?\d{0,4}",
+        r"thank(s| you) for watching[.!]?",
+        # Dutch regional-TV credit, live-observed on pure silence.
+        r"tv gelderland,? ?\d{0,4}",
+    )
+]
+
+# The phrase list above can never be complete — Whisper's silence
+# hallucinations span every credit line in its training data ("TV GELDERLAND
+# 2021" surfaced the day the list was written). So gate the audio itself:
+# probe peak volume with ffmpeg and skip the provider entirely for clips
+# that contain no signal. Fails open (returns False) when ffmpeg is missing
+# or the probe errors, so transcription never breaks on the gate itself.
+_SILENCE_MAX_VOLUME_DB = -50.0
+
+_MAX_VOLUME_RE = re.compile(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB")
+
+
+def _parse_max_volume(ffmpeg_stderr: str) -> Optional[float]:
+    """Extract max_volume (dB) from ffmpeg volumedetect output, or None."""
+    m = _MAX_VOLUME_RE.search(ffmpeg_stderr or "")
+    return float(m.group(1)) if m else None
+
+
+def _audio_is_silent(audio_bytes: bytes) -> bool:
+    """True when ffmpeg's volumedetect sees no meaningful signal."""
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-i", "pipe:0", "-af", "volumedetect", "-f", "null", "-"],
+            input=audio_bytes,
+            capture_output=True,
+            timeout=15,
+        )
+        max_volume = _parse_max_volume(proc.stderr.decode(errors="replace"))
+        if max_volume is None:
+            return False
+        return max_volume < _SILENCE_MAX_VOLUME_DB
+    except Exception as e:
+        logger.debug(f"STT silence probe unavailable ({e}); proceeding with transcription")
+        return False
+
+
+def strip_stt_hallucinations(text: Optional[str]) -> str:
+    """Remove known Whisper silence-hallucination phrases from a transcript.
+
+    Returns "" when nothing meaningful remains, so callers (and the
+    voice-mode auto-send) treat the result as an empty transcription.
+    """
+    if not text:
+        return ""
+    out = text
+    for pat in _HALLUCINATION_PATTERNS:
+        out = pat.sub("", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    # A removal can leave dangling separators or bare punctuation behind.
+    out = out.strip(" \t\n-–—")
+    if not re.search(r"\w", out):
+        return ""
+    return out
 
 
 class STTService:
@@ -98,12 +210,18 @@ class STTService:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
-            kwargs = {}
+            # Silero-VAD keeps silence/noise out of the model — the main
+            # trigger for subtitle-credit hallucinations (see
+            # strip_stt_hallucinations above, which catches what slips by).
+            kwargs = {"vad_filter": True}
             if language:
                 kwargs["language"] = language
 
             segments, info = model.transcribe(tmp_path, **kwargs)
-            text = " ".join(seg.text.strip() for seg in segments)
+            raw = " ".join(seg.text.strip() for seg in segments)
+            text = strip_stt_hallucinations(raw)
+            if text != raw.strip():
+                logger.info("STT hallucination filter stripped subtitle-credit artifact from transcript")
 
             logger.info(f"Local STT: {len(text)} chars, lang={info.language}, prob={info.language_probability:.2f}")
             return text
@@ -144,7 +262,10 @@ class STTService:
             r = httpx.post(url, headers=headers, files=files, data=data, timeout=60)
             r.raise_for_status()
             result = r.json()
-            text = result.get("text", "")
+            raw = result.get("text", "")
+            text = strip_stt_hallucinations(raw)
+            if text != (raw or "").strip():
+                logger.info("STT hallucination filter stripped subtitle-credit artifact from transcript")
             logger.info(f"API STT: {len(text)} chars from {base_url}")
             return text
         except Exception as e:
@@ -159,10 +280,14 @@ class STTService:
             return None
         provider = settings["stt_provider"]
         model = settings["stt_model"]
-        language = settings.get("stt_language", "")
+        language = normalize_stt_language(settings.get("stt_language", ""))
 
         if provider in ("disabled", "browser"):
             return None
+
+        if _audio_is_silent(audio_bytes):
+            logger.info("STT: audio below silence threshold — skipping transcription")
+            return ""
 
         if provider == "local":
             return self._transcribe_local(audio_bytes, language)

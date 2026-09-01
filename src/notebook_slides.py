@@ -88,25 +88,34 @@ _TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
-  :root {{ --bg:#16181d; --fg:#e6e6e6; --panel:#1f2229; --border:#3a3f4b; --accent:#e06c75; }}
+  :root {{ --bg:#fbf9f4; --fg:#1a1817; --panel:#ffffff; --border:rgba(0,0,0,0.08); --accent:#b8543a; --accent-light:#d97a5e; }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; background:var(--bg); color:var(--fg); height:100vh; display:flex; flex-direction:column;
-         font-family:'Fira Code','Cascadia Code',ui-monospace,monospace; }}
-  header {{ padding:10px 18px; font-size:12px; opacity:.7; display:flex; justify-content:space-between; gap:12px; }}
+         font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }}
+  header {{ padding:10px 18px; font-size:12px; color:#8a8580; display:flex; justify-content:space-between; gap:12px;
+           border-bottom:1px solid var(--border); }}
+  header span:first-child {{ font-weight:600; }}
   .sd-stage {{ flex:1; display:flex; align-items:center; justify-content:center; padding:0 18px 12px; min-height:0; }}
   .sd-slide {{ width:min(920px,100%); aspect-ratio:16/9; background:var(--panel); border:1px solid var(--border);
-               border-radius:12px; padding:5% 6%; display:none; flex-direction:column; overflow:auto; }}
+               border-radius:12px; padding:5% 6%; display:none; flex-direction:column; overflow:auto;
+               box-shadow:0 1px 3px rgba(0,0,0,0.05); }}
   .sd-slide.active {{ display:flex; }}
-  .sd-slide h2 {{ margin:0 0 4%; font-size:clamp(18px,3.2vw,30px); border-bottom:2px solid var(--accent); padding-bottom:8px; }}
-  .sd-slide li {{ font-size:clamp(13px,1.9vw,19px); margin-bottom:2.5%; }}
+  .sd-slide h2 {{ margin:0 0 4%; font-family:'Charter','Iowan Old Style',Georgia,serif;
+                  font-size:clamp(18px,3.2vw,30px); border-bottom:2px solid var(--accent); padding-bottom:8px;
+                  color:var(--fg); }}
+  .sd-slide ul {{ list-style:none; padding:0; margin:0; }}
+  .sd-slide li {{ font-size:clamp(13px,1.9vw,19px); margin-bottom:2.5%; padding-left:1.2em; position:relative; }}
+  .sd-slide li::before {{ content:""; position:absolute; left:0; top:0.55em; width:6px; height:6px;
+                          background:var(--accent); border-radius:50%; }}
   .sd-notes {{ display:none; width:min(920px,100%); margin:0 auto 10px; padding:10px 14px; font-size:12px;
-               border:1px dashed var(--border); border-radius:8px; opacity:.85; white-space:pre-wrap; }}
+               border:1px dashed var(--border); border-radius:8px; color:#5a5651;
+               background:rgba(184,84,58,0.03); white-space:pre-wrap; }}
   body.show-notes .sd-notes.active {{ display:block; }}
   nav {{ display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; padding:0 10px 16px; }}
   nav button {{ background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:8px;
                 padding:7px 16px; font:inherit; font-size:13px; cursor:pointer; }}
-  nav button:hover {{ border-color:var(--accent); }}
-  .sd-counter {{ font-size:12px; opacity:.75; min-width:64px; text-align:center; }}
+  nav button:hover {{ border-color:var(--accent); color:var(--accent); }}
+  .sd-counter {{ font-size:12px; color:#8a8580; min-width:64px; text-align:center; }}
 </style>
 </head>
 <body>

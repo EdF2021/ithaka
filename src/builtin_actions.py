@@ -1172,6 +1172,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
             by_sender.setdefault(addr, []).append(m)
 
         # 3. Eligibility: ≥3 emails AND (no cache OR cache > 30 days old).
+        conn = None
         try:
             conn = _sql3.connect(SCHEDULED_DB)
             owner_clause, owner_params = _email_cache_owner_clause(owner)
@@ -1181,9 +1182,11 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
                     owner_params,
                 ).fetchall()
             }
-            conn.close()
         except Exception:
             cached = {}
+        finally:
+            if conn is not None:
+                conn.close()
 
         cutoff_iso = (_dt.utcnow() - _td(days=30)).isoformat()
         eligible: list[tuple[str, list[dict]]] = []
@@ -1285,6 +1288,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
             else:
                 cached_sig = sig
 
+            conn = None
             try:
                 conn = _sql3.connect(SCHEDULED_DB)
                 owner_value = (owner or "").strip()
@@ -1295,10 +1299,12 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
                     (addr, owner_value, cached_sig, len(bodies), _dt.utcnow().isoformat(), model, "llm"),
                 )
                 conn.commit()
-                conn.close()
                 analyzed += 1
             except Exception as e:
                 logger.warning(f"sig cache write failed for {addr}: {e}")
+            finally:
+                if conn is not None:
+                    conn.close()
 
         return f"Learned sigs: {analyzed - no_sig} found, {no_sig} no-sig, of {len(eligible)} eligible", True
     except Exception as e:
@@ -1353,7 +1359,10 @@ async def action_daily_brief(owner: str, **kwargs) -> Tuple[str, bool]:
         recent_subjects: list[tuple[str, str]] = []
         try:
             import email as _email
-            conn = _imap_connect(None)
+            # Scope IMAP to this brief's owner — the calendar/notes queries above
+            # are owner-filtered, so the email section must be too, or a
+            # multi-user brief would leak another account's inbox.
+            conn = _imap_connect(None, owner=owner)
             try:
                 conn.select("INBOX", readonly=True)
                 status, data = conn.search(None, "UNSEEN")
@@ -1855,7 +1864,6 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
         urgency_prompt = settings.get("urgent_email_prompt", "")
         per_uid_scores = {}   # key = "<acc_id>:<uid>" → {"score": 0-3, "reason": "..."}
         all_unread_keys = set()
-        llm_attempts = 0
         saved_classifications = 0
         failed_classifications = []
         tag_write_details = []
@@ -1972,7 +1980,21 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                         cached_ok = isinstance(cached, dict) and cached.get("triage_version") == TRIAGE_VERSION
                         results.append({"key": key, "uid": uid, "cached": cached if cached_ok else None})
                         if cached_ok:
-                            # Already classified — skip the fetch.
+                            # Already classified — skip the expensive header/body
+                            # fetch, but still refresh the read/unread flag with a
+                            # cheap FLAGS-only fetch. The caller overwrites the
+                            # cached verdict's `unread` from this per-scan value,
+                            # so without it a cached unread email is marked read
+                            # forever and drops out of the urgent counts.
+                            try:
+                                st, fdata = conn.uid("FETCH", uid_b, "(FLAGS)")
+                                if st == "OK" and fdata:
+                                    fblob = b" ".join(
+                                        p for p in fdata if isinstance(p, (bytes, bytearray))
+                                    )
+                                    results[-1]["unread"] = b"\\Seen" not in fblob
+                            except Exception as _fe:
+                                logger.debug(f"urgency: flag refresh for uid {uid} failed: {_fe}")
                             continue
                         # Pull headers + first ~800 chars of plaintext body.
                         try:
@@ -2065,7 +2087,11 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     all_unread_keys.add(key)
                 if item.get("cached"):
                     cached_v = dict(item["cached"])
-                    cached_v["unread"] = bool(item.get("unread"))
+                    # Only refresh unread when we actually re-read the flag this
+                    # scan; if the FLAGS fetch failed, keep the cached value
+                    # rather than clobbering it to False.
+                    if "unread" in item:
+                        cached_v["unread"] = bool(item["unread"])
                     per_uid_scores[key] = cached_v
                     continue
                 # Skip uids we couldn't fetch (no subject/from/body).
@@ -2076,122 +2102,6 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                 per_uid_scores[key] = verdict
                 saved_classifications += 1
                 continue
-                # ── LLM-classify. JSON-only response; bullet-proof parse.
-                llm_attempts += 1
-                prompt = (
-                    "You are triaging ONE email. Return ONLY JSON: "
-                    "{\"score\":0|1|2|3,\"tags\":[\"...\"],\"spam\":false,"
-                    "\"reason\":\"one short phrase\"}.\n"
-                    "0 = trivial / promotional · 1 = informational, no reply needed · "
-                    "2 = should reply within a day · 3 = urgent, reply now (deadline, blocker).\n\n"
-                    "Allowed visible tags: urgent, reply-soon, action-needed, calendar, bills, receipt, travel.\n"
-                    "Use action-needed when the user likely needs to reply, pay, sign, book, or decide. "
-                    "Use bills for bills or debts, receipt for purchases/deliveries, travel for reservations/trips, "
-                    "and calendar only when a calendar event/reminder is involved. spam=true for scams, phishing, "
-                    "junk, cold sales, generic ads, or no-personal-action bulk mail.\n"
-                    "Important: 'I'm outside', 'I am outside', 'waiting outside', 'at the door', "
-                    "'locked out', or 'can't get in' means score 3 unless clearly historical.\n\n"
-                    f"User's rules:\n{urgency_prompt}\n\n"
-                    f"Email:\nFrom: {item.get('from','')}\nSubject: {item.get('subject','')}\n"
-                    f"Snippet:\n{item.get('body','')}\n"
-                )
-                try:
-                    await wait_for_interactive_quiet("email urgency action")
-                    raw = await llm_call_async_with_fallback(
-                        candidates,
-                        [{"role": "user", "content": prompt}],
-                        temperature=0.1, max_tokens=220, timeout=30,
-                    )
-                    # Tolerant JSON-parse: strip code fences if present.
-                    txt = (raw or "").strip()
-                    if txt.startswith("```"):
-                        txt = txt.strip("`")
-                        # Drop a leading "json\n" or any tag.
-                        nl = txt.find("\n")
-                        if nl >= 0:
-                            txt = txt[nl + 1:]
-                    # Find first { ... } in the response.
-                    s = txt.find("{")
-                    e = txt.rfind("}")
-                    if s < 0 or e <= s:
-                        failed_classifications.append({
-                            "subject": item.get("subject") or "(no subject)",
-                            "from": item.get("from") or "",
-                            "reason": "model returned no JSON",
-                        })
-                        continue
-                    obj = _json.loads(txt[s:e + 1])
-                    score = int(obj.get("score", 0))
-                    reason = str(obj.get("reason", ""))[:200]
-                    raw_tags = obj.get("tags") or []
-                    if isinstance(raw_tags, str):
-                        raw_tags = [raw_tags]
-                    tags = []
-                    for t in raw_tags:
-                        if not isinstance(t, str):
-                            continue
-                        tag = t.strip().lower().replace("_", "-")
-                        if tag == "promo":
-                            tag = "marketing"
-                        if tag in CATEGORY_TAGS and tag not in tags:
-                            tags.append(tag)
-                    _spam_raw = obj.get("spam")
-                    if isinstance(_spam_raw, bool):
-                        spam = _spam_raw
-                    elif isinstance(_spam_raw, (int, float)):
-                        spam = bool(_spam_raw)
-                    else:
-                        spam = str(_spam_raw or "").strip().lower() in {"1", "true", "yes", "y"}
-                    _blob = f"{item.get('headers','')}\n{item.get('subject','')}\n{item.get('body','')}".lower()
-                    if _re.search(r"\b(i'?m|i am|im|we'?re|we are)\s+outside\b", _blob) or _re.search(
-                        r"\b(waiting outside|at the door|locked out|can'?t get in|cannot get in)\b", _blob
-                    ):
-                        if score < 3:
-                            reason = "person is waiting outside"
-                        score = max(score, 3)
-                    bulkish = bool(_re.search(
-                        r"\b(list-unsubscribe|list-id|mailchimp|mailchimpapp|view this email in your browser|unsubscribe|newsletter|digest|precedence:\s*bulk)\b",
-                        _blob,
-                    ))
-                    marketingish = bool(_re.search(
-                        r"\b(advertisement|sponsored|promo|promotion|sale|discount|offer|limited time|deal|tickets?|tour|merch|stream|purchase|sold out|low tickets|coupon|shop now|buy now)\b",
-                        _blob,
-                    ))
-                    if (bulkish or marketingish) and score < 2:
-                        score = 0
-                        if not reason or "urgent" in reason.lower():
-                            reason = "bulk mail; no personal reply needed"
-                    # Strip "Name <addr>" to bare display name for compact summary.
-                    _from_raw = item.get("from", "") or ""
-                    if "<" in _from_raw:
-                        _from_short = _from_raw.split("<", 1)[0].strip().strip('"') or _from_raw
-                    else:
-                        _from_short = _from_raw
-                    verdict = {
-                        "score": max(0, min(3, score)),
-                        "tags": tags[:4],
-                        "spam": spam,
-                        "reason": reason,
-                        "subject": (item.get("subject") or "")[:200],
-                        "from": _from_short[:120],
-                        "triage_version": TRIAGE_VERSION,
-                        # Cache the message_id too so re-scans of already-cached
-                        # UIDs can still write the inbox tag without re-LLM'ing.
-                        "message_id": (item.get("message_id") or "").strip(),
-                        "unread": bool(item.get("unread")),
-                        "ts": _time.time(),
-                    }
-                    cache.setdefault("uids", {})[item["uid"]] = verdict
-                    per_uid_scores[key] = verdict
-                    saved_classifications += 1
-                except Exception as e:
-                    failed_classifications.append({
-                        "subject": item.get("subject") or "(no subject)",
-                        "from": item.get("from") or "",
-                        "reason": str(e)[:120] or "classification failed",
-                    })
-                    logger.debug(f"urgency: LLM classify failed for {key}: {e}")
-                    continue
 
             # ── Prune cache entries for UIDs that are no longer in the recent
             # scan window. Read messages remain cached because tags are useful

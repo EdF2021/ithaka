@@ -93,8 +93,7 @@ def test_viewer_renders_clickable_tree():
     from datetime import datetime
     out = generate_mindmap_viewer("Eigen titel", _VALID_MINDMAP_MD, "NB", datetime(2026, 8, 23))
     assert "SamenWijzer" in out and "Pijnpunten" in out
-    assert "mm-node" in out          # klikbare knoop-knoppen
-    assert "mm-children" in out      # in/uitklapbare subbomen
+    assert "markmap" in out            # markmap SVG element
     assert "Alles uitklappen" in out and "Alles inklappen" in out
 
 
@@ -114,12 +113,26 @@ def test_viewer_degrades_on_malformed_content():
     assert "Eigen titel" in out
 
 
-def test_viewer_no_external_resources():
+def test_viewer_uses_pinned_markmap_bundles():
+    # The report-CSP allows script-src from cdn.jsdelivr.net but keeps
+    # connect-src 'self', so the viewer must load self-contained bundles:
+    # the autoloader fetches its dependencies at runtime and gets blocked.
     from src.notebook_mindmap import generate_mindmap_viewer
     from datetime import datetime
     out = generate_mindmap_viewer(None, _VALID_MINDMAP_MD, "NB", datetime(2026, 8, 23))
-    assert "http://" not in out and "https://" not in out
-    assert "<link" not in out
+    assert "cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" in out
+    assert "cdn.jsdelivr.net/npm/markmap-lib@0.18.12/dist/browser/index.iife.min.js" in out
+    assert "cdn.jsdelivr.net/npm/markmap-view@0.18.12/dist/browser/index.min.js" in out
+    assert "markmap-autoloader" not in out
+
+
+def test_viewer_has_node_click_postmessage():
+    from src.notebook_mindmap import generate_mindmap_viewer
+    from datetime import datetime
+    out = generate_mindmap_viewer(None, _VALID_MINDMAP_MD, "NB", datetime(2026, 8, 23))
+    assert "nbws-mindmap-node-click" in out
+    assert "postMessage" in out
+    assert "Klik op een knoop" in out
 
 
 # ---- route-dispatch -----------------------------------------------------
@@ -182,5 +195,5 @@ def test_route_mindmap_uses_interactive_viewer(monkeypatch, ts):
 
     r = c.get(f"/api/notebooks/{nb_id}/artifacts/{art_id}/report")
     assert r.status_code == 200
-    assert "mm-node" in r.text
+    assert "markmap" in r.text
     assert "Pijnpunten" in r.text

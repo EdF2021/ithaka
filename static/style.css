@@ -41003,6 +41003,42 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Banner — topical icon strip at the top of each notebook card. Uses
+   --banner-tint (set inline per-card from JS) so the icon colour tracks
+   the keyword match. Background is a subtle wash of the same tint. */
+.notebook-card-banner {
+  margin: -10px -12px 8px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  background: color-mix(in srgb, var(--banner-tint, var(--color-muted)) 8%, var(--panel));
+  border-bottom: 1px solid color-mix(in srgb, var(--banner-tint, var(--border)) 20%, var(--border));
+}
+.notebook-card-banner svg {
+  opacity: 0.8;
+}
+/* Photo banner: a full-bleed cover image replaces the SVG icon strip when
+   the notebook has an AI-generated cover. Background-size cover so any
+   aspect ratio fills the banner; a subtle gradient overlay at the bottom
+   keeps the card-to-body transition legible in both themes. */
+.notebook-card-banner-photo {
+  min-height: 120px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-bottom: none;
+  position: relative;
+}
+.notebook-card-banner-photo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 60%, color-mix(in srgb, var(--panel) 40%, transparent));
+  pointer-events: none;
+}
 .notebook-card-desc {
   max-width: 100%;
   margin-bottom: 6px;
@@ -41015,7 +41051,8 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 }
 .notebook-archive-btn,
 .notebook-del-btn,
-.notebook-src-del {
+.notebook-src-del,
+.notebook-cover-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -41031,6 +41068,7 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 }
 .notebook-del-btn:hover,
 .notebook-src-del:hover { color: var(--red); border-color: var(--border); }
+.notebook-cover-btn:hover { color: var(--color-accent); border-color: var(--border); }
 /* Archive/unarchive is non-destructive — hover highlights like a normal
    action button (--fg), not the delete row's --red warning color. */
 .notebook-archive-btn:hover { color: var(--fg); border-color: var(--border); }
@@ -41193,6 +41231,33 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .nbws-tile--data_table { --nbws-tile-accent: var(--color-brand-blue); }
 .nbws-tile--study_guide { --nbws-tile-accent: var(--red); }
 .nbws-tile--faq { --nbws-tile-accent: var(--accent-warm); }
+
+/* Mindmap focus input — shown only for mindmap generation */
+.nbws-mindmap-focus-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+}
+.nbws-mindmap-focus-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+}
+.nbws-mindmap-focus-input:focus {
+  outline: none;
+  border-color: var(--accent-warm);
+}
+.nbws-mindmap-focus-hint {
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
 .notebook-artifact-item {
   display: flex;
   flex-wrap: wrap;
@@ -41238,6 +41303,15 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
    genuinely new to mirror here. */
 :root[data-theme="dageraad"] .notebooks-modal-content { font-size: 13px; }
 :root[data-theme="dageraad"] .notebook-upload-zone { border-radius: 14px; padding: 16px 14px; }
+/* Dageraad cards have 14px 16px padding (vs the default 10px 12px), so the
+   banner's negative margin must match to stay flush with the card edges. */
+:root[data-theme="dageraad"] .notebook-card-banner {
+  margin: -14px -16px 10px;
+  border-radius: 13px 13px 0 0;
+}
+:root[data-theme="dageraad"] .notebook-card-banner-photo {
+  border-radius: 13px 13px 0 0;
+}
 /* ── Notebook citations (Task 8) ───────────────────────────────────────────
    Notebook answers cite their sources inline as [1], [2], … . The markers are
    rendered as anchors to #document-<id> and routed by the chat click-delegate,
@@ -41350,12 +41424,50 @@ body.notebook-workspace-open #nbws-root { display: flex; }
   z-index: 10005;
   pointer-events: none;
   --nbws-topbar-h: 44px;
+  --nbws-hero-h: 0px;
 }
 #nbws-root .nbws-panel { pointer-events: auto; background: var(--panel); border-color: var(--border); }
-#nbws-topbar {
+
+/* Hero banner: full-width AI-generated cover image above the topbar, with
+   the notebook name overlaid in white. Only visible when the notebook has
+   a cover_image (JS sets --nbws-hero-h to the hero height and un-hides
+   #nbws-hero). When hidden (--nbws-hero-h: 0px), the topbar and panels
+   stay at their original positions. */
+.nbws-hero {
   pointer-events: auto;
   position: absolute;
   top: 0; left: 0; right: 0;
+  height: 90px;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  z-index: 2;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+}
+.nbws-hero-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0.15) 50%, transparent 100%);
+  pointer-events: none;
+}
+.nbws-hero-name {
+  position: relative;
+  z-index: 1;
+  padding: 10px 16px;
+  color: #fff;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 22px;
+  font-weight: 700;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.7);
+  line-height: 1.2;
+  letter-spacing: 0.5px;
+}
+#nbws-topbar {
+  pointer-events: auto;
+  position: absolute;
+  top: var(--nbws-hero-h, 0px); left: 0; right: 0;
   height: var(--nbws-topbar-h);
   /* Without an explicit z-index here, #nbws-sources/#nbws-studio (both also
      position:absolute, top:0, z-index:auto) paint OVER the topbar's left/
@@ -41378,7 +41490,7 @@ body.notebook-workspace-open #nbws-root { display: flex; }
   top: 0; left: 0; bottom: 0;
   width: 280px;
   border-right: 1px solid var(--border);
-  padding-top: var(--nbws-topbar-h);
+  padding-top: calc(var(--nbws-hero-h, 0px) + var(--nbws-topbar-h));
   overflow-y: auto;
   transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
 }
@@ -41387,7 +41499,7 @@ body.notebook-workspace-open #nbws-root { display: flex; }
   top: 0; right: 0; bottom: 0;
   width: 320px;
   border-left: 1px solid var(--border);
-  padding-top: var(--nbws-topbar-h);
+  padding-top: calc(var(--nbws-hero-h, 0px) + var(--nbws-topbar-h));
   overflow-y: auto;
   transition: width 0.18s ease, padding 0.18s ease, border-color 0.18s ease;
 }
@@ -41425,6 +41537,15 @@ body.notebook-workspace-open #nbws-root { display: flex; }
 .nbws-panel-title { font-weight: 600; }
 #nbws-sources-body,
 #nbws-studio-body { padding: 12px; }
+/* When the artifact viewer is active, #nbws-studio-body must fill the
+   panel's full height (minus padding-top for hero+topbar) so the
+   .nbws-artifact-viewer's height:100% has something to be 100% of. */
+#nbws-studio.nbws-artifact-viewer-active #nbws-studio-body {
+  height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+}
 .nbws-back-btn,
 .nbws-collapse-btn {
   display: flex;
@@ -41487,7 +41608,7 @@ body.notebook-workspace-open .icon-rail { display: none; }
 body.notebook-workspace-open #chat-container {
   margin-left: 280px;
   margin-right: 320px;
-  padding-top: var(--nbws-topbar-h, 44px);
+  padding-top: calc(var(--nbws-hero-h, 0px) + var(--nbws-topbar-h, 44px));
   transition: margin 0.18s ease;
 }
 /* 32px matches #nbws-sources.nbws-collapsed/#nbws-studio.nbws-collapsed's
@@ -41670,7 +41791,9 @@ body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
     width: 100%;
   }
   .nbws-tab { flex: 1; text-align: center; }
-  body.notebook-workspace-open #chat-container { padding-top: 84px; }
+  body.notebook-workspace-open #chat-container { padding-top: calc(var(--nbws-hero-h, 0px) + 84px); }
+  .nbws-hero { height: 70px; }
+  .nbws-hero-name { font-size: 18px; padding: 8px 12px; }
 
   #nbws-sources,
   #nbws-studio {
@@ -41717,10 +41840,89 @@ body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
   .nbws-session-select { max-width: 84px; }
 }
 
+/* ── In-panel artifact viewer (replaces new-tab _openArtifactReport) ──
+   The studio panel's Generate + Files sections are hidden; an iframe
+   fills the panel body with the visual report. A slim bar at the top
+   holds a back button + kind label. The iframe gets a light background
+   to match the light-themed report templates. */
+.nbws-artifact-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.nbws-artifact-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.nbws-artifact-viewer-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.nbws-artifact-viewer-back:hover { background: var(--border); }
+.nbws-artifact-viewer-kind {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+}
+.nbws-artifact-viewer-frame {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbf9f4;
+  min-height: 0;
+}
+
+/* ── Artifact viewer wide-studio expansion (desktop ≥701px) ──
+   When the in-panel artifact viewer is active (#nbws-studio gets
+   .nbws-artifact-viewer-active from notebookWorkspace.js), the studio panel
+   widens from 320px to 60vw so the iframe report gets usable room, and
+   #chat-container's margin-right grows to match so it isn't overlapped.
+   The studio panel already has transition: width 0.18s ease and #chat-container
+   already has transition: margin 0.18s ease, so the resize animates smoothly.
+
+   Scoped to @media (min-width: 701px) so the mobile tabbar's
+   width:100% !important + display:none/block tab rules (in the <=700px block
+   above) stay authoritative — on mobile a tab-active panel is already
+   full-width and a hidden panel is display:none, so a 60vw override there
+   would be both redundant and fighting the !important. */
+@media (min-width: 701px) {
+  body.notebook-workspace-open #nbws-studio.nbws-artifact-viewer-active {
+    width: 60vw;
+    min-width: 600px;
+  }
+  body.notebook-workspace-open.nbws-artifact-viewer-active #chat-container {
+    margin-right: max(60vw, 600px);
+  }
+  /* When the studio panel is also collapsed, the collapsed rule above
+     (#nbws-studio.nbws-collapsed { width:32px }) and the chat margin rule
+     (body...nbws-studio-collapsed #chat-container { margin-right:32px })
+     have lower specificity than these artifact-viewer rules, but collapsing
+     the studio while the viewer is open is not a supported interaction
+     (notebookWorkspace.js closes the viewer before collapsing), so this
+     ordering is safe. */
+}
+
+/* nbws-end */
+
 /* Later notebooks-workspace CSS belongs ABOVE this line — the marker comment
    right below is the end-of-block anchor the static test scans up to, so
    anything appended after it falls outside that scan. */
-/* nbws-end */
 
 /* ── Voice Mode ── */
 .voice-mode-indicator {

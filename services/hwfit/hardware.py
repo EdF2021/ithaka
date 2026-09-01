@@ -812,96 +812,103 @@ def detect_system(host="", ssh_port="", platform="", fresh=False):
         if (now - ts) < CACHE_TTL:
             return cached
 
-    _remote_host = host or None
-    _remote_port = ssh_port or None
-    _remote_platform = platform or None
+    try:
+        _remote_host = host or None
+        _remote_port = ssh_port or None
+        _remote_platform = platform or None
 
-    # Windows: single PowerShell command for all hardware info
-    if _remote_platform == "windows" and _remote_host:
-        result = _detect_windows()
-        if result:
-            result = _attach_probe_context(result, host=host)
+        # Windows: single PowerShell command for all hardware info
+        if _remote_platform == "windows" and _remote_host:
+            result = _detect_windows()
+            if result:
+                result = _attach_probe_context(result, host=host)
+                _remote_host = None
+                _remote_platform = None
+                _cache_by_host[cache_key] = (now, result)
+                return result
+            # SSH may work while the PowerShell hardware probe still fails.
+            result = {"error": f"Windows hardware probe failed for {host}", "host": host}
             _remote_host = None
             _remote_platform = None
             _cache_by_host[cache_key] = (now, result)
             return result
-        # SSH may work while the PowerShell hardware probe still fails.
-        result = {"error": f"Windows hardware probe failed for {host}", "host": host}
-        _remote_host = None
-        _remote_platform = None
-        _cache_by_host[cache_key] = (now, result)
-        return result
 
-    # Local Windows: the Linux /proc + /sys + os.sysconf path returns 0 GB RAM,
-    # "unknown" CPU and no GPU on Windows (and os.sysconf doesn't even exist),
-    # so detect locally via PowerShell/WMI instead. _detect_windows() runs the
-    # same probe used for remote Windows, but _run() executes it locally.
-    if not _remote_host and os.name == "nt":
-        result = _detect_windows()
-        if result:
-            result = _attach_probe_context(result, host=host)
+        # Local Windows: the Linux /proc + /sys + os.sysconf path returns 0 GB RAM,
+        # "unknown" CPU and no GPU on Windows (and os.sysconf doesn't even exist),
+        # so detect locally via PowerShell/WMI instead. _detect_windows() runs the
+        # same probe used for remote Windows, but _run() executes it locally.
+        if not _remote_host and os.name == "nt":
+            result = _detect_windows()
+            if result:
+                result = _attach_probe_context(result, host=host)
+                _cache_by_host[cache_key] = (now, result)
+                return result
+            # PowerShell probe failed entirely — fall through to the generic path
+            # below so we at least return a well-shaped dict rather than crashing.
+
+        # Linux/Termux: existing multi-command detection
+        total_ram = round(_get_ram_gb(), 1)
+        # If remote host returns 0 RAM, connection likely failed
+        if _remote_host and total_ram <= 0:
+            result = {"error": f"Cannot connect to {host}", "host": host}
             _cache_by_host[cache_key] = (now, result)
+            _remote_host = None
+            _remote_platform = None
             return result
-        # PowerShell probe failed entirely — fall through to the generic path
-        # below so we at least return a well-shaped dict rather than crashing.
+        available_ram = round(_get_available_ram_gb(), 1)
+        cpu_cores = _get_cpu_count()
+        cpu_name = _get_cpu_name()
+        cpu_arch = _get_cpu_arch()
 
-    # Linux/Termux: existing multi-command detection
-    total_ram = round(_get_ram_gb(), 1)
-    # If remote host returns 0 RAM, connection likely failed
-    if _remote_host and total_ram <= 0:
-        result = {"error": f"Cannot connect to {host}", "host": host}
-        _cache_by_host[cache_key] = (now, result)
+        gpu_info = _detect_apple_silicon() or _detect_nvidia() or _detect_amd()
+
+        if gpu_info:
+            result = {
+                "total_ram_gb": total_ram,
+                "available_ram_gb": available_ram,
+                "cpu_cores": cpu_cores,
+                "cpu_name": cpu_name,
+                "cpu_arch": cpu_arch,
+                "has_gpu": True,
+                "gpu_name": gpu_info["gpu_name"],
+                "gpu_vram_gb": gpu_info["gpu_vram_gb"],
+                "gpu_count": gpu_info["gpu_count"],
+                "gpu_cores": gpu_info.get("gpu_cores"),
+                "gpus": gpu_info.get("gpus", []),
+                "gpu_groups": gpu_info.get("gpu_groups", []),
+                "homogeneous": gpu_info.get("homogeneous", True),
+                "backend": gpu_info["backend"],
+                # Apple Silicon / AMD APUs share system RAM with the GPU — carry the
+                # flag through so callers can tell unified from discrete VRAM.
+                "unified_memory": gpu_info.get("unified_memory", False),
+            }
+        else:
+            backend = "cpu_arm" if cpu_arch == "arm64" else "cpu_x86"
+            result = {
+                "total_ram_gb": total_ram,
+                "available_ram_gb": available_ram,
+                "cpu_cores": cpu_cores,
+                "cpu_name": cpu_name,
+                "cpu_arch": cpu_arch,
+                "has_gpu": False,
+                "gpu_name": None,
+                "gpu_vram_gb": None,
+                "gpu_count": 0,
+                "backend": backend,
+                # Set when nvidia-smi exists but failed (e.g. driver/library
+                # version mismatch) — lets the UI say "GPU driver error" instead
+                # of the misleading "No GPU".
+                "gpu_error": _last_gpu_error,
+            }
+
+        result = _attach_probe_context(result, host=host)
         _remote_host = None
         _remote_platform = None
+        _cache_by_host[cache_key] = (now, result)
         return result
-    available_ram = round(_get_available_ram_gb(), 1)
-    cpu_cores = _get_cpu_count()
-    cpu_name = _get_cpu_name()
-    cpu_arch = _get_cpu_arch()
-
-    gpu_info = _detect_apple_silicon() or _detect_nvidia() or _detect_amd()
-
-    if gpu_info:
-        result = {
-            "total_ram_gb": total_ram,
-            "available_ram_gb": available_ram,
-            "cpu_cores": cpu_cores,
-            "cpu_name": cpu_name,
-            "cpu_arch": cpu_arch,
-            "has_gpu": True,
-            "gpu_name": gpu_info["gpu_name"],
-            "gpu_vram_gb": gpu_info["gpu_vram_gb"],
-            "gpu_count": gpu_info["gpu_count"],
-            "gpu_cores": gpu_info.get("gpu_cores"),
-            "gpus": gpu_info.get("gpus", []),
-            "gpu_groups": gpu_info.get("gpu_groups", []),
-            "homogeneous": gpu_info.get("homogeneous", True),
-            "backend": gpu_info["backend"],
-            # Apple Silicon / AMD APUs share system RAM with the GPU — carry the
-            # flag through so callers can tell unified from discrete VRAM.
-            "unified_memory": gpu_info.get("unified_memory", False),
-        }
-    else:
-        backend = "cpu_arm" if cpu_arch == "arm64" else "cpu_x86"
-        result = {
-            "total_ram_gb": total_ram,
-            "available_ram_gb": available_ram,
-            "cpu_cores": cpu_cores,
-            "cpu_name": cpu_name,
-            "cpu_arch": cpu_arch,
-            "has_gpu": False,
-            "gpu_name": None,
-            "gpu_vram_gb": None,
-            "gpu_count": 0,
-            "backend": backend,
-            # Set when nvidia-smi exists but failed (e.g. driver/library
-            # version mismatch) — lets the UI say "GPU driver error" instead
-            # of the misleading "No GPU".
-            "gpu_error": _last_gpu_error,
-        }
-
-    result = _attach_probe_context(result, host=host)
-    _remote_host = None
-    _remote_platform = None
-    _cache_by_host[cache_key] = (now, result)
-    return result
+    finally:
+        # Always clear the remote-probe globals so an exception mid-detect
+        # cannot leave a stale host that reroutes later LOCAL probes over SSH.
+        _remote_host = None
+        _remote_port = None
+        _remote_platform = None
