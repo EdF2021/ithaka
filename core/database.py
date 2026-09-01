@@ -793,6 +793,7 @@ def _migrate_add_notebook_source_url_column():
 def _migrate_add_notebook_cover_image_column():
     _add_column_if_missing('notebooks', 'cover_image', 'VARCHAR')
 
+
 def _migrate_add_notebook_report_layouts_columns():
     _add_column_if_missing('notebooks', 'report_layouts_json', 'TEXT')
     _add_column_if_missing('notebooks', 'report_layouts_fingerprint', 'VARCHAR')
