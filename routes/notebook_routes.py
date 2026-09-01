@@ -38,7 +38,7 @@ from src.notebook_mindmap import generate_mindmap_viewer
 from src.notebook_slides import generate_slide_deck
 from src.notebook_ingest import ingest_notebook_file, ingest_notebook_url
 from src.notebook_report import generate_notebook_artifact_report
-from src.notebook_suggest import suggest_questions
+from src.notebook_suggest import suggest_questions, _SUGGEST_TIMEOUT_S
 from src.settings import load_settings
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES, format_byte_limit
 
@@ -685,6 +685,15 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             db_session.close()
         try:
             questions = await suggest_questions(question, answer, user)
+        except asyncio.TimeoutError:
+            # Best-effort: suggesties zijn nice-to-have, nooit een 5xx
+            # richting de chat-flow — maar een timeout mag niet volledig
+            # stil blijven (issue #56).
+            logger.warning(
+                "suggest_questions timed out after %ss for notebook %s",
+                _SUGGEST_TIMEOUT_S, notebook_id,
+            )
+            questions = []
         except Exception:
             # Best-effort: suggesties zijn nice-to-have, nooit een 5xx
             # richting de chat-flow.
