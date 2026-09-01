@@ -163,3 +163,44 @@ async def test_empty_index_still_goes_straight_to_live_path(tmp_path, monkeypatc
     assert result["fresh"] is True
     assert result["sync"]["source"] == "imap_fallback"
     assert search_calls, "empty index must still fall through to the live IMAP path"
+
+
+@pytest.mark.asyncio
+async def test_unread_state_reads_the_same_account_key_the_mail_ui_writes(tmp_path, monkeypatch):
+    """Account-key mismatch fix.
+
+    The mail-list UI (emailLibrary.js `_loadAccounts`) always auto-selects
+    and sends an explicit `account_id` on `/api/email/list` — even for a
+    single default account, per its own comment ("The 'Default' chip is
+    gone"). So `_email_index_upsert` writes index rows under that concrete
+    account id, never under the literal "default" bucket that
+    `_account_cache_key(None, owner)` used to assume for the no-param
+    dashboard-widget call. Without resolving `account_id=None` to the same
+    concrete default id `_get_email_config` would hand the mail-list flow,
+    `unread-state` would never find those rows (indexed_total always 0) and
+    would silently always take the live IMAP path instead of the cache.
+    """
+    email_routes, db_path, unread_state = _setup(tmp_path, monkeypatch)
+
+    # Simulate what the mail-list UI already wrote after being opened once:
+    # an index row keyed under the concrete default-account id, not "default".
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    _insert_index_row(db_path, owner="alice", uid="301", flags="", updated_at=now_iso, account_key="acct-real-default-id")
+
+    monkeypatch.setattr(
+        email_routes, "_get_email_config",
+        lambda account_id=None, owner="": {"account_id": "acct-real-default-id"},
+    )
+    search_calls = []
+    connect_calls = []
+    monkeypatch.setattr(email_routes, "_imap_uid_search", lambda conn, criteria: search_calls.append(criteria) or ("OK", [b""]))
+    monkeypatch.setattr(email_routes, "_imap_connect", lambda account_id=None, owner="": connect_calls.append(1) or _FakeImapConn())
+
+    # Widget call — no account_id, same as dashboard.js `_renderMail()`.
+    result = await unread_state(folder="INBOX", account_id=None, owner="alice")
+
+    assert result["unread_count"] == 1
+    assert result["fresh"] is True
+    assert result["sync"]["source"] == "index"
+    assert connect_calls == [], "should have found the row under the resolved default-account key, no live IMAP connect needed"
+    assert search_calls == []

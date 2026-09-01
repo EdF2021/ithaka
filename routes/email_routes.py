@@ -2049,9 +2049,26 @@ def setup_email_routes():
                 "fresh": True,
             }
 
+        # Resolve the implicit "no account_id" call to the same concrete
+        # default-account id the mail-list UI uses, so the index rows we
+        # read here land in the same account_key bucket the UI wrote them
+        # under. The mail library (emailLibrary.js `_loadAccounts`) always
+        # auto-selects and sends an explicit account_id — even for a single
+        # default account — so `_email_index_upsert` never writes under the
+        # literal "default" bucket `_account_cache_key(None, owner)` used to
+        # assume. Without this, indexed_total was always 0 for this route
+        # and every poll silently took the live IMAP fallback.
+        resolved_account_id = account_id
+        if not resolved_account_id:
+            try:
+                resolved_account_id = _get_email_config(None, owner=owner).get("account_id") or None
+            except Exception:
+                logger.debug("unread-state default account resolution failed", exc_info=True)
+                resolved_account_id = account_id
+
         cached_state = None
         try:
-            account_key = _account_cache_key(account_id, owner)
+            account_key = _account_cache_key(resolved_account_id, owner)
             conn = _sql3.connect(SCHEDULED_DB)
             try:
                 row = conn.execute(
@@ -2093,7 +2110,7 @@ def setup_email_routes():
 
         try:
             result = await _asyncio.to_thread(
-                _list_emails_sync, folder, 1, 0, "unread", account_id, None, False, owner,
+                _list_emails_sync, folder, 1, 0, "unread", resolved_account_id, None, False, owner,
             )
         except Exception:
             logger.debug("unread-state live IMAP fallback failed", exc_info=True)
