@@ -71,7 +71,13 @@ def test_english_kind_labels_complete():
         "flashcards": "Flashcards",
         "data_table": "Data table",
         "slide_deck": "Slide deck",
+        "report": "Report",
     }
+
+
+def test_english_kind_labels_includes_report():
+    from src.notebook_report import ENGLISH_KIND_LABELS
+    assert ENGLISH_KIND_LABELS["report"] == "Report"
 
 
 # ---- route ----

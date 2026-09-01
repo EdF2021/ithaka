@@ -30,6 +30,7 @@ ENGLISH_KIND_LABELS = {
     "flashcards": "Flashcards",
     "data_table": "Data table",
     "slide_deck": "Slide deck",
+    "report": "Report",
 }
 
 
