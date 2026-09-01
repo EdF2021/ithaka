@@ -86,7 +86,7 @@ Lever exact één codefence met taalaanduiding "json" en daarin één JSON-array
 
 Gebruik geen markdown binnen de JSON-strings; alleen platte tekst."""
 
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
 def _gather_excerpt_text(notebook, db_session, max_chars_per_source: int = 2000) -> str:

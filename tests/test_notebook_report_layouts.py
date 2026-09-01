@@ -94,6 +94,15 @@ def test_parse_layout_suggestions_caps_at_four():
     assert len(result) == 4
 
 
+def test_parse_layout_suggestions_single_line_fence_without_newline():
+    """_JSON_FENCE_RE previously required a newline right after the opening
+    ```json marker (\\s*\\n), so a fence the model puts entirely on one line
+    — no newline between ```json and the array — didn't match at all."""
+    content = '```json [{"title": "T1", "description": "D1", "instruction": "I1"}]```'
+    result = report_layouts._parse_layout_suggestions(content)
+    assert result == [{"title": "T1", "description": "D1", "instruction": "I1"}]
+
+
 async def test_get_recommended_layouts_no_sources_returns_empty_no_llm_call(monkeypatch):
     calls = []
 
