@@ -248,6 +248,11 @@ Structuur:
 - Volg de indeling-instructie die in het bericht hierna is meegegeven voor structuur, secties, stijl en toon. Geeft die geen duidelijke sectie-indeling, kies dan zelf een heldere indeling met "## "-koppen die recht doet aan de bronnen.
 - Gebruik doorlopende alinea's; gebruik bullets of een tabel alleen waar dat de leesbaarheid echt dient.
 
+Bronverwijzingen:
+- Voor dit rapport zijn de bronnen genummerd met koppen van de vorm "=== BRON [n]: bestandsnaam ===" (in plaats van de ongenummerde koppen hierboven).
+- Citeer elke bewering die op een bron steunt met "[n]", waarbij n het bronnummer uit die kop is - direct achter de zin of het zinsdeel dat de bewering bevat.
+- Sluit het rapport af met een kop "## Bronnen" met daaronder één regel per gebruikte bron, in de vorm "[n] bestandsnaam".
+
 Regels:
 - Is er geen indeling-instructie meegegeven, schrijf dan een overzichtelijk, zakelijk rapport van 500 tot 900 woorden.""",
 }
@@ -415,6 +420,133 @@ def gather_source_text(notebook: Notebook, db_session) -> str:
 
 
 # --------------------------------------------------------------------------
+# Report-kind source collection (numbered headers for citations)
+#
+# Only kind="report" uses this. Every other kind keeps calling
+# gather_source_text/_SOURCE_HEADER above, byte-for-byte unchanged - this is
+# a parallel build, not a refactor of it, so the shared function's behavior
+# and tests stay untouched.
+# --------------------------------------------------------------------------
+
+_SOURCE_HEADER_NUMBERED = "=== BRON [{n}]: {filename} ==="
+
+
+def gather_source_text_numbered(notebook: Notebook, db_session) -> tuple[str, int]:
+    """Report-kind variant of gather_source_text: numbered source headers.
+
+    Same water-filling truncation, cap (MAX_CONTEXT_CHARS) and skip rules as
+    gather_source_text (see its docstring), but headers are
+    "=== BRON [n]: filename ===" (n = 1-based position in source order,
+    matching _source_entries' ordering) instead of the shared
+    "=== BRON: filename ===", so the report kind's citation instruction
+    (_KIND_INSTRUCTIONS["report"]) can point "[n]" back at a specific
+    numbered source.
+
+    Returns (payload, source_count): source_count is the number of sources
+    included (0 when the notebook has no usable sources, mirroring
+    gather_source_text's "" return). validate_report_markdown uses it to
+    bound citation numbers.
+    """
+    entries = _source_entries(notebook, db_session)
+    if not entries:
+        return "", 0
+
+    headers = [
+        _SOURCE_HEADER_NUMBERED.format(n=i, filename=name) + "\n"
+        for i, (name, _) in enumerate(entries, start=1)
+    ]
+    overhead = sum(len(h) for h in headers) + len(_BLOCK_SEPARATOR) * (len(entries) - 1)
+    total_text = sum(len(text) for _, text in entries)
+
+    if overhead + total_text <= MAX_CONTEXT_CHARS:
+        return (
+            _BLOCK_SEPARATOR.join(
+                header + text for header, (_, text) in zip(headers, entries)
+            ),
+            len(entries),
+        )
+
+    text_budget = max(MAX_CONTEXT_CHARS - overhead, 0)
+    marker_cost = len(_TRUNCATION_MARKER)
+
+    limits = [None] * len(entries)
+    marked = [False] * len(entries)
+    order = sorted(range(len(entries)), key=lambda i: len(entries[i][1]))
+    remaining_budget = text_budget
+    remaining_count = len(entries)
+    for idx in order:
+        text_len = len(entries[idx][1])
+        fair_share = remaining_budget // remaining_count if remaining_count else 0
+        if text_len <= fair_share:
+            remaining_budget -= text_len
+        else:
+            marked[idx] = True
+            limits[idx] = max(fair_share - marker_cost, 0)
+            remaining_budget -= fair_share
+        remaining_count -= 1
+
+    blocks = []
+    for header, (idx, (_, text)) in zip(headers, enumerate(entries)):
+        if marked[idx]:
+            blocks.append(header + text[: limits[idx]] + _TRUNCATION_MARKER)
+        else:
+            blocks.append(header + text)
+    result = _BLOCK_SEPARATOR.join(blocks)
+
+    if len(result) > MAX_CONTEXT_CHARS:
+        result = result[:MAX_CONTEXT_CHARS]
+    return result, len(entries)
+
+
+# --------------------------------------------------------------------------
+# Report-kind citation validator
+# --------------------------------------------------------------------------
+
+# A bare "[n]" (digits only) not immediately followed by "(" - excludes
+# markdown links "[tekst](url)" and numeric-text links "[1](url)". Footnote
+# syntax "[^1]" is excluded too, since "^" isn't a digit so \d+ never matches
+# there.
+_CITATION_RE = re.compile(r"\[(\d+)\](?!\()")
+
+
+def validate_report_markdown(text: str, source_count: int) -> str | None:
+    """Check that every "[n]" citation in a report artifact points at an
+    existing numbered source.
+
+    Report kind only. gather_source_text_numbered numbers sources 1..N in
+    generation order; the report instruction (_KIND_INSTRUCTIONS["report"])
+    asks the model to cite claims as "[n]" against that numbering. This only
+    bounds those citation numbers - it does NOT require any citations and
+    does NOT require a "## Bronnen" section, because a layout_instruction
+    may legitimately steer the report away from either, and the retry loop
+    (_VALIDATION_ATTEMPTS, see generate_artifact) must not get stuck
+    demanding something the instruction told the model to skip.
+
+    Unlike the other validate_*_markdown functions (which raise ValueError
+    and are registered directly in _KIND_VALIDATORS), this one returns
+    instead of raising: source_count is per-call (the notebook's actual
+    source count), not known at module-import time, so generate_artifact
+    wraps this in a small closure for the retry loop rather than registering
+    it in _KIND_VALIDATORS.
+
+    Returns None when every citation number is within 1..source_count (or
+    there are none at all), otherwise a Dutch error string naming the
+    out-of-range number(s) - fed back to the model on retry, same shape as
+    the other validators' ValueError messages.
+    """
+    numbers = {int(m.group(1)) for m in _CITATION_RE.finditer(text or "")}
+    bad = sorted(n for n in numbers if not (1 <= n <= source_count))
+    if not bad:
+        return None
+    bad_list = ", ".join(f"[{n}]" for n in bad)
+    return (
+        f"citatie(s) {bad_list} verwijzen naar een bron die niet bestaat "
+        f"(er zijn {source_count} genummerde bronnen; gebruik alleen "
+        f"[1] t/m [{source_count}])"
+    )
+
+
+# --------------------------------------------------------------------------
 # Generation
 # --------------------------------------------------------------------------
 
@@ -458,7 +590,15 @@ async def generate_artifact(
     if notebook is None:
         raise ValueError("Notebook niet gevonden")
 
-    source_text = gather_source_text(notebook, db_session)
+    if kind == "report":
+        # Numbered "=== BRON [n]: ... ===" headers so the report's citation
+        # instruction can point "[n]" at a specific source; source_count
+        # bounds validate_report_markdown's accepted citation range below.
+        # Every other kind keeps gather_source_text/_SOURCE_HEADER unchanged.
+        source_text, source_count = gather_source_text_numbered(notebook, db_session)
+    else:
+        source_text = gather_source_text(notebook, db_session)
+        source_count = None
     if not source_text:
         raise ValueError("Geen geïndexeerde bronnen")
 
@@ -508,7 +648,18 @@ async def generate_artifact(
     # workload="foreground" tells the local-model slot this is a synchronous
     # user-facing call, not a genuine background job, so it does not wait on
     # its own request's activity flag.
-    validator = _KIND_VALIDATORS.get(kind)
+    if kind == "report":
+        # validate_report_markdown returns str|None (not raise) and needs
+        # source_count, which isn't known until generation time - so it
+        # can't sit in the static _KIND_VALIDATORS dict like the others.
+        # This closure adapts it to the raise-based contract the retry loop
+        # below expects, keeping that loop uniform across every kind.
+        def validator(text: str) -> None:
+            error = validate_report_markdown(text, source_count)
+            if error:
+                raise ValueError(error)
+    else:
+        validator = _KIND_VALIDATORS.get(kind)
     content = ""
     last_error = ""
     for attempt in range(_VALIDATION_ATTEMPTS):
