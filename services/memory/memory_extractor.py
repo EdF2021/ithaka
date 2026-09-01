@@ -220,6 +220,41 @@ def _fallback_memory_candidates(messages) -> list[dict]:
     return candidates[:2]
 
 
+_NAME_PATTERNS = [
+    re.compile(r"\bname is\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
+    re.compile(r"\bcalled\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
+    re.compile(r"\bnaam is\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
+]
+
+
+def _extract_name_value(text: str) -> Optional[str]:
+    for pattern in _NAME_PATTERNS:
+        m = pattern.search(text or "")
+        if m:
+            name = _clean_memory_value(m.group(1), 50)
+            if name:
+                return name.lower()
+    return None
+
+
+def _identity_conflicts(new_text: str, existing: list) -> bool:
+    """True when new_text names someone that contradicts an already-pinned
+    identity fact naming someone else (see #101: a single low-signal message
+    — a test greeting — got auto-pinned as a permanent core fact alongside an
+    existing, conflicting name). Narrow, name-only check; other identity
+    facts (job, city, ...) are not mutually exclusive so are left alone."""
+    new_name = _extract_name_value(new_text)
+    if not new_name:
+        return False
+    for entry in _memory_dicts(existing):
+        if not entry.get("pinned") or entry.get("category") != "identity":
+            continue
+        existing_name = _extract_name_value(entry.get("text", ""))
+        if existing_name and existing_name != new_name:
+            return True
+    return False
+
+
 def _is_text_duplicate(new_text: str, existing: list, threshold: float = 0.6) -> bool:
     """Check if new_text is too similar to any existing memory (Jaccard similarity)."""
     new_tokens = set(new_text.lower().split())
@@ -438,9 +473,18 @@ async def extract_and_store(
                 continue
 
             entry = memory_manager.add_entry(fact_text, source="auto", category=category, owner=_owner)
-            # Auto-pin identity facts (name, job, location) — core context
+            # Auto-pin identity facts (name, job, location) — core context —
+            # unless it names someone that conflicts with an already-pinned
+            # identity fact (see #101); such facts are still stored, just not
+            # auto-injected every turn, until a human resolves the conflict.
             if category == "identity":
-                entry["pinned"] = True
+                if _identity_conflicts(fact_text, user_existing):
+                    logger.warning(
+                        f"Identity conflict: not auto-pinning '{fact_text[:60]}' "
+                        "— conflicts with an existing pinned identity fact"
+                    )
+                else:
+                    entry["pinned"] = True
             if hasattr(session, "session_id"):
                 entry["session_id"] = session.session_id
             elif hasattr(session, "name"):
