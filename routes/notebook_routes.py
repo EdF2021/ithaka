@@ -18,7 +18,11 @@ from core.database import Document, SessionLocal, Notebook, NotebookArtifact, No
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
 from src.notebook_artifacts import ARTIFACT_KINDS, generate_artifact
-from src.notebook_report_layouts import FIXED_TEMPLATES, get_recommended_layouts
+from src.notebook_report_layouts import (
+    FIXED_TEMPLATES,
+    get_recommended_layouts,
+    notebook_has_sources,
+)
 from src.notebook_audio import (
     NOTEBOOK_AUDIO_HEADERS,
     NOTEBOOK_AUDIO_RE,
@@ -501,9 +505,16 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         try:
             nb = _get_owned_notebook(db_session, notebook_id, user)
             recommended = await get_recommended_layouts(nb, db_session, user)
+            if recommended:
+                recommended_status = "ok"
+            elif notebook_has_sources(nb, db_session):
+                recommended_status = "unavailable"
+            else:
+                recommended_status = "no_sources"
             return {
                 "templates": FIXED_TEMPLATES,
                 "recommended": recommended,
+                "recommended_status": recommended_status,
             }
         finally:
             db_session.close()

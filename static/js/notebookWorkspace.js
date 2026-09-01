@@ -1889,9 +1889,17 @@ function _reportGridsSkeletonHtml() {
     </div>
     <div class="nbrp-section-head nbrp-recommended-head">${_MAGIC_ICON}Aanbevolen indeling</div>
     <div class="nbrp-grid" id="nbrp-recommended-grid">
-      <div class="dashboard-empty">Loading&hellip;</div>
+      <div class="dashboard-empty">Laden&hellip;</div>
     </div>`;
 }
+
+// Dutch message per GET /report-layouts recommended_status — distinguishes
+// "no sources yet" from "suggestions unavailable" (LLM error/timeout) so the
+// modal doesn't blame missing sources for what's actually an LLM failure.
+const _REPORT_STATUS_MESSAGES = {
+  no_sources: 'Voeg bronnen toe om aanbevelingen te krijgen.',
+  unavailable: 'Aanbevelingen zijn nu niet beschikbaar.',
+};
 
 async function _loadReportLayouts(epoch) {
   if (!_state.notebook) return;
@@ -1902,7 +1910,7 @@ async function _loadReportLayouts(epoch) {
   } catch (e) {
     if (epoch !== _reportModalEpoch) return;
     const recGrid = document.getElementById('nbrp-recommended-grid');
-    if (recGrid) recGrid.innerHTML = `<div class="dashboard-empty">Could not load suggestions (${_esc(e.message)})</div>`;
+    if (recGrid) recGrid.innerHTML = `<div class="dashboard-empty">Suggesties konden niet geladen worden (${_esc(e.message)})</div>`;
     return;
   }
   if (epoch !== _reportModalEpoch) return;
@@ -1918,7 +1926,8 @@ async function _loadReportLayouts(epoch) {
   const recGrid = document.getElementById('nbrp-recommended-grid');
   if (recGrid) {
     if (!recommended.length) {
-      recGrid.innerHTML = '<div class="dashboard-empty">No suggestions yet — add sources to this notebook first.</div>';
+      const msg = _REPORT_STATUS_MESSAGES[data.recommended_status] || _REPORT_STATUS_MESSAGES.unavailable;
+      recGrid.innerHTML = `<div class="dashboard-empty">${_esc(msg)}</div>`;
     } else {
       recGrid.innerHTML = recommended.map((item, idx) => _reportCardHtml(item, idx)).join('');
       recommended.forEach((item, idx) => _wireReportTemplateCard(item, 'recommended', idx));
@@ -1952,7 +1961,7 @@ async function _generateReport() {
   const textarea = document.getElementById('nbrp-editor-instruction');
   const instruction = textarea ? textarea.value.trim() : '';
   if (errEl) errEl.textContent = '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Bezig met genereren…'; }
   const epoch = _openEpoch;
   const payload = { kind: 'report' };
   if (instruction) payload.layout_instruction = instruction;
@@ -1965,7 +1974,7 @@ async function _generateReport() {
     _closeReportModal();
     if (epoch === _openEpoch) await _loadArtifacts();
   } catch (e) {
-    if (errEl) errEl.textContent = `Could not generate (${e.message})`;
+    if (errEl) errEl.textContent = `Genereren mislukt (${e.message})`;
     if (btn) { btn.disabled = false; btn.textContent = 'Genereer'; }
   }
 }

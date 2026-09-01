@@ -158,6 +158,17 @@ def _parse_layout_suggestions(content: str) -> list[dict]:
     return cleaned
 
 
+def notebook_has_sources(notebook, db_session) -> bool:
+    """Whether `notebook` has any indexed, LLM-usable sources.
+
+    Used by the route to tell "no sources yet" apart from "suggestions
+    unavailable" (LLM failure/timeout) when get_recommended_layouts returns
+    an empty list — that function's own [] return doesn't distinguish the
+    two, so the caller re-checks source presence separately.
+    """
+    return bool(_source_entries(notebook, db_session))
+
+
 async def get_recommended_layouts(notebook, db_session, owner: str) -> list[dict]:
     """Return up to 4 AI-recommended report layouts for `notebook`, cached on
     the Notebook row keyed by a fingerprint of its indexed sources.
