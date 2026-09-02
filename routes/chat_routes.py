@@ -226,6 +226,12 @@ def _apply_notebook_tool_lockdown(sess, policy):
         hidden_tools=policy.hidden_tools | names,
         reasons=MappingProxyType(reasons),
         block_all_tool_calls=True,
+        # A blocked fenced/native tool call the model emits this turn must be
+        # discarded outright, not executed-as-blocked and looped back for a
+        # round 2 -- the model never regains a tool later this turn, so a
+        # round 2 only produces a confusing, contentless reply on top of an
+        # already-complete round-1 answer (#141).
+        discard_blocked_tool_calls=True,
         disable_mcp=True,
     )
 

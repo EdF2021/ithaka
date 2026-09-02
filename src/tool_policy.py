@@ -113,6 +113,18 @@ class ToolPolicy:
     mode: str = "normal"
     block_all_tool_calls: bool = False
     disable_mcp: bool = False
+    # When True, a fenced/native tool call the agent loop detects but can't
+    # run (blocked by block_all_tool_calls) is discarded outright instead of
+    # being executed-as-blocked and looped back to the model for another
+    # round. Set only by notebook tool lockdown (routes.chat_routes
+    # _apply_notebook_tool_lockdown): there the model never regains a tool
+    # later in the turn, so looping the "blocked by policy" result back
+    # serves no purpose -- it just produces a confusing, contentless
+    # round-2 reply on top of an already-complete round-1 answer (#141).
+    # Deliberately NOT tied to block_all_tool_calls / mode=="guide_only" in
+    # general: a user-requested "don't use tools" turn keeps its existing,
+    # separately-tested round-2 behavior.
+    discard_blocked_tool_calls: bool = False
     # Empty (default) = no allowlist restriction, i.e. today's denylist-only
     # behavior is unchanged. When non-empty, `blocks()` flips to allowlist
     # enforcement: any name not in this set is blocked, regardless of
