@@ -11,7 +11,13 @@
 # for setup details.
 services:
   ithaka:
-    build: .
+    build:
+      context: .
+      args:
+        # Rebuilds with the CUDA 13 / cuDNN 9 userspace the fastembed/
+        # onnxruntime embedding lane needs to use the GPU. See
+        # requirements-gpu-nvidia.txt and the Dockerfile's GPU_EXTRAS arg.
+        GPU_EXTRAS: "1"
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-7000}:7000"
     volumes:
