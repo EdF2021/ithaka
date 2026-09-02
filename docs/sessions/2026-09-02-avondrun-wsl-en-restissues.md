@@ -72,6 +72,36 @@ Cookbook-afhankelijkheden en blijven). Startlog: `fastembed onnxruntime provider
 CPU). Image 1.68 → 4.04 GB. `/login` 200 desktop + mobiel; STT-provider bevestigd
 `endpoint:471e5364`.
 
+## Feature: auto-routing beeld (gpt-image-1.5) en video (Veo 3.1) — #152 (22:16–00:35)
+
+Op verzoek van Ed: "als er om een afbeelding gevraagd wordt automatisch gpt-image-1.5, om video
+automatisch Veo 3.1". Brainstorm → spec (`docs/superpowers/specs/2026-09-02-image-video-autoroute-
+design.md`, Veo-REST geverifieerd tegen de Google-docs, prijzen 0.40/0.10/0.05 $/s) → plan
+(`docs/superpowers/plans/2026-09-02-image-video-autoroute.md`, interface-contracten zodat vijf
+sonnet-agents parallel konden bouwen) → PR's #150 (Veo-client + async jobs + routes + janitor),
+#151 (tool `generate_video`, privilege `can_generate_videos`, SSE-doorgifte, `TOOL_TAGS`), #149
+(intent-categorieën `image`/`video`, tool-force, schema, agent_loop-domein `media`), #147
+(settings-kaart), #148 (chat-videobubble + poll). Integratiebranch gesmoked, dan in volgorde
+B→C→A→D→E gemerged; prod herbouwd; `image_model=gpt-image-1.5`, `video_gen_enabled=True`.
+
+Live gevonden en gefixt tijdens de smoke (fixtures waren groen, echte data niet):
+- agent_loop's eigen classifier kende geen media-domein → `low_signal=True` → directe no-tools-route,
+  ook in Agent-modus; gpt-oss antwoordde "Hey.". Fix: `media_intent()` als gedeelde bron +
+  `_DOMAIN_TOOL_MAP["media"]`.
+- Veo 3.1 weigert `numberOfVideos` (400) en eist `durationSeconds` als **getal** (de docs-
+  samenvatting zei string). Twee fix-commits op #150.
+- GPU-contentie: prod's skills-audit laadde devstral/Qwen-27B in Ollama, waardoor gpt-oss op de
+  smoke-instance verhongerde (0.8 tok/s, time-out). Video-smoke daarom met gpt-4.1-mini gedaan.
+
+Eindresultaat op :7001: beeld 1024x1024 via gpt-image-1.5 ($0.034) inline; video 4 s 1280x720
+h264+aac via veo-3.1-generate-preview in 42 s ($1.60) inline, desktop + 360px, reload en verse
+browsercontext OK, auth op het mp4-pad (401 zonder cookie). Follow-up: #153 (Image-kaart toont
+gpt-image-1.5 niet in de dropdown). Kosten van deze sessie: 3 Veo-calls, waarvan 1 geslaagd
+(mislukte niet gefactureerd).
+
+Les: bij settings-kaarten opent een synthetische `.click()` op de sidebar-knop niet de
+`open()`→`initAll()`-route; gebruik de echte uid-klik, anders lijkt de kaart "kapot".
+
 ## Lessen
 
 - **Echte data vóór merge**: de eerste #142-versie was groen op fixtures en faalde live omdat het
