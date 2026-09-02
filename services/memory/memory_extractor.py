@@ -224,7 +224,22 @@ _NAME_PATTERNS = [
     re.compile(r"\bname is\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
     re.compile(r"\bcalled\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
     re.compile(r"\bnaam is\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
+    # Reversed/possessive phrasing the extraction LLM also produces, e.g.
+    # "Thiermen Naaij is the user's full name" — this is the EXACT wording
+    # from issue #101's repro. Without this pattern _extract_name_value
+    # returned None for it, so _identity_conflicts never fired even with a
+    # conflicting name already pinned.
+    re.compile(r"\b([A-Za-z][A-Za-z .'\-]{1,50}?)\s+is the user['’]?s (?:full )?name\b", re.I),
+    re.compile(r"\buser is called\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
 ]
+
+# Self-statement phrases (Dutch + English) that indicate the USER is
+# introducing themselves, as opposed to merely naming someone else (e.g. a
+# greeting addressed to a name, "Goedemiddag Thiermen Naaij."). See #101.
+_SELF_STATEMENT_PATTERN = re.compile(
+    r"\b(my name is|i am|i'm|call me|mijn naam is|ik ben|ik heet|noem me)\b",
+    re.I,
+)
 
 
 def _extract_name_value(text: str) -> Optional[str]:
@@ -251,6 +266,22 @@ def _identity_conflicts(new_text: str, existing: list) -> bool:
             continue
         existing_name = _extract_name_value(entry.get("text", ""))
         if existing_name and existing_name != new_name:
+            return True
+    return False
+
+
+def _has_self_stated_identity(messages) -> bool:
+    """True when at least one USER message in the extraction window is a
+    first-person self-statement ("my name is", "ik ben", "call me", ...)
+    rather than e.g. a greeting naming someone else in vocative position
+    ("Goedemiddag Thiermen Naaij.") — see #101. A false positive here (e.g.
+    "ik ben moe" / "I am tired") only *permits* auto-pinning a name claim,
+    matching prior behavior — it never makes things worse, so the pattern is
+    kept deliberately simple rather than trying to parse grammar."""
+    for msg in messages or []:
+        if _message_role(msg) != "user":
+            continue
+        if _SELF_STATEMENT_PATTERN.search(_message_text(msg)):
             return True
     return False
 
@@ -474,14 +505,26 @@ async def extract_and_store(
 
             entry = memory_manager.add_entry(fact_text, source="auto", category=category, owner=_owner)
             # Auto-pin identity facts (name, job, location) — core context —
-            # unless it names someone that conflicts with an already-pinned
-            # identity fact (see #101); such facts are still stored, just not
-            # auto-injected every turn, until a human resolves the conflict.
+            # unless (see #101): (a) it names someone that conflicts with an
+            # already-pinned identity fact, or (b) it's a name claim with no
+            # first-person self-statement backing it in the source message(s)
+            # — e.g. a greeting addressed to a name ("Goedemiddag Thiermen
+            # Naaij.") rather than a self-introduction ("Ik ben ..."/"My name
+            # is ..."). Such facts are still stored, just not auto-injected
+            # every turn, until a human confirms/resolves them. The
+            # self-statement gate is scoped to name claims only (via
+            # _extract_name_value) — other identity facts (job, city, ...)
+            # keep pinning as before.
             if category == "identity":
                 if _identity_conflicts(fact_text, user_existing):
                     logger.warning(
                         f"Identity conflict: not auto-pinning '{fact_text[:60]}' "
                         "— conflicts with an existing pinned identity fact"
+                    )
+                elif _extract_name_value(fact_text) and not _has_self_stated_identity(stripped_recent):
+                    logger.warning(
+                        f"Identity low-signal: not auto-pinning '{fact_text[:60]}' "
+                        "— name claim with no self-statement in the source message(s)"
                     )
                 else:
                     entry["pinned"] = True
