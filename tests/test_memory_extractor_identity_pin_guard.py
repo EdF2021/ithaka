@@ -61,7 +61,7 @@ def test_greeting_with_a_name_is_stored_but_not_pinned(monkeypatch, caplog):
 
     with tempfile.TemporaryDirectory() as data_dir:
         mgr = MemoryManager(data_dir)
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("INFO"):
             _run(extract_and_store(session, mgr, None, endpoint_url="http://x", model="m"))
 
         stored = mgr.load(owner="alice")
@@ -69,6 +69,9 @@ def test_greeting_with_a_name_is_stored_but_not_pinned(monkeypatch, caplog):
         assert len(matches) == 1, f"expected the fact to be stored, got {stored}"
         assert not matches[0].get("pinned"), (
             "a greeting with a name in vocative position must not be auto-pinned"
+        )
+        assert any("identity low-signal" in rec.message.lower() for rec in caplog.records), (
+            "expected an 'Identity low-signal' log line"
         )
 
 
@@ -116,7 +119,7 @@ def test_dutch_self_statement_with_no_conflict_is_pinned(monkeypatch):
 def test_conflicting_self_stated_name_is_stored_unpinned_with_warning(monkeypatch, caplog):
     """A second, different self-stated name conflicts with an existing
     pinned identity memory ('User's name is Ed') -> stored, not pinned, and
-    a conflict warning is logged (option (c) from the issue)."""
+    a conflict message is logged (option (c) from the issue)."""
     facts_json = '[{"text": "Thiermen Naaij is the user\'s full name", "category": "identity"}]'
     _patch_llm(monkeypatch, facts_json)
 
@@ -133,7 +136,7 @@ def test_conflicting_self_stated_name_is_stored_unpinned_with_warning(monkeypatc
         existing["pinned"] = True
         mgr.save([existing])
 
-        with caplog.at_level("WARNING"):
+        with caplog.at_level("INFO"):
             _run(extract_and_store(session, mgr, None, endpoint_url="http://x", model="m"))
 
         stored = mgr.load(owner="alice")
@@ -143,8 +146,81 @@ def test_conflicting_self_stated_name_is_stored_unpinned_with_warning(monkeypatc
             "a name that conflicts with an existing pinned identity fact must not be auto-pinned"
         )
         assert any("conflict" in rec.message.lower() for rec in caplog.records), (
-            "expected a conflict warning to be logged"
+            "expected a conflict message to be logged"
         )
         # The pre-existing pinned name must survive unchanged.
         ed_entry = next(e for e in stored if e["id"] == existing["id"])
         assert ed_entry.get("pinned") is True
+
+
+# --- coordinator finding 0: a real deployed model (gpt-oss, verified live on
+# :7001) emits fact text as "Name: Thiermen Naaij" / "Works at CEDA", which
+# the old NAME_PATTERNS did not recognize at all. The pin/no-pin decision
+# must not depend on being able to parse a name out of fact_text -- it must
+# gate on the SOURCE message window regardless of fact_text shape. ---
+
+
+def test_greeting_only_window_with_name_colon_fact_is_not_pinned(monkeypatch, caplog):
+    """Exact shape observed live: fact_text == "Name: Thiermen Naaij",
+    source window is just the greeting -> stored unpinned, low-signal logged."""
+    facts_json = '[{"text": "Name: Thiermen Naaij", "category": "identity"}]'
+    _patch_llm(monkeypatch, facts_json)
+
+    session = _FakeSession([
+        {"role": "user", "content": "Goedemiddag Thiermen Naaij."},
+        {"role": "assistant", "content": "Goedemiddag!"},
+    ])
+
+    with tempfile.TemporaryDirectory() as data_dir:
+        mgr = MemoryManager(data_dir)
+        with caplog.at_level("INFO"):
+            _run(extract_and_store(session, mgr, None, endpoint_url="http://x", model="m"))
+
+        stored = mgr.load(owner="alice")
+        matches = [e for e in stored if e["text"] == "Name: Thiermen Naaij"]
+        assert len(matches) == 1, f"expected the fact to be stored, got {stored}"
+        assert not matches[0].get("pinned")
+        assert any("identity low-signal" in rec.message.lower() for rec in caplog.records)
+
+
+def test_short_greeting_with_name_colon_ed_is_not_pinned(monkeypatch):
+    """"Goedemiddag Ed." only, fact "Name: Ed" -> unpinned. No name parsing
+    of fact_text is involved in this decision at all."""
+    facts_json = '[{"text": "Name: Ed", "category": "identity"}]'
+    _patch_llm(monkeypatch, facts_json)
+
+    session = _FakeSession([
+        {"role": "user", "content": "Goedemiddag Ed."},
+        {"role": "assistant", "content": "Goedemiddag!"},
+    ])
+
+    with tempfile.TemporaryDirectory() as data_dir:
+        mgr = MemoryManager(data_dir)
+        _run(extract_and_store(session, mgr, None, endpoint_url="http://x", model="m"))
+
+        stored = mgr.load(owner="alice")
+        matches = [e for e in stored if e["text"] == "Name: Ed"]
+        assert len(matches) == 1
+        assert not matches[0].get("pinned")
+
+
+def test_self_stated_non_name_identity_fact_is_pinned(monkeypatch):
+    """"Ik werk bij CEDA." with fact "Works at CEDA" (category identity,
+    no parseable name at all) must still auto-pin -- the self-statement gate
+    applies to the whole category, not just name claims."""
+    facts_json = '[{"text": "Works at CEDA", "category": "identity"}]'
+    _patch_llm(monkeypatch, facts_json)
+
+    session = _FakeSession([
+        {"role": "user", "content": "Ik werk bij CEDA."},
+        {"role": "assistant", "content": "Leuk!"},
+    ])
+
+    with tempfile.TemporaryDirectory() as data_dir:
+        mgr = MemoryManager(data_dir)
+        _run(extract_and_store(session, mgr, None, endpoint_url="http://x", model="m"))
+
+        stored = mgr.load(owner="alice")
+        matches = [e for e in stored if e["text"] == "Works at CEDA"]
+        assert len(matches) == 1
+        assert matches[0].get("pinned") is True

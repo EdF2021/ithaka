@@ -92,3 +92,25 @@ def pytest_collection_modifyitems(config, items):
         path = getattr(item, "path", None) or item.fspath
         for marker_name in markers_for_path(path):
             item.add_marker(getattr(pytest.mark, marker_name))
+
+
+import pytest  # noqa: E402  (module-scope, for the autouse fixture decorator below)
+
+
+@pytest.fixture(autouse=True)
+def _reset_memory_extractor_audit_counter():
+    """services/memory/memory_extractor.py keeps a process-global counter
+    (`_extractions_since_audit`) that trips a background LLM audit once
+    AUDIT_INTERVAL extractions have accumulated -- across ALL tests in the
+    process, not per-test. Left unreset, an earlier test's extractions could
+    push a later, unrelated test over the threshold and trigger
+    audit_memories() using THAT test's mocked LLM stub, silently overwriting
+    its store. Reset before and after every test so behavior never depends on
+    collection/run order. The module only imports stdlib at top level, so
+    importing it here for every test is cheap and side-effect-free.
+    """
+    import services.memory.memory_extractor as _me
+
+    _me._extractions_since_audit = 0
+    yield
+    _me._extractions_since_audit = 0
