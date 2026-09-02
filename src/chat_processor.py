@@ -115,6 +115,18 @@ class ChatProcessor:
     # Minimum similarity score for RAG results to be injected
     RAG_SIMILARITY_THRESHOLD = 0.35
 
+    # Notebook-scoped retrieval already has a hard owner+notebook_id filter
+    # (the Chroma `where` clause in VectorRAG.search), so a lower floor here
+    # is safe — unlike the open personal-docs path, a false positive can only
+    # be a chunk from a source the user explicitly added to THIS notebook.
+    # Measured on production 2026-09-02 (issue #112): on the FastEmbed
+    # fallback lane (paraphrase-multilingual-MiniLM), correct top-hit chunks
+    # for a Dutch notebook query scored hybrid similarities of 0.219-0.268 —
+    # all below the general 0.35 threshold, so notebook chat surfaced 0
+    # relevant chunks even though retrieval itself worked. 0.15 keeps out
+    # near-zero noise while letting those real matches through.
+    NOTEBOOK_RAG_SIMILARITY_THRESHOLD = 0.15
+
     def _hybrid_retrieve(self, message: str, mem_entries: list, k: int = 5) -> list:
         """Retrieve memories relevant to the message.
 
@@ -400,12 +412,17 @@ class ChatProcessor:
                 results = rag_manager.search(
                     search_query, k=k, owner=owner, notebook_id=notebook_id, source_ids=source_ids,
                 )
-                # Filter by similarity threshold
-                relevant = [r for r in results if r.get("similarity", 0) >= self.RAG_SIMILARITY_THRESHOLD]
+                # Filter by similarity threshold. Notebook mode uses a lower
+                # floor: see NOTEBOOK_RAG_SIMILARITY_THRESHOLD's docstring.
+                threshold = (
+                    self.NOTEBOOK_RAG_SIMILARITY_THRESHOLD if notebook_id
+                    else self.RAG_SIMILARITY_THRESHOLD
+                )
+                relevant = [r for r in results if r.get("similarity", 0) >= threshold]
                 if relevant:
                     logger.info(
                         f"RAG: {len(relevant)}/{len(results)} results above threshold "
-                        f"{self.RAG_SIMILARITY_THRESHOLD} (notebook_id={notebook_id!r}, "
+                        f"{threshold} (owner={owner!r}, notebook_id={notebook_id!r}, "
                         f"source_ids={source_ids!r}, query={search_query[:80]!r})"
                     )
                     rag_sources = [
@@ -463,6 +480,23 @@ class ChatProcessor:
                     rag_sources = rag_sources[:included_count]
                     rag_content = header + separator.join(included_blocks)
                     preface.append(untrusted_context_message("retrieved documents", rag_content))
+                else:
+                    # Diagnosability (#112): the above-threshold branch was the
+                    # only one that logged, so a turn that retrieved candidates
+                    # but filtered every one of them out below the threshold
+                    # left no trace in production logs — indistinguishable
+                    # from retrieval itself returning nothing. Log the same
+                    # fields plus the top-3 raw similarities so this class of
+                    # silent-empty-result is diagnosable from logs alone.
+                    top3 = sorted(
+                        (r.get("similarity", 0) for r in results), reverse=True,
+                    )[:3]
+                    logger.info(
+                        f"RAG: 0/{len(results)} results above threshold "
+                        f"{threshold} (owner={owner!r}, notebook_id={notebook_id!r}, "
+                        f"source_ids={source_ids!r}, query={search_query[:80]!r}, "
+                        f"top3_similarities={top3!r})"
+                    )
         except Exception as e:
             logger.warning(f"RAG retrieval failed: {e}")
         return preface, rag_sources

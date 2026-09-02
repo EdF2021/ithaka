@@ -146,6 +146,55 @@ def test_notebook_below_threshold_results_count_as_no_sources():
     assert "No notebook source" in _system_text(preface)
 
 
+def test_notebook_uses_lower_similarity_threshold():
+    """#112: the FastEmbed fallback lane scores correct Dutch-notebook hits
+    at 0.22-0.27 hybrid similarity — below the general 0.35 floor, so
+    notebook chat surfaced 0 relevant chunks even though retrieval worked.
+    A hit at 0.2 must pass in notebook mode (NOTEBOOK_RAG_SIMILARITY_THRESHOLD
+    = 0.15) while still failing the general-chat 0.35 floor (see
+    test_general_chat_keeps_the_higher_threshold below)."""
+    hits = [{"document": "chunk", "similarity": 0.2, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    preface, rag_sources, _, _ = _preface(proc, notebook_id="nb-1")
+
+    assert len(rag_sources) == 1
+    assert "No notebook source" not in _system_text(preface)
+
+
+def test_general_chat_keeps_the_higher_threshold():
+    """Same 0.2 similarity, no notebook_id: the general RAG_SIMILARITY_THRESHOLD
+    (0.35) must still apply, unchanged by the notebook-only lower floor."""
+    hits = [{"document": "chunk", "similarity": 0.2, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    _, rag_sources, _, _ = _preface(proc, message="q")
+
+    assert rag_sources == []
+
+
+def test_empty_relevant_results_are_logged(caplog):
+    """#112 diagnosability: previously only the above-threshold branch
+    logged, so a turn that retrieved candidates but filtered every one of
+    them out below the threshold left no trace in production logs —
+    indistinguishable from retrieval itself returning nothing. The empty
+    branch must log the same fields (owner, notebook_id, source_ids, query)
+    plus the top-3 raw similarities."""
+    hits = [
+        {"document": "chunk", "similarity": 0.05, "metadata": {"filename": "a.pdf"}},
+        {"document": "chunk2", "similarity": 0.03, "metadata": {"filename": "b.pdf"}},
+    ]
+    proc, _ = _mk_processor(hits)
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(proc, notebook_id="nb-1", source_ids=["doc-1"])
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert rag_lines[0].startswith("RAG: 0/2 results above threshold 0.15")
+    assert "owner='ed'" in rag_lines[0]
+    assert "notebook_id='nb-1'" in rag_lines[0]
+    assert "source_ids=['doc-1']" in rag_lines[0]
+    assert "top3_similarities=[0.05, 0.03]" in rag_lines[0]
+
+
 def test_notebook_refusal_not_injected_when_sources_found():
     hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a.pdf"}}]
     proc, _ = _mk_processor(hits)
