@@ -67,8 +67,9 @@ worktrees, regie/reviews/merges centraal; elke PR met CI + bewijs in chat vóór
   van het partiële index-pad op): de "denied merge" van 2026-09-01 bleek een misklik; op Eds
   "waarom merge je niet??" (2026-09-02 08:00) alsnog gemerged (`183ab45`), prod herbouwd en live
   geverifieerd: poll 1 `2142/live`, poll 2 `2142/memory` — stabiel. Issue #119 gesloten.
-- #121-restgap: mobile-only notes-drag-ghost-maat niet visueel verifieerbaar (native touch-DnD
-  buiten CDP-bereik) — genoteerd op #122.
+- #121-restgap: alsnog gedicht (2026-09-02, ochtend) — `_beginGrab` synthetisch getriggerd via
+  het long-press-pad; meting exact kloppend (rect/1.25, terug-gerenderd rect×1.06), PASS.
+  Details op #122.
 - Open issues na deze run: #112 (RAG voorstel B + prod-validatie), #122 (zoom-restklasse),
   #119 (tot #123 landt), #81 (release-watch), plus pre-existing #103/#102 (dependabot).
 
