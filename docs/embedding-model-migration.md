@@ -112,10 +112,61 @@ matcht met de nu geconfigureerde client. Bij een mismatch (exact wat een
 4. De nieuwe embeddings + originele ids/documents/metadatas worden
    teruggeschreven.
 
-Faalt embedden of terugschrijven onderweg, dan wordt de oude collectie
-hersteld uit de in-memory preserve (`restore`-pad in `_get_or_reset_collection`)
-— dus dit is geen alles-of-niets-operatie die je data-loos achterlaat, maar
-het is nog steeds een migratie met I/O-risico: neem stap (b) serieus.
+**Faalfall — dit is geen "valt terug op het oude model" scenario.** Als
+embedden of terugschrijven onderweg faalt, probeert
+`_get_or_reset_collection()` de oude rijen terug te zetten in een nieuwe
+collectie met de oude metadata (`restore`-pad), maar **re-raiset daarna
+altijd** de oorspronkelijke fout (`raise RuntimeError(...) from e`,
+`src/embedding_lanes.py` rond regel 194-225). `build_embedding_lanes()`
+vangt die RuntimeError per lane op en **laat de lane gewoon weg** uit de
+teruggegeven lijst (`src/embedding_lanes.py` rond regel 266-270; zie ook
+`tests/test_embedding_lanes.py::test_lane_reset_restores_existing_collection_when_rewrite_fails`,
+die expliciet `built == []` verwacht).
+
+**Deze restore is bovendien geen alles-of-niets-garantie** — dit is een
+bestaand gat in `src/embedding_lanes.py`, niet iets wat deze PR aanpakt:
+`chroma_client.delete_collection(name)` gevolgd door
+`chroma_client.get_or_create_collection(name=name, metadata=metadata)`
+(regel 183-184) staat buiten elke `try`/`except`. Gooit één van die twee
+calls een exception (bv. Chroma tijdelijk onbereikbaar tijdens de
+her-embed), dan is de oude collectie al verwijderd, is er geen nieuwe
+collectie aangemaakt, en wordt er nergens iets teruggezet — de
+in-memory preserved rows (`ids`/`documents`/`metadatas`/`embeddings`)
+gaan dan verloren zonder dat er een restore-poging plaatsvindt. Reden te
+meer om stap (b) — de volume-backup — niet over te slaan.
+
+**In deze deployment betekent dat totale uitval, niet degradatie naar het
+oude model.** Prod heeft geen custom (HTTP) lane — `EMBEDDING_URL` staat
+niet gezet, dus `_load_custom_endpoint()` (`src/embedding_lanes.py:97`,
+`if not url: return {}`) levert niets op en er bestaan alleen
+`*_fastembed`-collecties (bevestigd in stap 0). De fastembed-lane is dus
+de **enige** lane. Faalt de her-embed van die lane, dan is `lanes == []`
+voor die store, wordt `_healthy = False` gezet, en worden RAG
+(`rag_available` in `app.py`), notebook-chat, semantisch geheugen en
+tool-index-selectie **onbeschikbaar** — niet "werkend op het oude model".
+
+**Extra risico: automatische retry-thrash.** `src/rag_singleton.py`
+(`get_rag_manager()`) heeft een `_RETRY_INTERVAL = 30`s: bij elke aanroep
+ná een mislukte init (bijvoorbeeld via `routes/personal_routes.py`'s
+`_rag()`, die `get_rag_manager()` per request aanroept) probeert het na 30
+seconden opnieuw een verse `VectorRAG()` te bouwen — wat opnieuw alle 7499
+rijen leest en probeert te her-embedden, en opnieuw faalt. Zonder
+ingrijpen thrasht dit elke 30 seconden door, met bijbehorende CPU-belasting
+en herhaalde Chroma-I/O, zolang er verkeer op `/api/personal/*` blijft
+binnenkomen.
+
+**Bij een mislukte her-embed: stop de app, ga niet door laten draaien.**
+Zodra de logs een `Could not write reset collection ...` of vergelijkbare
+fout tonen voor een van de drie collecties:
+
+```bash
+docker compose stop ithaka
+```
+
+en ga direct door naar rollback (stap e) — volume herstellen + oude model
+pinnen — in plaats van te wachten of de app zichzelf herstelt. Dat gebeurt
+niet: elke volgende 30s-retry herhaalt dezelfde mislukking op dezelfde
+data.
 
 Deze machinery draait **automatisch** zodra de betreffende store zijn lanes
 (her)opbouwt:
@@ -202,11 +253,13 @@ van CPU-cores en chunk-lengte tot ~900 tekens):
   volgen.
 - Dit blokkeert **app-startup** voor de `ithaka_rag`- en
   `ithaka_memories`-collecties (synchroon in `initialize_managers()` /
-  module-load), dus reken op een langere boot-tijd dan normaal — niet op een
-  crash. Als de her-embed om wat voor reden dan ook faalt, valt
-  `_get_or_reset_collection()` terug op het herstellen van de oude collectie
-  (zie stap c), dus de app blijft functioneel op het oude model i.p.v. leeg
-  te draaien.
+  module-load), dus reken op een langere boot-tijd dan normaal. Als de
+  her-embed faalt, is het resultaat **geen soepele terugval op het oude
+  model** — zie sectie (c) hierboven: de betreffende store levert een lege
+  lanes-lijst, wordt ongezond, en (in deze deployment, zonder custom lane)
+  is de bijbehorende feature (RAG / geheugen / tool-index) volledig
+  onbeschikbaar totdat je ingrijpt (app stoppen + rollback, sectie e), niet
+  "functioneel op het oude model".
 - Plan de restart in een rustig moment; er is geen voortgangsindicator
   behalve de logregels — gebruik `docker compose logs -f ithaka` als
   live-observatie zoals in stap c.5.
