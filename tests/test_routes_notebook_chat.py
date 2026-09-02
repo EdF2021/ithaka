@@ -199,6 +199,13 @@ def test_no_sources_prompt_carries_dutch_output_rule():
     assert DUTCH_OUTPUT_RULE in cp.NOTEBOOK_NO_SOURCES_PROMPT
 
 
+def test_grounding_prompt_tells_model_no_tools_are_available():
+    """#141: the model should be told up front that tools are off, so it is
+    less likely to hallucinate a fenced tool call (```python```/```bash```)
+    that the agent loop would then have to discard."""
+    assert "no tools" in cp.NOTEBOOK_GROUNDING_PROMPT.lower()
+
+
 def test_notebook_empty_results_injects_refusal_prompt():
     proc, _ = _mk_processor([])
     preface, rag_sources, _, _ = _preface(proc, notebook_id="nb-1")
@@ -529,7 +536,14 @@ def test_notebook_lockdown_is_a_noop_for_normal_sessions():
 
 def test_notebook_lockdown_does_not_claim_guide_only_mode():
     """guide_only injects a directive telling the model the USER forbade tools;
-    a notebook turn is not that, so the mode must stay untouched."""
+    a notebook turn is not that, so the mode must stay untouched.
+
+    #141: notebook lockdown gets its own dedicated
+    `discard_blocked_tool_calls` flag instead, so the agent loop can drop a
+    blocked fenced tool block outright (no pointless round 2) without
+    reusing/overloading `mode` or adopting guide_only's broader,
+    separately-tested special-casing.
+    """
     import routes.chat_routes as cr
     from src.tool_policy import build_effective_tool_policy
 
@@ -538,3 +552,4 @@ def test_notebook_lockdown_does_not_claim_guide_only_mode():
         build_effective_tool_policy(last_user_message="what is X?"),
     )
     assert policy.mode == "normal"
+    assert policy.discard_blocked_tool_calls is True
