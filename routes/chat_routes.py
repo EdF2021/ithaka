@@ -1124,6 +1124,8 @@ def setup_chat_routes(
                 disabled_tools.update({"create_document", "edit_document", "update_document", "suggest_document"})
             if not _privs.get("can_generate_images", True):
                 disabled_tools.add("generate_image")
+            if not _privs.get("can_generate_videos", True):
+                disabled_tools.add("generate_video")
             if not _privs.get("can_manage_memory", True):
                 disabled_tools.update({"manage_memory", "manage_skills"})
             if not _privs.get("can_use_research", True):
@@ -1133,6 +1135,12 @@ def setup_chat_routes(
                 chat_mode = 'chat'
         # Global admin disabled tools
         from src.settings import get_setting
+        # video_gen_enabled mirrors image_gen_enabled's per-session gate
+        # (routes/chat_routes.py, generate-image session branch) but as a
+        # global default-off admin flag, since generate_video is a regular
+        # agent tool rather than a dedicated session type.
+        if not get_setting("video_gen_enabled", False):
+            disabled_tools.add("generate_video")
         _global_disabled = get_setting("disabled_tools", [])
         if _global_disabled and isinstance(_global_disabled, list):
             explicit_web_allowed = (

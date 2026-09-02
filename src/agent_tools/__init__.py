@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 from .subprocess_tools import BashTool, PythonTool
 from .web_tools import WebSearchTool, WebFetchTool
+from .video_tools import GenerateVideoTool
 from .filesystem_tools import ReadFileTool, WriteFileTool, EditFileTool, LsTool, GlobTool, GrepTool, GetWorkspaceTool
 from .document_tools import CreateDocumentTool, UpdateDocumentTool, EditDocumentTool, SuggestDocumentTool, ManageDocumentTool
 from .interaction_tools import AskUserTool, UpdatePlanTool
@@ -38,6 +39,7 @@ TOOL_HANDLERS = {
     "python": PythonTool().execute,
     "web_search": WebSearchTool().execute,
     "web_fetch": WebFetchTool().execute,
+    "generate_video": GenerateVideoTool().execute,
     "read_file": ReadFileTool().execute,
     "write_file": WriteFileTool().execute,
     "edit_file": EditFileTool().execute,
@@ -81,7 +83,7 @@ TOOL_TAGS = {"bash", "python", "web_search", "web_fetch", "read_file", "write_fi
              "send_to_session",
              "pipeline",
              "manage_session", "manage_memory", "list_models",
-             "ui_control", "generate_image", "ask_user", "update_plan",
+             "ui_control", "generate_image", "generate_video", "ask_user", "update_plan",
              "manage_tasks", "api_call", "ask_teacher", "manage_skills",
              "suggest_document",
              "manage_endpoints", "manage_mcp", "manage_webhooks",
