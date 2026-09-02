@@ -616,6 +616,26 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
    */
   export async function handleChatSubmit(e) {
     e.preventDefault();
+    // search_hint (#112): read-and-clear notebookWorkspace.js's one-shot
+    // pending hint (a bare mindmap-node label) as the very first thing in
+    // this handler, unconditionally — before ANY early-return path below
+    // (isStreaming cancel/stop, compare mode, the setup-mode intercept, the
+    // _sendInFlight race guard, ...). Those paths never reach the
+    // workspace-open gate further down, which used to be the only place
+    // that consumed the hint; a mindmap-node click while a previous answer
+    // is still streaming hits the isStreaming branch (treated as "cancel
+    // the stream", not "submit") and returned before that gate, leaving the
+    // hint sitting in notebookWorkspace.js's module state — where it would
+    // resurface on a LATER, unrelated message once the workspace was
+    // reopened (review finding, #112 fix-round). getSearchHintForChat()
+    // clears its module-level value on every call, so calling it exactly
+    // once here — always, regardless of which path this invocation takes —
+    // guarantees no stale hint can survive past this call. The raw value is
+    // reused (not re-fetched) at the workspace-open gate below to decide
+    // whether it's actually forwarded.
+    const _nbwsSearchHintRaw = window.notebookWorkspace && window.notebookWorkspace.getSearchHintForChat
+      ? window.notebookWorkspace.getSearchHintForChat()
+      : null;
     // Cancel research clarification timeout if active
     if (window._researchTimeoutTimer) {
       clearTimeout(window._researchTimeoutTimer);
@@ -847,15 +867,11 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     // workspace genuinely was open at submit time.
     const _nbwsWorkspaceOpenAtSubmit = !!(window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen());
     let _nbwsSourceIds = null;
-    // search_hint: a bare mindmap-node label, set by notebookWorkspace.js
-    // right before it dispatches this submit (see getSearchHintForChat()
-    // there — reading it always clears it, a one-shot channel, so a stale
-    // hint can never leak into a later, unrelated turn even if this branch
-    // doesn't forward it). Only forwarded to the backend when the workspace
-    // was open at submit time, mirroring the source_ids gate below (#112).
-    const _nbwsSearchHintRaw = window.notebookWorkspace && window.notebookWorkspace.getSearchHintForChat
-      ? window.notebookWorkspace.getSearchHintForChat()
-      : null;
+    // search_hint: _nbwsSearchHintRaw was already read-and-cleared at the
+    // very top of this handler (see the comment there for why it must be
+    // consumed unconditionally, before any early return). Only forwarded to
+    // the backend when the workspace was open at submit time, mirroring the
+    // source_ids gate below (#112).
     const _nbwsSearchHint = (_nbwsWorkspaceOpenAtSubmit && typeof _nbwsSearchHintRaw === 'string' && _nbwsSearchHintRaw.trim())
       ? _nbwsSearchHintRaw.trim()
       : null;

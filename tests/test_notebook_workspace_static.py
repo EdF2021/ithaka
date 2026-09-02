@@ -505,6 +505,38 @@ def test_chat_js_forwards_search_hint_when_workspace_open():
     assert "fd.append('search_hint'" in _CHAT_JS
 
 
+def test_search_hint_consumed_unconditionally_before_early_return_paths():
+    """Regression (#112 fix-round review finding 1): getSearchHintForChat()
+    must be called exactly once, as the very first thing in handleChatSubmit
+    — before ANY early-return branch (compare mode, the isStreaming
+    cancel/stop path, the _sendInFlight race guard, ...).
+
+    Before this fix the hint was only consumed at the workspace-open gate
+    much further down. A mindmap-node click while a previous answer is
+    still streaming hits the isStreaming branch, which treats the click as
+    "cancel the stream" and returns before ever reaching that gate — the
+    hint stayed set in notebookWorkspace.js's module state and would
+    resurface as search_hint on a LATER, unrelated message once the
+    workspace was reopened (getSourceIdsForChat()'s sibling contract is a
+    live read with no such state to leak; getSearchHintForChat() is a
+    one-shot channel, so only reading it late — not the mechanism itself —
+    was the bug)."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    # Count the actual call expression, not prose mentions of the name in
+    # comments (this test's own docstring companion comment in chat.js says
+    # "getSearchHintForChat()" without the receiver).
+    assert fn.count("window.notebookWorkspace.getSearchHintForChat()") == 1
+    hint_read_idx = fn.index("window.notebookWorkspace.getSearchHintForChat()")
+    compare_return_idx = fn.index(
+        "if (window.compareModule && window.compareModule.isActive())"
+    )
+    streaming_idx = fn.index("if (isStreaming) {")
+    send_in_flight_idx = fn.index("if (_sendInFlight) return;")
+    assert hint_read_idx < compare_return_idx
+    assert hint_read_idx < streaming_idx
+    assert hint_read_idx < send_in_flight_idx
+
+
 # ── #112 issue-#22 fail-closed guard: snapshot instead of live re-read ──────
 
 def test_chat_js_snapshots_workspace_open_state_before_await():
