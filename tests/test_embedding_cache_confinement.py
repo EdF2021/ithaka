@@ -27,6 +27,33 @@ def _route_endpoint(path: str, method: str):
     raise AssertionError(f"route not found: {method} {path}")
 
 
+def test_active_model_empty_env_falls_back_to_multilingual_default(monkeypatch):
+    """FASTEMBED_MODEL="" (docker-compose.yml's `${FASTEMBED_MODEL:-...}`
+    pattern) must resolve to the same multilingual default FastEmbedClient
+    actually uses (src.embeddings.DEFAULT_FASTEMBED_MODEL), not the stale
+    English-only literal — otherwise the admin Embeddings panel marks the
+    wrong model as "active"."""
+    from src.embeddings import DEFAULT_FASTEMBED_MODEL
+
+    monkeypatch.setenv("FASTEMBED_MODEL", "")
+
+    assert embedding_routes._active_model() == DEFAULT_FASTEMBED_MODEL
+
+
+def test_active_model_unset_env_falls_back_to_multilingual_default(monkeypatch):
+    from src.embeddings import DEFAULT_FASTEMBED_MODEL
+
+    monkeypatch.delenv("FASTEMBED_MODEL", raising=False)
+
+    assert embedding_routes._active_model() == DEFAULT_FASTEMBED_MODEL
+
+
+def test_active_model_explicit_env_is_respected(monkeypatch):
+    monkeypatch.setenv("FASTEMBED_MODEL", "custom/model")
+
+    assert embedding_routes._active_model() == "custom/model"
+
+
 def test_model_cache_path_resolves_under_cache_root(tmp_path, monkeypatch):
     monkeypatch.setattr(embedding_routes, "_cache_dir", lambda: str(tmp_path / "cache"))
 

@@ -76,8 +76,15 @@ def _is_downloaded(hf_source: str) -> bool:
 
 
 def _active_model() -> str:
-    """Get the currently configured fastembed model name."""
-    return os.environ.get("FASTEMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    """Get the currently configured fastembed model name.
+
+    `or`, not os.environ.get's default arg, so a PRESENT-but-EMPTY
+    FASTEMBED_MODEL (docker-compose.yml's `${FASTEMBED_MODEL:-...}`) falls
+    back to the same default FastEmbedClient actually uses — see the matching
+    comment in src.embeddings.FastEmbedClient.__init__ (issue #124).
+    """
+    from src.embeddings import DEFAULT_FASTEMBED_MODEL
+    return os.environ.get("FASTEMBED_MODEL") or DEFAULT_FASTEMBED_MODEL
 
 
 def _dir_size_mb(path: str) -> float:
