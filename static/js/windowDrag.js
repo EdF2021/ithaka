@@ -38,6 +38,7 @@
 
 import { makeEdgeDockController } from './modalSnap.js';
 import { makeWindowResizable } from './windowResize.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 const SNAP_PX = 6;        // cursor distance from top edge for fullscreen snap
 const UNSNAP_PX = 24;     // cursor distance from top before fullscreen exits
@@ -161,13 +162,22 @@ export function makeWindowDraggable(modal, options = {}) {
       try { onDragStart({ rect, cx, cy }); } catch (_) {}
     }
     startX = cx; startY = cy;
+    // startLeft/startTop stay in viewport-space (raw getBoundingClientRect
+    // values, undivided) for the life of the drag — see _onMove, which folds
+    // the zoom division into a single pass over (startLeft + delta) so the
+    // two never get divided separately and re-summed.
     startLeft = rect.left; startTop = rect.top;
     // Pin position so the drag follows the cursor instead of fighting a
     // centering transform / margin. Inline styles win unless CSS uses
     // !important (the fullscreen rules do, by design).
     content.style.position = 'fixed';
-    content.style.left = startLeft + 'px';
-    content.style.top = startTop + 'px';
+    // UI text-scale zoom (:root.ui-scale-125) — content is now position:fixed
+    // (viewport-anchored), so the fresh getBoundingClientRect() values above
+    // must be divided by the zoom before assigning as local px (see
+    // uiZoom.js, PR #76/#77/#121).
+    const _z0 = zoomOf(document.documentElement);
+    content.style.left = toLocalPx(startLeft, _z0) + 'px';
+    content.style.top = toLocalPx(startTop, _z0) + 'px';
     content.style.transform = 'none';
     content.style.margin = '0';
   };
@@ -231,8 +241,14 @@ export function makeWindowDraggable(modal, options = {}) {
     if (Math.abs(cx - startX) > MOVE_THRESHOLD || Math.abs(cy - startY) > MOVE_THRESHOLD) {
       movedDuringDrag = true;
     }
-    content.style.left = (startLeft + cx - startX) + 'px';
-    content.style.top = (startTop + cy - startY) + 'px';
+    // UI text-scale zoom (:root.ui-scale-125) — startLeft/startTop and the
+    // cx/cy delta are both viewport-space (see _startDrag), so the whole sum
+    // is divided once here rather than dividing startLeft and the delta
+    // separately (that would double-convert the part carried over from a
+    // prior frame). See uiZoom.js, PR #76/#77/#121.
+    const _z = zoomOf(document.documentElement);
+    content.style.left = toLocalPx(startLeft + cx - startX, _z) + 'px';
+    content.style.top = toLocalPx(startTop + cy - startY, _z) + 'px';
     // Corner guard: in the top fullscreen band the side docks stay OFF, so a
     // top corner only ever snaps to fullscreen — never the corner hybrid.
     const inTopBand = cy <= SNAP_PX;
