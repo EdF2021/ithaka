@@ -42,7 +42,7 @@ python-dateutil
 caldav
 cryptography
 bcrypt
-mcp<2  # 2.0 dropt de Server.list_tools()-decorator-API die mcp_servers/* gebruiken
+mcp<3  # 2.0 dropt de Server.list_tools()-decorator-API die mcp_servers/* gebruiken
 pyotp
 qrcode[pil]
 croniter
