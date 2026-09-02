@@ -69,6 +69,31 @@ _MEDIA_NEG = re.compile(
     r"transcriberen|transcribe|samenvat|vat\s+samen|summari[sz]e|youtube)\b",
     re.I,
 )
+_IMAGE_PATTERN_STR = rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_IMAGE_THING}\b|\b{_IMAGE_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"
+_VIDEO_PATTERN_STR = rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_VIDEO_THING}\b|\b{_VIDEO_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"
+_IMAGE_PATTERN = re.compile(_IMAGE_PATTERN_STR, re.I)
+_VIDEO_PATTERN = re.compile(_VIDEO_PATTERN_STR, re.I)
+
+
+def media_intent(text: str) -> str | None:
+    """Return "image", "video", or None for a media-generation request.
+
+    Single source of truth for the image/video creation-request detection
+    (pattern match + _MEDIA_NEG guard), shared by classify_tool_intent (chat
+    -> agent escalation) and agent_loop._classify_agent_request (agent-mode
+    domain/low-signal detection) so the two classifiers cannot drift on what
+    counts as "the user wants an image/video made".
+    """
+    if not text:
+        return None
+    if _MEDIA_NEG.search(text):
+        return None
+    if _IMAGE_PATTERN.search(text):
+        return "image"
+    if _VIDEO_PATTERN.search(text):
+        return "video"
+    return None
+
 
 _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
     (category, reason, re.compile(pattern, re.I))
@@ -117,8 +142,8 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         # Image/video generation requests. Inserted before the "web" block so
         # a creation request ("maak een afbeelding", "make a video") is never
         # swallowed by the generic search/lookup patterns below.
-        ("image", "image generation request", rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_IMAGE_THING}\b|\b{_IMAGE_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"),
-        ("video", "video generation request", rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_VIDEO_THING}\b|\b{_VIDEO_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"),
+        ("image", "image generation request", _IMAGE_PATTERN_STR),
+        ("video", "video generation request", _VIDEO_PATTERN_STR),
 
         # Deep research jobs, not quick conceptual mentions of research.
         ("web", "explicit web search request", rf"{_PLEASE}(?:do|run|use|perform|make)\s+(?:a\s+)?(?:web\s+search|search\s+the\s+web)\b.+"),
@@ -166,15 +191,15 @@ def classify_tool_intent(text: str) -> ToolIntent:
         return ToolIntent(False, reason="empty message")
     if _EXPLANATORY_PREFIX.search(text):
         return ToolIntent(False, reason="explanatory feature question")
-    media_negated = bool(_MEDIA_NEG.search(text))
     for category, reason, pattern in _ROUTING_PATTERNS:
         if pattern.search(text):
-            # Search/describe/vision/upload/transcribe wording ("zoek een
-            # afbeelding", "beschrijf deze foto", "vat deze video samen")
-            # co-occurring with a creation verb + media noun is not a
-            # generation request; let the loop keep looking for another
-            # category instead of forcing image/video.
-            if category in ("image", "video") and media_negated:
+            # Image/video acceptance is delegated to the shared media_intent()
+            # helper (also used by agent_loop._classify_agent_request) instead
+            # of re-checking _MEDIA_NEG here, so the two classifiers cannot
+            # drift on what counts as a generation request vs. a search/
+            # describe/upload/transcribe mention ("zoek een afbeelding",
+            # "beschrijf deze foto", "vat deze video samen").
+            if category in ("image", "video") and media_intent(text) != category:
                 continue
             return ToolIntent(True, category=category, reason=reason)
     return ToolIntent(False, reason="no tool-action pattern matched")
