@@ -136,10 +136,95 @@ class EmbeddingClient:
         return [emb["embedding"] for emb in embeddings]
 
 
+_onnxruntime_dlls_preloaded = False  # process-level latch: preload_dlls() once
+
+
+def _preload_onnxruntime_cuda_dlls() -> None:
+    """Best-effort: load the CUDA/cuDNN shared libraries from the nvidia-*
+    pip packages (only installed in the GPU image; see
+    requirements-gpu-nvidia.txt) before onnxruntime tries to initialize the
+    CUDAExecutionProvider.
+
+    Installing those pip packages alone is not enough — they land under
+    site-packages/nvidia/... which is not on the dynamic linker's search
+    path, so onnxruntime's dlopen("libcublasLt.so.13") by bare soname finds
+    nothing and CUDA EP init fails, silently falling back to CPU (the
+    ~5x slower path this exists to avoid). onnxruntime.preload_dlls() loads
+    each library by its known path first so the linker's later dlopen finds
+    it already resident.
+
+    Harmless no-op on the CPU image and on hosts without a GPU: the plain
+    `onnxruntime` package's build carries no CUDA version metadata, so
+    preload_dlls() returns immediately without doing anything (verified
+    empirically — its cuda_version detection is blank for that build).
+    """
+    global _onnxruntime_dlls_preloaded
+    if _onnxruntime_dlls_preloaded:
+        return
+    _onnxruntime_dlls_preloaded = True
+    try:
+        import onnxruntime
+        if hasattr(onnxruntime, "preload_dlls"):
+            onnxruntime.preload_dlls()
+    except Exception as e:
+        logger.debug("onnxruntime.preload_dlls() skipped: %s", e)
+
+
+_onnxruntime_providers_logged = False  # process-level latch: log once
+
+
+def _log_onnxruntime_providers(embedding) -> None:
+    """Log (once per process) the onnxruntime execution providers fastembed
+    actually selected, so a silent CPU fallback (e.g. CUDA libs still
+    unresolvable despite the GPU image) is visible in the logs instead of
+    only inferable from embedding latency.
+
+    Reaches the real onnxruntime InferenceSession via
+    ``TextEmbedding.model.model`` (fastembed's embedding-backend wrapper
+    around the session; verified empirically against the installed
+    fastembed version) and falls back to onnxruntime's static
+    ``get_available_providers()`` if that introspection doesn't pan out
+    (e.g. a lazy-loaded or differently-shaped model, or a test stub).
+    Best-effort throughout: this must never break embedding.
+    """
+    global _onnxruntime_providers_logged
+    if _onnxruntime_providers_logged:
+        return
+    _onnxruntime_providers_logged = True
+    try:
+        import onnxruntime
+
+        session = getattr(getattr(embedding, "model", None), "model", None)
+        session_providers = None
+        if session is not None and hasattr(session, "get_providers"):
+            session_providers = session.get_providers()
+            logger.info("fastembed onnxruntime providers: %s", session_providers)
+        else:
+            logger.info(
+                "fastembed onnxruntime providers: unknown (could not introspect "
+                "session); onnxruntime available providers: %s",
+                onnxruntime.get_available_providers(),
+            )
+
+        if session_providers is not None:
+            available = onnxruntime.get_available_providers()
+            if "CUDAExecutionProvider" in available and (
+                not session_providers or session_providers[0] != "CUDAExecutionProvider"
+            ):
+                logger.warning(
+                    "CUDA execution provider available but not selected — "
+                    "fastembed is running on CPU (session providers=%s)",
+                    session_providers,
+                )
+    except Exception as e:
+        logger.debug("onnxruntime provider logging skipped: %s", e)
+
+
 class FastEmbedClient:
     """Local embedding client using fastembed (ONNX). No external service needed."""
 
     def __init__(self, model: Optional[str] = None):
+        _preload_onnxruntime_cuda_dlls()
         try:
             from fastembed import TextEmbedding
         except ImportError as e:
@@ -190,6 +275,7 @@ class FastEmbedClient:
                 logger.debug("embedding cache symlink-heal skipped: %s", _e)
         kwargs = {"model_name": self.model, "cache_dir": cache_dir}
         self._embedding = TextEmbedding(**kwargs)
+        _log_onnxruntime_providers(self._embedding)
         self._dim: Optional[int] = None
         self.url = "local://fastembed"
         logger.info(f"FastEmbed loaded model={self.model}")

@@ -1,0 +1,28 @@
+# NVIDIA CUDA userspace for the fastembed/onnxruntime embedding lane. Opt-in
+# (see Dockerfile ARG GPU_EXTRAS and docker/gpu.nvidia.yml) — adds ~1.5-2GB to
+# the image, so it stays out of the default CPU build.
+#
+# Root cause: requirements.txt installs plain `onnxruntime` (via fastembed),
+# whose PyPI wheel does not bundle a CUDA execution provider at all (verified:
+# the cp314 manylinux wheel is ~23MB, no libonnxruntime_providers_cuda.so).
+# Only the separate `onnxruntime-gpu` distribution ships that provider
+# (~200MB `.so`, statically linked against cuDNN/cuBLAS kernels but still
+# dynamically NEEDING the CUDA/cuDNN *runtime* shared libraries below at
+# `dlopen()` time — confirmed via `readelf -d` on the actual provider .so).
+#
+# onnxruntime-gpu 1.29.0 is built against CUDA 13 / cuDNN 9 (its bundled
+# build_and_package_info.py reports cuda_version="13.0", which is what makes
+# `onnxruntime.preload_dlls()` in src/embeddings.py resolve the right
+# consolidated `nvidia/cu13/lib/...` layout below instead of no-op'ing).
+#
+# The [cuda] and [cudnn] extras pull nvrtc/cuda_runtime/cufft/curand/cudnn,
+# but NOT cublas (a gap in onnxruntime-gpu's own metadata) even though
+# libcublasLt.so.13/libcublas.so.13 are hard NEEDED entries of the CUDA
+# provider .so — pin nvidia-cublas explicitly rather than relying on the
+# transitive pull-in via nvidia-cudnn-cu13 -> nvidia-cublas. `~=13.0` (not
+# floating) matches the CUDA major onnxruntime-gpu 1.29.0 was built against
+# and the pin style its own [cuda] extra uses (nvidia-cuda-runtime~=13.0,
+# etc.) — a future unsuffixed nvidia-cublas 14.x would otherwise resolve
+# silently and reintroduce this exact bug for the next onnxruntime-gpu bump.
+onnxruntime-gpu[cuda,cudnn]==1.29.0
+nvidia-cublas~=13.0

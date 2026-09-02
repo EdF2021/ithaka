@@ -16,12 +16,19 @@
 # Verify with:
 #   docker info | grep -i nvidia
 #
-# This overlay only passes the host GPU through to the container.
-# The slim Ithaka image does not bundle CUDA userspace or inference
-# engines — install vLLM / llama-cpp-python / SGLang via
-# Cookbook -> Dependencies (or pip) before serving GPU models.
+# This overlay passes the host GPU through to the container AND rebuilds the
+# image with the CUDA 13 / cuDNN 9 userspace the built-in fastembed/onnxruntime
+# embedding lane needs to actually use the GPU (RAG, semantic memory, tool
+# selection) — see requirements-gpu-nvidia.txt and the Dockerfile's
+# GPU_EXTRAS arg for the full rationale (~1.5-2GB image growth, opt-in only
+# via this overlay). Cookbook model-serving engines (vLLM / llama-cpp-python /
+# SGLang) are a separate concern — install those via Cookbook -> Dependencies
+# (or pip) after enabling this overlay; they are not bundled here.
 services:
   ithaka:
+    build:
+      args:
+        GPU_EXTRAS: "1"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility

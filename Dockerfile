@@ -81,6 +81,29 @@ RUN pip install --no-cache-dir setuptools==84.0.0 \
     && pip install --no-cache-dir -r requirements.txt \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then pip install --no-cache-dir -r requirements-optional.txt; fi
 
+# NVIDIA CUDA userspace for the fastembed/onnxruntime embedding lane — opt-in,
+# adds ~1.5-2GB, so it stays out of the default image. Wired from
+# docker/gpu.nvidia.yml's `build: args:` (and the standalone
+# docker-compose.gpu-nvidia.yml); set GPU_EXTRAS=1 to enable. Installs
+# onnxruntime-gpu (the plain `onnxruntime` pulled in by requirements.txt via
+# fastembed does not ship a CUDA execution provider at all) plus the CUDA
+# 13 / cuDNN 9 runtime libraries it dynamically loads at inference time — see
+# requirements-gpu-nvidia.txt for the full rationale and the readelf-verified
+# dependency list. `pip uninstall -y onnxruntime` first: onnxruntime-gpu
+# installs the same `onnxruntime/` package directory, so leaving the plain
+# wheel's dist-info around after overwriting its files leaves pip's metadata
+# inconsistent (`pip check` would flag it, though the import itself works
+# either way). src/embeddings.py calls onnxruntime.preload_dlls() before
+# creating a session, which is what actually makes these libraries
+# resolvable at CUDA-provider dlopen() time — installing them alone is not
+# enough, they aren't on the dynamic linker's search path.
+ARG GPU_EXTRAS=""
+COPY requirements-gpu-nvidia.txt ./
+RUN if [ -n "$GPU_EXTRAS" ]; then \
+      pip uninstall -y onnxruntime \
+      && pip install --no-cache-dir -r requirements-gpu-nvidia.txt; \
+    fi
+
 # python-magic powers content-based MIME sniffing in src/upload_handler.py.
 # Image-only (not in requirements.txt) because it needs the libmagic1 system
 # lib installed above; see the apt note near the top of this stage.
