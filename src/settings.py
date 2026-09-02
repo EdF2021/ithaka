@@ -40,6 +40,13 @@ DEFAULT_SETTINGS = {
     "image_gen_enabled": False,
     "image_model": "",
     "image_quality": "medium",
+    # Video generation (Veo, via the Gemini ModelEndpoint) — see
+    # docs/superpowers/specs/2026-09-02-image-video-autoroute-design.md.
+    "video_gen_enabled": False,
+    "video_model": "veo-3.1-generate-preview",
+    "video_resolution": "720p",
+    "video_aspect_ratio": "16:9",
+    "video_duration_seconds": 8,
     "vision_model": "",
     "vision_enabled": True,
     # Ordered fallback chain for the Vision model (image analysis, OCR, tagging).
@@ -274,6 +281,8 @@ def is_setting_overridden(key: str) -> bool:
 _PER_USER_KEYS = {
     "vision_model", "vision_enabled", "vision_model_fallbacks",
     "image_model", "image_gen_enabled", "image_quality",
+    "video_model", "video_gen_enabled", "video_resolution",
+    "video_aspect_ratio", "video_duration_seconds",
     # Default chat endpoint / model — without per-user resolution every new
     # account inherited whatever the most-recent admin picked, which then
     # got injected into the chat composer on first open.

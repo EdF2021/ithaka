@@ -832,6 +832,81 @@ async function initImageSettings() {
   if (enabledToggle) enabledToggle.addEventListener('change', function() { syncImgDisabled(); saveSettings(); });
 }
 
+/* ── Video generation (Veo) ── */
+// Price-per-second table mirrors src/video_gen.py's VEO_PRICE_PER_SECOND_720P
+// / 1080p tiers (docs/superpowers/plans/2026-09-02-image-video-autoroute.md).
+const VIDEO_PRICE_PER_SECOND = {
+  '720p': { 'veo-3.1-generate-preview': 0.40, 'veo-3.1-fast-generate-preview': 0.10, 'veo-3.1-lite-generate-preview': 0.05 },
+  '1080p': { 'veo-3.1-generate-preview': 0.40, 'veo-3.1-fast-generate-preview': 0.12, 'veo-3.1-lite-generate-preview': 0.08 },
+};
+
+async function initVideoSettings() {
+  const enabledToggle = el('set-videoEnabledToggle');
+  const modelSel = el('set-videoModelSelect');
+  const resSel = el('set-videoResolutionSelect');
+  const aspectSel = el('set-videoAspectSelect');
+  const durSel = el('set-videoDurationSelect');
+  const costLine = el('set-videoCostLine');
+  const msg = el('set-videoSettingsMsg');
+  const configWrap = modelSel ? modelSel.closest('div[style*="flex-direction"]') : null;
+
+  try {
+    const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    const settings = await settingsRes.json();
+    if (settings.video_model) modelSel.value = settings.video_model;
+    if (settings.video_resolution) resSel.value = settings.video_resolution;
+    if (settings.video_aspect_ratio) aspectSel.value = settings.video_aspect_ratio;
+    if (settings.video_duration_seconds != null) durSel.value = String(settings.video_duration_seconds);
+    if (enabledToggle) enabledToggle.checked = settings.video_gen_enabled === true;
+  } catch (e) { console.warn('Failed to load video settings', e); }
+
+  function syncVideoDisabled() {
+    var off = enabledToggle && !enabledToggle.checked;
+    var card = enabledToggle ? enabledToggle.closest('.admin-card') : null;
+    if (card) card.style.opacity = off ? '0.45' : '';
+    if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
+  }
+
+  function updateCostLine() {
+    if (!costLine) return;
+    var table = VIDEO_PRICE_PER_SECOND[resSel.value] || VIDEO_PRICE_PER_SECOND['720p'];
+    var perSecond = table[modelSel.value];
+    if (perSecond == null) { costLine.textContent = ''; return; }
+    var duration = parseInt(durSel.value, 10) || 0;
+    var cost = perSecond * duration;
+    costLine.textContent = 'Estimated cost per clip: $' + cost.toFixed(2);
+  }
+
+  syncVideoDisabled();
+  updateCostLine();
+
+  async function saveSettings() {
+    try {
+      var res = await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_gen_enabled: enabledToggle ? enabledToggle.checked : false,
+          video_model: modelSel.value,
+          video_resolution: resSel.value,
+          video_aspect_ratio: aspectSel.value,
+          video_duration_seconds: parseInt(durSel.value, 10) || 8,
+        }) });
+      if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        var detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message);
+        throw new Error(detail || 'Save failed');
+      }
+      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = ''; }, 2000);
+    } catch (e) { msg.textContent = e.message || 'Failed to save'; msg.style.color = 'var(--red)'; }
+  }
+
+  modelSel.addEventListener('change', function() { updateCostLine(); saveSettings(); });
+  resSel.addEventListener('change', function() { updateCostLine(); saveSettings(); });
+  aspectSel.addEventListener('change', saveSettings);
+  durSel.addEventListener('change', function() { updateCostLine(); saveSettings(); });
+  if (enabledToggle) enabledToggle.addEventListener('change', function() { syncVideoDisabled(); saveSettings(); });
+}
+
 /* ── Vision ── */
 async function initVisionSettings() {
   const vlSel = el('set-vlModelSelect');
@@ -2465,6 +2540,7 @@ function initAll() {
   initTeacherModel();
   initUtilityModel();
   initImageSettings();
+  initVideoSettings();
   initVisionSettings();
   initTtsSettings();
   initSttSettings();
