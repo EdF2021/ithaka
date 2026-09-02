@@ -157,6 +157,33 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 
+
+# Mirrors routes/chat_helpers.py's _session_notebook_id read-time guard, but
+# at write time: a broken client read (FormData.append() stringifying an
+# actual JS `undefined`, or a stray "null") must never persist as a literal
+# value on the sessions.notebook_id column — that value later poisons the
+# Chroma `where` filter and silently zeroes out RAG results (#112).
+_NOTEBOOK_ID_SENTINELS = frozenset({"undefined", "null"})
+
+
+def _clean_notebook_id_form_value(raw: str | None) -> str | None:
+    """Normalise a posted ``notebook_id`` form field for storage.
+
+    Empty/whitespace-only input and the client-side sentinels above both
+    become ``None``; anything else is returned trimmed. Logs a warning on the
+    sentinel case so a broken binding is diagnosable from prod logs alone.
+    """
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in _NOTEBOOK_ID_SENTINELS:
+        logger.warning(
+            "create_session: notebook_id posted as the literal string %r "
+            "— dropping (broken client binding, #112)", cleaned,
+        )
+        return None
+    return cleaned
+
 def _current_user_is_admin(request: Request, user: str | None) -> bool:
     if not user:
         return False
@@ -460,8 +487,10 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             rag=str(rag).lower() == "true" if rag else False,
             owner=user,
             # Binds the session to a notebook: chat then answers strictly from
-            # that notebook's sources (see routes/chat_helpers.py).
-            notebook_id=(notebook_id or "").strip() or None,
+            # that notebook's sources (see routes/chat_helpers.py). Rejects a
+            # stringified-JS-undefined/null binding — see
+            # _clean_notebook_id_form_value above (#112).
+            notebook_id=_clean_notebook_id_form_value(notebook_id),
         )
         # Set auth headers for custom API-key endpoints
         resolved_key = request_api_key

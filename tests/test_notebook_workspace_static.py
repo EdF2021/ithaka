@@ -549,7 +549,9 @@ def test_chat_js_snapshots_workspace_open_state_before_await():
     fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
     assert "_nbwsWorkspaceOpenAtSubmit" in fn
     snapshot_idx = fn.index("_nbwsWorkspaceOpenAtSubmit = ")
-    await_idx = fn.index("await sessionModule.materializePendingSession()")
+    # #112: materializePendingSession() now takes an optional pre-captured
+    # notebook-id snapshot argument, so match the call regardless of args.
+    await_idx = fn.index("await sessionModule.materializePendingSession(")
     assert snapshot_idx < await_idx
     # The guard itself must consume the snapshot, not a live call, after the await.
     guard_region = fn[await_idx:]
@@ -559,3 +561,29 @@ def test_chat_js_snapshots_workspace_open_state_before_await():
         "getLastMaterializedNotebookId())) {",
     )
     assert "isNotebookWorkspaceOpen" not in guard_if
+
+
+def test_chat_js_snapshots_notebook_id_before_await():
+    """#112 root cause: the #22/#132 guard snapshot (_nbwsWorkspaceOpenAtSubmit,
+    tested above) covered whether the workspace was open, not the notebook id
+    itself — window.notebookWorkspace.getCurrentNotebookId() must also be
+    read at the same synchronous, pre-await instant, immediately next to that
+    snapshot, and threaded into materializePendingSession() rather than left
+    for that function to read live after any future await could sneak in
+    between dispatch (_handleMindmapNodeClick) and the materialize call."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    assert "_nbwsNotebookIdAtSubmit" in fn
+    assert "getCurrentNotebookId" in fn
+
+    workspace_snapshot_idx = fn.index("_nbwsWorkspaceOpenAtSubmit = ")
+    notebook_id_snapshot_idx = fn.index("_nbwsNotebookIdAtSubmit = ")
+    await_idx = fn.index("await sessionModule.materializePendingSession(")
+
+    # Read right next to (and after) the workspace-open snapshot, but still
+    # strictly before the materialize await.
+    assert workspace_snapshot_idx < notebook_id_snapshot_idx < await_idx
+
+    # The materialize call must actually forward the snapshot, not silently
+    # drop it and let materializePendingSession() fall back to its own live
+    # read (which would reintroduce exactly the after-await gap this fixes).
+    assert "materializePendingSession(_nbwsNotebookIdAtSubmit)" in fn

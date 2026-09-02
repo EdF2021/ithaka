@@ -76,7 +76,7 @@ def test_create_direct_chat_does_not_capture_notebook_id():
 def test_materialize_pending_session_reads_notebook_binding_live():
     fn = _between(
         _SESSIONS,
-        "export async function materializePendingSession()",
+        "export async function materializePendingSession(notebookIdAtSubmit)",
         "\nexport function hasPendingChat()",
     )
     assert "window.notebookWorkspace?.isNotebookWorkspaceOpen?.()" in fn
@@ -117,7 +117,8 @@ def test_first_send_fail_closed_blocks_ungrounded_pending_session():
         "if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {",
         "\n    }\n",
     )
-    assert "sessionModule.materializePendingSession()" in block
+    # #112: now called with a pre-captured notebook-id snapshot argument.
+    assert "sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit)" in block
     assert "_nbwsWorkspaceOpenAtSubmit" in block
     assert "isNotebookWorkspaceOpen" not in block
     assert "getLastMaterializedNotebookId" in block
