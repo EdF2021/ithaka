@@ -224,7 +224,51 @@ _NAME_PATTERNS = [
     re.compile(r"\bname is\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
     re.compile(r"\bcalled\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
     re.compile(r"\bnaam is\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
+    # Reversed/possessive phrasing the extraction LLM also produces, e.g.
+    # "Thiermen Naaij is the user's full name" — this is the EXACT wording
+    # from issue #101's repro. Without this pattern _extract_name_value
+    # returned None for it, so _identity_conflicts never fired even with a
+    # conflicting name already pinned. The optional non-capturing
+    # "(?:the\s+user\s+)?" prefix strips a redundant "The user X is the
+    # user's full name" phrasing BEFORE the lazy capture starts, so the
+    # capture group can't swallow it into the name (over-capture ->
+    # "user thiermen naaij").
+    re.compile(
+        r"\b(?:the\s+user\s+)?([A-Za-z][A-Za-z .'\-]{1,50}?)\s+is the user['’]?s (?:full )?name\b",
+        re.I,
+    ),
+    re.compile(r"\buser is called\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
+    # "Name: Ed" / "Name: Thiermen Naaij" — the shape a real deployed model
+    # (gpt-oss) actually emits; verified live on the :7001 smoke instance.
+    re.compile(r"\bname:\s*([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
+    re.compile(r"\bnamed\s+([A-Za-z][A-Za-z .'\-]{1,50})", re.I),
 ]
+
+# Self-statement phrases (Dutch + English) that indicate the USER is
+# introducing themselves or stating a durable personal fact about
+# themselves, as opposed to e.g. a greeting merely naming someone else
+# ("Goedemiddag Thiermen Naaij."). See #101. This gate applies to EVERY
+# identity-category fact, not just ones where a name is parseable out of
+# the (LLM-paraphrased) fact text -- a real model emitting "Name: Thiermen
+# Naaij" or "Works at CEDA" must still be gated on the SOURCE message, since
+# the fact text itself carries no self/other signal.
+# A false positive here only PERMITS auto-pinning (never worse than
+# pre-#101 behavior), so these stay simple presence checks rather than
+# trying to bind the matched phrase to a specific name/fact.
+_SELF_STATEMENT_PATTERN = re.compile(
+    r"\b(my name is|i am|i['’]m|call me|i work|i live|i was born|"
+    r"my (?:job|birthday|birth date) is|"
+    r"mijn naam is|ik ben|ik heet|noem me|ik werk|ik woon|ik ben geboren|"
+    r"mijn (?:baan|werk|functie|geboortedatum|verjaardag) is|"
+    r"aangenaam|"
+    r"mag me\b[\s\S]{0,40}\bnoemen"
+    r")\b"
+    # "<Name> hier." / "Hallo, Ed hier." — a common Dutch self-intro idiom
+    # where "hier" closes the message; anchored to end-of-message so a
+    # mid-sentence "kom hier" doesn't false-positive.
+    r"|\bhier\s*[.!]?\s*$",
+    re.I,
+)
 
 
 def _extract_name_value(text: str) -> Optional[str]:
@@ -237,12 +281,28 @@ def _extract_name_value(text: str) -> Optional[str]:
     return None
 
 
+def _names_compatible(name_a: str, name_b: str) -> bool:
+    """True when two lowercased names plausibly refer to the SAME person
+    under a first-name vs. full-name reading -- one name's token set is a
+    subset of the other's (e.g. "ed" vs. "ed de feber"). Without this, a
+    later, fuller extraction of an already-pinned name (a common LLM
+    paraphrase) reads as a conflicting SECOND identity and gets wrongly
+    unpinned."""
+    tokens_a = set(name_a.split())
+    tokens_b = set(name_b.split())
+    if not tokens_a or not tokens_b:
+        return False
+    return tokens_a <= tokens_b or tokens_b <= tokens_a
+
+
 def _identity_conflicts(new_text: str, existing: list) -> bool:
     """True when new_text names someone that contradicts an already-pinned
     identity fact naming someone else (see #101: a single low-signal message
     — a test greeting — got auto-pinned as a permanent core fact alongside an
     existing, conflicting name). Narrow, name-only check; other identity
-    facts (job, city, ...) are not mutually exclusive so are left alone."""
+    facts (job, city, ...) are not mutually exclusive so are left alone. A
+    fuller/shorter form of the same name (see _names_compatible) is not a
+    conflict."""
     new_name = _extract_name_value(new_text)
     if not new_name:
         return False
@@ -250,7 +310,23 @@ def _identity_conflicts(new_text: str, existing: list) -> bool:
         if not entry.get("pinned") or entry.get("category") != "identity":
             continue
         existing_name = _extract_name_value(entry.get("text", ""))
-        if existing_name and existing_name != new_name:
+        if existing_name and existing_name != new_name and not _names_compatible(new_name, existing_name):
+            return True
+    return False
+
+
+def _has_self_stated_identity(messages) -> bool:
+    """True when at least one USER message in the extraction window is a
+    first-person self-statement ("my name is", "ik ben", "call me", ...)
+    rather than e.g. a greeting naming someone else in vocative position
+    ("Goedemiddag Thiermen Naaij.") — see #101. A false positive here (e.g.
+    "ik ben moe" / "I am tired") only *permits* auto-pinning a name claim,
+    matching prior behavior — it never makes things worse, so the pattern is
+    kept deliberately simple rather than trying to parse grammar."""
+    for msg in messages or []:
+        if _message_role(msg) != "user":
+            continue
+        if _SELF_STATEMENT_PATTERN.search(_message_text(msg)):
             return True
     return False
 
@@ -474,14 +550,28 @@ async def extract_and_store(
 
             entry = memory_manager.add_entry(fact_text, source="auto", category=category, owner=_owner)
             # Auto-pin identity facts (name, job, location) — core context —
-            # unless it names someone that conflicts with an already-pinned
-            # identity fact (see #101); such facts are still stored, just not
-            # auto-injected every turn, until a human resolves the conflict.
+            # unless (see #101): (a) it names someone that conflicts with an
+            # already-pinned identity fact, or (b) the source message(s) have
+            # no first-person self-statement backing it — e.g. a greeting
+            # addressed to a name ("Goedemiddag Thiermen Naaij.") rather than
+            # a self-introduction ("Ik ben ..."/"My name is ..."). Both
+            # checks run on the extraction WINDOW (stripped_recent), not on
+            # the LLM-paraphrased fact_text: a real model emits shapes like
+            # "Name: Thiermen Naaij" or "Works at CEDA" that carry no
+            # self/other signal of their own (confirmed live on the :7001
+            # smoke instance — gating on fact_text parsing alone let a bare
+            # greeting through). Such facts are still stored, just not
+            # auto-injected every turn, until a human confirms/resolves them.
             if category == "identity":
                 if _identity_conflicts(fact_text, user_existing):
-                    logger.warning(
+                    logger.info(
                         f"Identity conflict: not auto-pinning '{fact_text[:60]}' "
                         "— conflicts with an existing pinned identity fact"
+                    )
+                elif not _has_self_stated_identity(stripped_recent):
+                    logger.info(
+                        f"Identity low-signal: not auto-pinning '{fact_text[:60]}' "
+                        "— no self-statement found in the source message(s)"
                     )
                 else:
                     entry["pinned"] = True
