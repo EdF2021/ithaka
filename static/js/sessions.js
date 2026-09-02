@@ -441,6 +441,11 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
 
   const sub = document.createElement('div');
   sub.className = 'dropdown session-folder-submenu';
+  // Hardening: `.session-folder-submenu { position: fixed }` (style.css)
+  // currently wins on CSS specificity over the base `.dropdown { position:
+  // absolute }` rule — make the intent explicit inline so a future CSS
+  // refactor of those selectors can't silently break it.
+  sub.style.position = 'fixed';
 
   // "No folder" option
   const noneOpt = document.createElement('div');
@@ -736,6 +741,11 @@ function createSessionItem(s) {
   // Create dropdown menu
   const dropdown = document.createElement('div');
   dropdown.className = 'dropdown session-dropdown session-dropdown-menu';
+  // Hardening: `.session-dropdown-menu { position: fixed }` (style.css)
+  // currently wins on CSS specificity over the base `.dropdown { position:
+  // absolute }` rule — make the intent explicit inline so a future CSS
+  // refactor of those selectors can't silently break it.
+  dropdown.style.position = 'fixed';
 
   // Create menu items
   const _icon = (svg) => `<span class="dropdown-icon">${svg}</span>`;
@@ -2757,6 +2767,11 @@ function _showDropdown(anchorEl, items) {
 
   const dd = document.createElement('div');
   dd.className = 'dropdown session-dropdown-menu archive-dd';
+  // Hardening: `.session-dropdown-menu { position: fixed }` (style.css)
+  // currently wins on CSS specificity over the base `.dropdown { position:
+  // absolute }` rule — make the intent explicit inline so a future CSS
+  // refactor of those selectors can't silently break it.
+  dd.style.position = 'fixed';
   for (const item of items) {
     const row = document.createElement('div');
     row.className = 'dropdown-item-compact' + (item.danger ? ' dropdown-item-danger' : '');
