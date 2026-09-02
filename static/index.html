@@ -1664,6 +1664,44 @@
               <div id="set-imgSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>
+          <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:1px;opacity:0.6;flex-shrink:0"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="M16 9.5l5-3v11l-5-3z"/></svg>Video Generation<span style="flex:1"></span><label class="admin-switch"><input type="checkbox" id="set-videoEnabledToggle"><span class="admin-slider"></span></label></h2>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Generate short video clips with Veo when the chat asks for a video.</div>
+            <div style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Model</label>
+                <select id="set-videoModelSelect" class="settings-select">
+                  <option value="veo-3.1-generate-preview">Veo 3.1 (best, $0.40/s)</option>
+                  <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast ($0.10/s)</option>
+                  <option value="veo-3.1-lite-generate-preview">Veo 3.1 Lite ($0.05/s)</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Resolution</label>
+                <select id="set-videoResolutionSelect" class="settings-select">
+                  <option value="720p">720p</option>
+                  <option value="1080p">1080p</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Aspect</label>
+                <select id="set-videoAspectSelect" class="settings-select">
+                  <option value="16:9">16:9</option>
+                  <option value="9:16">9:16</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Duration</label>
+                <select id="set-videoDurationSelect" class="settings-select">
+                  <option value="4">4 seconds</option>
+                  <option value="6">6 seconds</option>
+                  <option value="8">8 seconds</option>
+                </select>
+              </div>
+              <div id="set-videoCostLine" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
+              <div id="set-videoSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
+            </div>
+          </div>
           <!-- TTS panel hidden — user opted out of read-aloud entirely. Kept
                in DOM so the JS that wires set-ttsProviderSelect etc. doesn't
                throw on missing nodes; not visible to anyone. -->
