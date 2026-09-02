@@ -253,7 +253,7 @@ const VoiceMode = {
       if (this._errStreak >= 3) {
         console.error('VoiceMode: 3 transcription errors in a row, deactivating')
         this.deactivate()
-        this._showSttError('Voice mode uitgeschakeld na 3 STT-fouten')
+        this._showSttError('Voice mode disabled after 3 speech recognition errors')
         return
       }
     }

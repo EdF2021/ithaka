@@ -257,7 +257,7 @@ def test_three_transcription_errors_deactivate_with_persistent_message():
     assert values["active"] is False
     # 3 per-attempt messages + 1 final persistent line
     assert len(values["calls"]) == 4
-    assert values["calls"][-1] == 'Voice mode uitgeschakeld na 3 STT-fouten'
+    assert values["calls"][-1] == 'Voice mode disabled after 3 speech recognition errors'
 
 
 def test_transcribed_outcome_does_not_double_arm():
