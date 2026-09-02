@@ -22,8 +22,13 @@
 //     onResizeEnd,  // ({rect}) => void
 //   })
 
+import { zoomOf, toLocalPx } from './uiZoom.js';
+
 const EDGE = 7;          // px proximity to a border that arms a resize grip
-const MIN_W = 320;       // smallest a window may be dragged to
+const MIN_W = 320;       // smallest a window may be dragged to (viewport px —
+                          // compared directly against viewport-space width in
+                          // move(), same as windowDrag.js's SNAP_PX/DOCK_EDGE_PX
+                          // gesture thresholds; see move()'s comment)
 const MIN_H = 200;
 // Controls that must keep their own click/drag behaviour even when they sit
 // within EDGE px of the window border (close buttons, sliders, inputs, links).
@@ -96,6 +101,12 @@ export function makeWindowResizable(content, options = {}) {
     content.style.animation = 'none';
     content.classList.add('window-resizing');
     const r = content.getBoundingClientRect();
+    // startRect stays in viewport-space (raw getBoundingClientRect values,
+    // undivided) for the life of the resize — see move(), which folds the
+    // zoom division into a single pass over the computed left/top/width/
+    // height so the carried-over start values and the live cursor delta
+    // never get divided separately (same pattern as windowDrag.js's
+    // startLeft/startTop, PR #127).
     startRect = { left: r.left, top: r.top, width: r.width, height: r.height };
     startX = cx; startY = cy;
     // Pin to fixed with explicit box, same as the drag helper does, so the
@@ -104,10 +115,15 @@ export function makeWindowResizable(content, options = {}) {
     content.style.position = 'fixed';
     content.style.margin = '0';
     content.style.transform = 'none';
-    content.style.left = r.left + 'px';
-    content.style.top = r.top + 'px';
-    content.style.width = r.width + 'px';
-    content.style.height = r.height + 'px';
+    // UI text-scale zoom (:root.ui-scale-125) — content is now position:fixed
+    // (viewport-anchored), so the fresh getBoundingClientRect() values above
+    // must be divided by the zoom before assigning as local px (see
+    // uiZoom.js, PR #76/#77/#121/#127).
+    const _z0 = zoomOf(document.documentElement);
+    content.style.left = toLocalPx(r.left, _z0) + 'px';
+    content.style.top = toLocalPx(r.top, _z0) + 'px';
+    content.style.width = toLocalPx(r.width, _z0) + 'px';
+    content.style.height = toLocalPx(r.height, _z0) + 'px';
     content.style.maxWidth = 'none';
     content.style.maxHeight = 'none';
     document.body.classList.add('window-resizing-active');
@@ -116,6 +132,21 @@ export function makeWindowResizable(content, options = {}) {
 
   function move(cx, cy) {
     if (!resizing) return;
+    // UI text-scale zoom (:root.ui-scale-125) — startRect and the cx/cy
+    // cursor position are both viewport-space (see begin()), so every
+    // left/top/width/height computed below stays viewport-space too; the
+    // whole result is divided once at assignment time rather than dividing
+    // startRect and the delta separately (that would double-convert the
+    // part carried over from a prior frame — same pattern as windowDrag.js's
+    // _onMove, PR #127). minW/minH stay bare (undivided) here — they're a
+    // comparison threshold inside viewport-space gesture math, same as
+    // windowDrag.js's SNAP_PX/UNSNAP_PX/DOCK_EDGE_PX compared directly
+    // against raw cx/cy (PR #127), not a value added at the local-px
+    // assignment site (that's #130's gap-constant precedent, a different
+    // shape). Net effect: the resize floor stays a fixed 320/200 real
+    // screen px regardless of zoom level, matching windowDrag's gesture
+    // thresholds.
+    const _z = zoomOf(document.documentElement);
     const dx = cx - startX, dy = cy - startY;
     let { left, top, width, height } = startRect;
     const vw = window.innerWidth, vh = window.innerHeight;
@@ -132,10 +163,10 @@ export function makeWindowResizable(content, options = {}) {
     if (active.t && top < 0) { height += top; top = 0; }
     if (left + width > vw) width = Math.max(minW, vw - left);
     if (top + height > vh) height = Math.max(minH, vh - top);
-    content.style.left = left + 'px';
-    content.style.top = top + 'px';
-    content.style.width = width + 'px';
-    content.style.height = height + 'px';
+    content.style.left = toLocalPx(left, _z) + 'px';
+    content.style.top = toLocalPx(top, _z) + 'px';
+    content.style.width = toLocalPx(width, _z) + 'px';
+    content.style.height = toLocalPx(height, _z) + 'px';
   }
 
   function end() {
@@ -147,7 +178,13 @@ export function makeWindowResizable(content, options = {}) {
     clearHoverCursor();
     const r = content.getBoundingClientRect();
     if (storageKey) {
-      try { localStorage.setItem(storageKey, JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) })); } catch (_) {}
+      // UI text-scale zoom (:root.ui-scale-125) — r.width/height is the
+      // rendered (viewport-space) size; persist the LOCAL px equivalent so
+      // a later restore (which assigns the saved value straight to
+      // style.width/height, see below) doesn't re-multiply it by the zoom
+      // in effect at restore time (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
+      try { localStorage.setItem(storageKey, JSON.stringify({ w: Math.round(toLocalPx(r.width, _z)), h: Math.round(toLocalPx(r.height, _z)) })); } catch (_) {}
     }
     if (onResizeEnd) { try { onResizeEnd({ rect: r }); } catch (_) {} }
   }
@@ -220,8 +257,14 @@ export function makeWindowResizable(content, options = {}) {
       try {
         const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
         if (saved && saved.w && saved.h) {
-          const w = Math.max(minW, Math.min(saved.w, window.innerWidth));
-          const h = Math.max(minH, Math.min(saved.h, window.innerHeight));
+          // `saved.w/h` (from end() above) is LOCAL px; `minW`/`minH` are
+          // viewport-space (see move()'s comment) and window.innerWidth/
+          // innerHeight is viewport-space too — both need toLocalPx before
+          // comparing against the local saved size (see uiZoom.js, PR
+          // #76/#77).
+          const _z = zoomOf(document.documentElement);
+          const w = Math.max(toLocalPx(minW, _z), Math.min(saved.w, toLocalPx(window.innerWidth, _z)));
+          const h = Math.max(toLocalPx(minH, _z), Math.min(saved.h, toLocalPx(window.innerHeight, _z)));
           content.style.width = w + 'px';
           content.style.height = h + 'px';
           content.style.maxWidth = 'none';

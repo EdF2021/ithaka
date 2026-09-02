@@ -1701,9 +1701,16 @@ function _animateReflow(prevPositions) {
     const dx = prev.left - next.left;
     const dy = prev.top - next.top;
     if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+    // UI text-scale zoom (:root.ui-scale-125) — dx/dy is a delta between two
+    // getBoundingClientRect() reads (viewport-space), but `card` renders
+    // inside the zoomed root, so the FLIP invert-transform must be divided
+    // by the effective zoom before assignment or the reflow overshoots
+    // (same re-multiplication bug class as position:top/left; see
+    // uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     // Invert: jump back to old position
     card.style.transition = 'none';
-    card.style.transform = `translate(${dx}px, ${dy}px)`;
+    card.style.transform = `translate(${toLocalPx(dx, _z)}px, ${toLocalPx(dy, _z)}px)`;
     // Play: animate to 0
     requestAnimationFrame(() => {
       card.style.transition = 'transform 0.25s cubic-bezier(0.34, 1.2, 0.64, 1)';
@@ -2724,8 +2731,12 @@ function _bindCardEvents(body) {
       const dx = prev.left - next.left;
       const dy = prev.top - next.top;
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      // UI text-scale zoom (:root.ui-scale-125) — same FLIP re-multiplication
+      // bug as _animateReflow above: divide the viewport-space rect delta by
+      // the effective zoom before assigning it to the transform.
+      const _z = zoomOf(document.documentElement);
       c.style.transition = 'none';
-      c.style.transform = `translate(${dx}px, ${dy}px)`;
+      c.style.transform = `translate(${toLocalPx(dx, _z)}px, ${toLocalPx(dy, _z)}px)`;
       requestAnimationFrame(() => {
         c.style.transition = 'transform 0.22s cubic-bezier(0.34, 1.2, 0.64, 1)';
         c.style.transform = '';
