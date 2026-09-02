@@ -59,4 +59,16 @@ worktrees, regie/reviews/merges centraal; elke PR met CI + bewijs in chat vóór
 - `gh pr checks`-watchloops direct na PR-aanmaak kunnen te vroeg DONE zeggen (checks nog niet
   geregistreerd) — eerst ~30s slapen.
 
+## Eindstand & open punten
+
+- Prod herbouwd op dev t/m #121; live geverifieerd: app gezond, Mail-widget toont de echte
+  live-telling (2140, screenshot in sessie).
+- **PR #123** (unread altijd live tellen met in-memory TTL-cache — heft het 907↔2140-flip-floppen
+  van het partiële index-pad op): CI groen, **merge door Ed tegengehouden** — wacht op zijn
+  beslissing (comment op #119). Tot die tijd kan het widget-getal wisselen per TTL-pad.
+- #121-restgap: mobile-only notes-drag-ghost-maat niet visueel verifieerbaar (native touch-DnD
+  buiten CDP-bereik) — genoteerd op #122.
+- Open issues na deze run: #112 (RAG voorstel B + prod-validatie), #122 (zoom-restklasse),
+  #119 (tot #123 landt), #81 (release-watch), plus pre-existing #103/#102 (dependabot).
+
 Ed de Feber, in nauwe samenwerking met Claude
