@@ -88,6 +88,10 @@ _PASSIVE_PATTERNS = (
     # polled every 2s by static/js/notebookWorkspace.js) — same shape and
     # reasoning as the podcast pattern above.
     re.compile(r"^/api/notebooks/[^/]+/video/[^/]+$"),
+    # The chat/agent Veo job-status poller (GET /api/video/jobs/{job_id},
+    # polled every 5s by static/js/chat.js while a generate_video job runs) —
+    # same shape and reasoning as the two patterns above.
+    re.compile(r"^/api/video/jobs/[^/]+$"),
 )
 
 
