@@ -24,6 +24,8 @@ from src.llm_core import (
 from src.model_context import estimate_tokens
 from src.settings import get_setting
 from src.prompt_security import untrusted_context_message
+# Pure stdlib module (re/dataclasses/typing only) — no circular-import risk.
+from src.action_intents import media_intent
 from src.tool_security import (
     PLAN_MODE_READONLY_TOOLS,
     blocked_tools_for_owner,
@@ -327,6 +329,10 @@ _DOMAIN_RULES = {
 ## Integration/API rules
 - To query or control a configured service integration (Home Assistant, Miniflux, Gitea, Linkding, Jellyfin, or any other registered service), use `api_call` with the integration name, HTTP method, path, and optional JSON body.
 - Do not use shell, curl, or `app_api` to reach a user's connected integration when `api_call` is available.""",
+    "media": """\
+## Image/video generation rules
+- To make/generate/create an image, illustration, photo, logo, poster, or drawing, use `generate_image`.
+- To make/generate/create a video, clip, or animation, use `generate_video`. It runs as a background job and renders inline in the chat when ready — do not wait for it or report the video as already made.""",
 }
 
 _DOMAIN_TOOL_MAP = {
@@ -341,6 +347,7 @@ _DOMAIN_TOOL_MAP = {
     "settings": {"manage_settings", "manage_endpoints", "manage_mcp", "manage_webhooks", "manage_tokens", "app_api"},
     "contacts": {"resolve_contact", "manage_contact"},
     "integrations": {"api_call"},
+    "media": {"generate_image", "generate_video"},
 }
 
 def _domain_rules_for_tools(tool_names: set) -> list[str]:
@@ -1132,6 +1139,21 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     if has(r"\bapi[ _]call\b", r"\bintegrations?\b",
            r"\b(?:home ?assistant|miniflux|gitea|linkding|jellyfin)\b"):
         domains.add("integrations")
+    # Image/video generation intent — mirrors the #3794 fix above for
+    # integrations. classify_tool_intent() already promotes chat->agent for
+    # these requests (category=image/video), but without a matching domain
+    # here the request had no domain, was classified low_signal, and hit the
+    # direct low-signal reply path (no tools at all — the model just answered
+    # "Hey." instead of calling generate_image/generate_video). Shares
+    # media_intent() with action_intents.classify_tool_intent so the two
+    # classifiers cannot drift on what counts as a generation request. Checks
+    # both `text` (this turn) and `retrieval_query` (recent context on an
+    # explicit continuation, e.g. "maak een video van golven" -> assistant
+    # asks a clarifying question -> user replies "ja doe maar") so a
+    # confirmation reply doesn't drop the seeded media tools, matching how
+    # every other `has(...)` detector above already reads `q`.
+    if media_intent(text) or media_intent(retrieval_query):
+        domains.add("media")
 
     low_signal = not continuation and not domains
     return {

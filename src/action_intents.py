@@ -46,6 +46,55 @@ _PANEL = (
     r"settings|cookbook|sessions?|chats?|skills|memories|memory|brain)"
 )
 
+# Image/video generation intent. Word order varies (English "make a video",
+# Dutch object-before-verb "een animatie maken"), so each pattern matches
+# either creation-verb-then-thing or thing-then-creation-verb, with a bounded
+# word gap between them. Deliberately keyed on CREATION verbs + a media noun,
+# not bare nouns, so "beschrijf deze afbeelding" (describe/vision) or "zoek
+# een video" (search) don't fire — those go through _MEDIA_NEG below as a
+# second line of defense for verb+noun co-occurrences that aren't creation
+# requests (e.g. "search for how to render an image").
+_MEDIA_MAKE = (
+    r"(?:maak|maken|genereer|genereren|teken|tekenen|creëer|creëren|creeer|creeren|"
+    r"ontwerp|ontwerpen|render|renderen|rendering|schets|schetsen|make|making|"
+    r"generate|generating|draw|drawing|create|creating|design|designing|"
+    r"paint|painting)"
+)
+_IMAGE_THING = r"(?:afbeelding|plaatje|foto|illustratie|logo|poster|tekening|icoon|banner|image|picture|photo|illustration|drawing|icon)"
+_VIDEO_THING = r"(?:video|filmpje|clip|animatie|animation|reel)"
+_MEDIA_GAP = r"(?:\s+\S+){0,6}?"
+_MEDIA_NEG = re.compile(
+    r"\b(?:zoek|zoeken|vind|vinden|search|find|bekijk|bekijken|beschrijf|beschrijven|"
+    r"analyseer|analyseren|describe|analy[sz]e|upload|uploaden|transcribeer|"
+    r"transcriberen|transcribe|samenvat|vat\s+samen|summari[sz]e|youtube)\b",
+    re.I,
+)
+_IMAGE_PATTERN_STR = rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_IMAGE_THING}\b|\b{_IMAGE_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"
+_VIDEO_PATTERN_STR = rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_VIDEO_THING}\b|\b{_VIDEO_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"
+_IMAGE_PATTERN = re.compile(_IMAGE_PATTERN_STR, re.I)
+_VIDEO_PATTERN = re.compile(_VIDEO_PATTERN_STR, re.I)
+
+
+def media_intent(text: str) -> str | None:
+    """Return "image", "video", or None for a media-generation request.
+
+    Single source of truth for the image/video creation-request detection
+    (pattern match + _MEDIA_NEG guard), shared by classify_tool_intent (chat
+    -> agent escalation) and agent_loop._classify_agent_request (agent-mode
+    domain/low-signal detection) so the two classifiers cannot drift on what
+    counts as "the user wants an image/video made".
+    """
+    if not text:
+        return None
+    if _MEDIA_NEG.search(text):
+        return None
+    if _IMAGE_PATTERN.search(text):
+        return "image"
+    if _VIDEO_PATTERN.search(text):
+        return "video"
+    return None
+
+
 _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
     (category, reason, re.compile(pattern, re.I))
     for category, reason, pattern in (
@@ -89,6 +138,12 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         # UI/control-plane actions that should open panels or flip toggles.
         ("ui", "open/show panel request", rf"{_PLEASE}(?:open|show|bring\s+up)\s+(?:me\s+)?(?:my\s+|the\s+)?{_PANEL}\b"),
         ("ui", "tool or feature toggle request", r"\b(?:disable|enable|turn\s+(?:on|off))\s+(?:the\s+)?(?:shell|search|web|browser|documents?|memory|skills|images?|calendar|email|mail|research|incognito)\b"),
+
+        # Image/video generation requests. Inserted before the "web" block so
+        # a creation request ("maak een afbeelding", "make a video") is never
+        # swallowed by the generic search/lookup patterns below.
+        ("image", "image generation request", _IMAGE_PATTERN_STR),
+        ("video", "video generation request", _VIDEO_PATTERN_STR),
 
         # Deep research jobs, not quick conceptual mentions of research.
         ("web", "explicit web search request", rf"{_PLEASE}(?:do|run|use|perform|make)\s+(?:a\s+)?(?:web\s+search|search\s+the\s+web)\b.+"),
@@ -138,6 +193,14 @@ def classify_tool_intent(text: str) -> ToolIntent:
         return ToolIntent(False, reason="explanatory feature question")
     for category, reason, pattern in _ROUTING_PATTERNS:
         if pattern.search(text):
+            # Image/video acceptance is delegated to the shared media_intent()
+            # helper (also used by agent_loop._classify_agent_request) instead
+            # of re-checking _MEDIA_NEG here, so the two classifiers cannot
+            # drift on what counts as a generation request vs. a search/
+            # describe/upload/transcribe mention ("zoek een afbeelding",
+            # "beschrijf deze foto", "vat deze video samen").
+            if category in ("image", "video") and media_intent(text) != category:
+                continue
             return ToolIntent(True, category=category, reason=reason)
     return ToolIntent(False, reason="no tool-action pattern matched")
 

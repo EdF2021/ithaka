@@ -109,6 +109,10 @@ PUBLIC_ALLOWED_TOOLS = frozenset({
     # setting — not admin-only. Now a native tool (added to FUNCTION_TOOL_SCHEMAS
     # so chat models can generate inline), so it must be classified here.
     "generate_image",
+    # Same class as generate_image: a user-facing video capability, gated at
+    # the route by the can_generate_videos privilege and the
+    # video_gen_enabled setting — not admin-only.
+    "generate_video",
     "list_cached_models",
     "list_cookbook_servers",
     "list_downloads",

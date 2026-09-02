@@ -522,3 +522,45 @@ def test_guide_only_skips_teacher_escalation(monkeypatch):
     )
 
     assert any("Could you tell me" in chunk for chunk in chunks)
+
+
+def test_first_turn_image_request_does_not_hit_direct_low_signal_path(monkeypatch, caplog):
+    """Regression for the integration-smoke gap: chat->agent auto-escalation
+    fired (category=image), but a first-turn "maak een afbeelding van een
+    kat" found no domain in _classify_agent_request, so low_signal=True sent
+    it down the direct low-signal reply path (no tools at all -- the model
+    answered "Hey." instead of calling generate_image). The "media" domain
+    (src/agent_loop.py _DOMAIN_TOOL_MAP, fed by src.action_intents.media_intent)
+    fixes this; this test drives the real loop (relevant_tools=None, so
+    _classify_agent_request/_select_agent_tools actually run) and asserts the
+    "[agent] direct low-signal reply path" log line never fires.
+    """
+    import logging as _logging
+    import src.tool_index as tool_index_mod
+
+    _patch_loop_basics(monkeypatch)
+
+    async def _fake_stream(_candidates, messages, **kwargs):
+        yield _delta_chunk("Ik maak de afbeelding.")
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+
+    class _FakeToolIndex:
+        def get_tools_for_query(self, query, k=8):
+            return {"generate_image", "ask_user", "update_plan", "manage_memory"}
+
+    monkeypatch.setattr(tool_index_mod, "get_tool_index", lambda: _FakeToolIndex(), raising=False)
+
+    caplog.set_level(_logging.INFO, logger="src.agent_loop")
+    chunks = _collect(
+        al.stream_agent_loop(
+            "http://local.test/v1",
+            "local-model",
+            [{"role": "user", "content": "maak een afbeelding van een kat"}],
+            max_rounds=1,
+        )
+    )
+
+    assert not any("direct low-signal reply path" in r.getMessage() for r in caplog.records)
+    assert any("Ik maak de afbeelding" in chunk for chunk in chunks)
