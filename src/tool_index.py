@@ -83,6 +83,7 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "update_document": "Replace the entire active document content. ONLY for full rewrites (>50% changed). Do not use for small edits — use edit_document instead.",
     "suggest_document": "Suggest changes to the active document with explanations. For code review, proofreading, feedback requests.",
     "generate_image": "Generate an AI image from a text prompt. Specify model, size, and quality. Art, illustrations, photos.",
+    "generate_video": "Generate a short AI video clip (Veo) from a text prompt. Use when the user asks to make/generate/create a video, clip or animation. Renders inline when ready.",
     "chat_with_model": "Send a message to a different AI model. Compare responses, get specialized help, delegate tasks.",
     "ask_teacher": "Ask a more capable model for help with a difficult problem. Escalate complex tasks.",
     "pipeline": "Run a multi-step AI pipeline with multiple models. Chain tasks together in sequence.",
@@ -357,8 +358,25 @@ class ToolIndex:
                    "maak een plaatje", "maak een tekening", "maak een foto",
                    "maak een illustratie", "een illustratie", "illustration",
                    "genereer een afbeelding", "genereer een plaatje",
-                   "genereer een foto", "genereer een tekening"}):
+                   "genereer een foto", "genereer een tekening",
+                   "maak een logo", "maak een poster", "generate a logo",
+                   "create a logo", "make a poster", "teken een"}):
             {"generate_image"},
+        # Video generation. Same rationale as the image set above: keyed on
+        # creation-verb + video-noun phrases (NL + EN) so describe/search/
+        # watch intents ("vat deze video samen", "zoek een video") don't
+        # force the tool. Bare "clip"/"filmpje"/"animatie"/"animation" are
+        # included too since a creation phrase can have extra words between
+        # the verb and the noun ("create a short clip") that a literal
+        # multi-word phrase would miss; "video" itself stays out of the bare
+        # set — too generic (watch/find/describe a video).
+        frozenset({"maak een video", "maak een filmpje", "genereer een video",
+                   "genereer een filmpje", "maak een animatie",
+                   "genereer een animatie", "make a video", "generate a video",
+                   "create a video", "create a clip", "make a clip",
+                   "create an animation", "make an animation", "video van",
+                   "video of", "clip", "filmpje", "animatie", "animation"}):
+            {"generate_video"},
         # Detached background `bash` jobs (#!bg): check on / read output / kill.
         frozenset({"background job", "background jobs", "bg job", "bg jobs",
                    "background task", "is the job done", "check the job",

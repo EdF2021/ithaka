@@ -46,6 +46,30 @@ _PANEL = (
     r"settings|cookbook|sessions?|chats?|skills|memories|memory|brain)"
 )
 
+# Image/video generation intent. Word order varies (English "make a video",
+# Dutch object-before-verb "een animatie maken"), so each pattern matches
+# either creation-verb-then-thing or thing-then-creation-verb, with a bounded
+# word gap between them. Deliberately keyed on CREATION verbs + a media noun,
+# not bare nouns, so "beschrijf deze afbeelding" (describe/vision) or "zoek
+# een video" (search) don't fire — those go through _MEDIA_NEG below as a
+# second line of defense for verb+noun co-occurrences that aren't creation
+# requests (e.g. "search for how to render an image").
+_MEDIA_MAKE = (
+    r"(?:maak|maken|genereer|genereren|teken|tekenen|creëer|creëren|creeer|creeren|"
+    r"ontwerp|ontwerpen|render|renderen|rendering|schets|schetsen|make|making|"
+    r"generate|generating|draw|drawing|create|creating|design|designing|"
+    r"paint|painting)"
+)
+_IMAGE_THING = r"(?:afbeelding|plaatje|foto|illustratie|logo|poster|tekening|icoon|banner|image|picture|photo|illustration|drawing|icon)"
+_VIDEO_THING = r"(?:video|filmpje|clip|animatie|animation|reel)"
+_MEDIA_GAP = r"(?:\s+\S+){0,6}?"
+_MEDIA_NEG = re.compile(
+    r"\b(?:zoek|zoeken|vind|vinden|search|find|bekijk|bekijken|beschrijf|beschrijven|"
+    r"analyseer|analyseren|describe|analy[sz]e|upload|uploaden|transcribeer|"
+    r"transcriberen|transcribe|samenvat|vat\s+samen|summari[sz]e|youtube)\b",
+    re.I,
+)
+
 _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
     (category, reason, re.compile(pattern, re.I))
     for category, reason, pattern in (
@@ -89,6 +113,12 @@ _ROUTING_PATTERNS: tuple[tuple[str, str, Pattern[str]], ...] = tuple(
         # UI/control-plane actions that should open panels or flip toggles.
         ("ui", "open/show panel request", rf"{_PLEASE}(?:open|show|bring\s+up)\s+(?:me\s+)?(?:my\s+|the\s+)?{_PANEL}\b"),
         ("ui", "tool or feature toggle request", r"\b(?:disable|enable|turn\s+(?:on|off))\s+(?:the\s+)?(?:shell|search|web|browser|documents?|memory|skills|images?|calendar|email|mail|research|incognito)\b"),
+
+        # Image/video generation requests. Inserted before the "web" block so
+        # a creation request ("maak een afbeelding", "make a video") is never
+        # swallowed by the generic search/lookup patterns below.
+        ("image", "image generation request", rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_IMAGE_THING}\b|\b{_IMAGE_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"),
+        ("video", "video generation request", rf"\b{_MEDIA_MAKE}\b{_MEDIA_GAP}\s+{_VIDEO_THING}\b|\b{_VIDEO_THING}\b{_MEDIA_GAP}\s+{_MEDIA_MAKE}\b"),
 
         # Deep research jobs, not quick conceptual mentions of research.
         ("web", "explicit web search request", rf"{_PLEASE}(?:do|run|use|perform|make)\s+(?:a\s+)?(?:web\s+search|search\s+the\s+web)\b.+"),
@@ -136,8 +166,16 @@ def classify_tool_intent(text: str) -> ToolIntent:
         return ToolIntent(False, reason="empty message")
     if _EXPLANATORY_PREFIX.search(text):
         return ToolIntent(False, reason="explanatory feature question")
+    media_negated = bool(_MEDIA_NEG.search(text))
     for category, reason, pattern in _ROUTING_PATTERNS:
         if pattern.search(text):
+            # Search/describe/vision/upload/transcribe wording ("zoek een
+            # afbeelding", "beschrijf deze foto", "vat deze video samen")
+            # co-occurring with a creation verb + media noun is not a
+            # generation request; let the loop keep looking for another
+            # category instead of forcing image/video.
+            if category in ("image", "video") and media_negated:
+                continue
             return ToolIntent(True, category=category, reason=reason)
     return ToolIntent(False, reason="no tool-action pattern matched")
 

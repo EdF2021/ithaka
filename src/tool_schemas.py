@@ -1033,6 +1033,22 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "generate_video",
+            "description": "Generate a short AI video clip from a text prompt (Veo). Use this whenever the user asks you to make, create, or generate a video, clip, or animation. The job runs in the background and the video renders inline in the chat when ready.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "What the video should show; describe scene, motion, camera, mood."},
+                    "aspect_ratio": {"type": "string", "enum": ["16:9", "9:16"], "description": "Default 16:9."},
+                    "duration_seconds": {"type": "integer", "enum": [4, 6, 8], "description": "Default 8."},
+                },
+                "required": ["prompt"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "trigger_research",
             "description": "Start a deep research task on a topic. Returns a task ID for tracking.",
             "parameters": {
