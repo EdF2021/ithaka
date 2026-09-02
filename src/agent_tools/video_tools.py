@@ -36,10 +36,12 @@ class GenerateVideoTool:
         prompt = ""
         aspect_ratio = None
         duration_seconds = None
+        parsed_json_object = False
         if raw.startswith("{"):
             try:
                 parsed = json.loads(raw)
                 if isinstance(parsed, dict):
+                    parsed_json_object = True
                     prompt = str(parsed.get("prompt") or "").strip()
                     ar = parsed.get("aspect_ratio")
                     if isinstance(ar, str) and ar.strip():
@@ -49,9 +51,14 @@ class GenerateVideoTool:
                         duration_seconds = int(ds)
             except json.JSONDecodeError:
                 prompt = ""
-        if not prompt:
-            # Not a JSON object (or JSON without a usable prompt) — the whole
-            # text is the prompt, same fallback as WebFetchTool/WebSearchTool.
+        if not prompt and not parsed_json_object:
+            # Not a JSON object at all (or not valid JSON) — the whole text is
+            # the prompt, same fallback as WebFetchTool/WebSearchTool. But a
+            # JSON object that DID parse with an empty/missing "prompt" must
+            # not fall through here — sending the raw JSON blob as the prompt
+            # would silently generate a video of a JSON string instead of
+            # rejecting it (the class of bug generate_image's native-tool test
+            # suite warns about, see tests/test_generate_image_inline_tool.py).
             prompt = raw
 
         prompt = prompt.strip()

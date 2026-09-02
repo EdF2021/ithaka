@@ -141,6 +141,21 @@ async def test_empty_prompt_is_rejected(monkeypatch):
     assert not fake.calls
 
 
+async def test_empty_prompt_in_json_object_is_rejected_not_sent_as_the_blob(monkeypatch):
+    """A JSON object with an empty/missing "prompt" must be rejected outright,
+    not fall through to sending the raw JSON text as the prompt (the class of
+    bug generate_image's native-tool tests warn about — "an image of a JSON
+    string")."""
+    fake = FakeVG()
+    monkeypatch.setattr(video_tools_mod, "video_gen", fake)
+    monkeypatch.setattr(video_tools_mod, "get_setting", _settings())
+    r = await GenerateVideoTool().execute(
+        json.dumps({"prompt": "", "duration_seconds": 4}), {"owner": "ed"}
+    )
+    assert "error" in r and r["exit_code"] == 1
+    assert not fake.calls
+
+
 async def test_backend_not_available(monkeypatch):
     monkeypatch.setattr(video_tools_mod, "video_gen", None)
     monkeypatch.setattr(video_tools_mod, "get_setting", _settings())
