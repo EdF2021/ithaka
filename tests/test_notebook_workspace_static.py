@@ -587,3 +587,19 @@ def test_chat_js_snapshots_notebook_id_before_await():
     # drop it and let materializePendingSession() fall back to its own live
     # read (which would reintroduce exactly the after-await gap this fixes).
     assert "materializePendingSession(_nbwsNotebookIdAtSubmit)" in fn
+
+
+def test_chat_js_every_materialize_call_in_submit_forwards_snapshot():
+    """#112 smoke finding (2026-09-02): handleChatSubmit has two more
+    materializePendingSession() calls on its no-current-session fallback paths
+    (pending re-check and /api/default-chat auto-create). A bare call there
+    falls back to a live isNotebookWorkspaceOpen() read, which the mindmap
+    node-click entry point has already flipped to "closed" by then, so the
+    auto-created session silently lost its notebook binding (observed: session
+    created without notebook_id, answer ungrounded). Every call in the submit
+    handler must forward the pre-await snapshot."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    assert "sessionModule.materializePendingSession()" not in fn
+    calls = fn.count("await sessionModule.materializePendingSession(")
+    assert calls >= 3
+    assert fn.count("materializePendingSession(_nbwsNotebookIdAtSubmit)") == calls

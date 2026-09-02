@@ -933,7 +933,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       try {
         const pending = sessionModule.getPendingChat && sessionModule.getPendingChat();
         if (pending && pending.url && pending.modelId) {
-          const ok = await sessionModule.materializePendingSession();
+          const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         }
       } catch (_) {}
@@ -959,7 +959,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           _sendPerf.mark('direct_chat_create_begin');
           await sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
           _sendPerf.mark('direct_chat_create_done');
-          const ok = await sessionModule.materializePendingSession();
+          const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
           _sendPerf.mark('direct_chat_materialize_done');
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         } else {
