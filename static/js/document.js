@@ -7362,7 +7362,15 @@ import { zoomOf, toLocalPx } from './uiZoom.js';
         'white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;overflow:hidden;box-sizing:border-box;';
       wrap.appendChild(mirror);
     }
-    mirror.style.font = style.font;
+    // `style.font` (the shorthand) can come back as an empty string in
+    // some Chrome builds even though the individual longhands are set —
+    // copy those instead so the mirror never silently falls back to the
+    // default font (which would throw off every measurement below).
+    mirror.style.fontFamily = style.fontFamily;
+    mirror.style.fontSize = style.fontSize;
+    mirror.style.fontWeight = style.fontWeight;
+    mirror.style.fontStyle = style.fontStyle;
+    mirror.style.lineHeight = style.lineHeight;
     mirror.style.padding = style.padding;
     mirror.style.borderWidth = style.borderWidth;
     mirror.style.borderStyle = 'solid';
@@ -7974,7 +7982,15 @@ import { zoomOf, toLocalPx } from './uiZoom.js';
         'white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;overflow:hidden;box-sizing:border-box;';
       wrap.appendChild(mirror);
     }
-    mirror.style.font = style.font;
+    // `style.font` (the shorthand) can come back as an empty string in
+    // some Chrome builds even though the individual longhands are set —
+    // copy those instead so the mirror never silently falls back to the
+    // default font (which would throw off every measurement below).
+    mirror.style.fontFamily = style.fontFamily;
+    mirror.style.fontSize = style.fontSize;
+    mirror.style.fontWeight = style.fontWeight;
+    mirror.style.fontStyle = style.fontStyle;
+    mirror.style.lineHeight = style.lineHeight;
     mirror.style.padding = style.padding;
     mirror.style.borderWidth = style.borderWidth;
     mirror.style.borderStyle = 'solid';

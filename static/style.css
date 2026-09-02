@@ -27869,6 +27869,11 @@ details.hwfit-serve-advanced > .hwfit-serve-checks:last-of-type {
   margin: 0;
   min-width: 0;
   line-height: 1;
+  /* Positioned ancestor for the absolutely-positioned chip-edit input
+     (slider-ux.js) — without this the input positions against the next
+     positioned ancestor up the tree (.ge-fx-popup, position:fixed),
+     landing 15-100px off. Mirrors .ge-eraser-row's existing rule. */
+  position: relative;
 }
 .ge-adj-row > label {
   flex: 0 0 96px;
