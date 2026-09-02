@@ -1009,6 +1009,12 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     let finalMeta = null;
     let spinner = null;
     let timedOut = false;
+    // Declared here (not at its point of use below) so the catch block can
+    // safely read it even when the try throws before that point is reached —
+    // referencing a `const` still in its temporal-dead-zone raises a
+    // ReferenceError that masks the real error and escapes as a second
+    // unhandled promise rejection (issue #135).
+    let streamingTTS = false;
     let processingProbeTimer = null;
     let processingProbeAbort = null;
     let _renderStream = () => {};
@@ -1529,7 +1535,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       let isThinking = false;
       let thinkingStartTime = null;
       // Streaming TTS: synthesize sentence-by-sentence during streaming
-      const streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
+      streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
       if (streamingTTS) window.aiTTSManager.streamingStart();
       if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onStreamStart();
       // Multi-bubble agent tracking

@@ -3909,7 +3909,13 @@ function startIthakaApp() {
       return;
     }
 
-    return originalSubmit.call(chatModule, e);
+    // handleChatSubmit is async — without a .catch here any exception it
+    // throws (or a rejection it doesn't itself swallow) becomes an
+    // "Uncaught (in promise)" instead of a handled/reported error (#135).
+    return originalSubmit.call(chatModule, e).catch(err => {
+      console.error('chat submit failed', err);
+      try { uiModule.showError && uiModule.showError('Send failed: ' + (err?.message || err)); } catch (_) {}
+    });
   }
 
   chatForm.onsubmit = handleSubmit;
