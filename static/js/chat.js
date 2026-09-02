@@ -616,6 +616,26 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
    */
   export async function handleChatSubmit(e) {
     e.preventDefault();
+    // search_hint (#112): read-and-clear notebookWorkspace.js's one-shot
+    // pending hint (a bare mindmap-node label) as the very first thing in
+    // this handler, unconditionally — before ANY early-return path below
+    // (isStreaming cancel/stop, compare mode, the setup-mode intercept, the
+    // _sendInFlight race guard, ...). Those paths never reach the
+    // workspace-open gate further down, which used to be the only place
+    // that consumed the hint; a mindmap-node click while a previous answer
+    // is still streaming hits the isStreaming branch (treated as "cancel
+    // the stream", not "submit") and returned before that gate, leaving the
+    // hint sitting in notebookWorkspace.js's module state — where it would
+    // resurface on a LATER, unrelated message once the workspace was
+    // reopened (review finding, #112 fix-round). getSearchHintForChat()
+    // clears its module-level value on every call, so calling it exactly
+    // once here — always, regardless of which path this invocation takes —
+    // guarantees no stale hint can survive past this call. The raw value is
+    // reused (not re-fetched) at the workspace-open gate below to decide
+    // whether it's actually forwarded.
+    const _nbwsSearchHintRaw = window.notebookWorkspace && window.notebookWorkspace.getSearchHintForChat
+      ? window.notebookWorkspace.getSearchHintForChat()
+      : null;
     // Cancel research clarification timeout if active
     if (window._researchTimeoutTimer) {
       clearTimeout(window._researchTimeoutTimer);
@@ -835,8 +855,27 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     // Computed once here and reused unchanged at the fd.append site below —
     // not recomputed, so a mid-send checkbox change can't desync the guard
     // from what actually gets sent.
+    //
+    // isNotebookWorkspaceOpen() is also snapshotted here into
+    // _nbwsWorkspaceOpenAtSubmit, synchronously and before any await below.
+    // The issue-#22 fail-closed guard further down reuses this snapshot
+    // instead of re-reading live state after an await, because a caller
+    // (e.g. notebookWorkspace.js's mindmap-node-click handler) may
+    // legitimately close the workspace between dispatching this submit and
+    // that guard's await-resume — which would otherwise make the guard
+    // silently see "closed" and skip its check for an entry point where the
+    // workspace genuinely was open at submit time.
+    const _nbwsWorkspaceOpenAtSubmit = !!(window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen());
     let _nbwsSourceIds = null;
-    if (window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen()) {
+    // search_hint: _nbwsSearchHintRaw was already read-and-cleared at the
+    // very top of this handler (see the comment there for why it must be
+    // consumed unconditionally, before any early return). Only forwarded to
+    // the backend when the workspace was open at submit time, mirroring the
+    // source_ids gate below (#112).
+    const _nbwsSearchHint = (_nbwsWorkspaceOpenAtSubmit && typeof _nbwsSearchHintRaw === 'string' && _nbwsSearchHintRaw.trim())
+      ? _nbwsSearchHintRaw.trim()
+      : null;
+    if (_nbwsWorkspaceOpenAtSubmit) {
       _nbwsSourceIds = window.notebookWorkspace.getSourceIdsForChat ? window.notebookWorkspace.getSourceIdsForChat() : null;
       if (Array.isArray(_nbwsSourceIds) && _nbwsSourceIds.length === 0) {
         uiModule.showError(window.notebookWorkspace.EMPTY_SELECTION_MESSAGE || 'Select at least one source');
@@ -852,13 +891,16 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       _sendPerf.mark('pending_session_done');
       if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
 
-      // Fail-closed vangnet (issue #22): the notebook workspace is open right
-      // now, but the session just materialized without a notebook binding —
-      // sending would let RAG grounding silently drop while the notebook UI
-      // still implies grounded answers. The primary fix is
-      // materializePendingSession reading the open workspace's notebook id
-      // live at materialize time; this only catches a bypassed path.
-      if (window.notebookWorkspace?.isNotebookWorkspaceOpen?.() &&
+      // Fail-closed vangnet (issue #22): the notebook workspace was open at
+      // submit time (see the synchronous _nbwsWorkspaceOpenAtSubmit snapshot
+      // above — not re-read live here, since a caller may have closed the
+      // workspace during the await above), but the session just materialized
+      // without a notebook binding — sending would let RAG grounding
+      // silently drop while the notebook UI still implies grounded answers.
+      // The primary fix is materializePendingSession reading the open
+      // workspace's notebook id live at materialize time; this only catches
+      // a bypassed path.
+      if (_nbwsWorkspaceOpenAtSubmit &&
           !(sessionModule.getLastMaterializedNotebookId && sessionModule.getLastMaterializedNotebookId())) {
         const box = document.getElementById('chat-history');
         if (box) {
@@ -1238,6 +1280,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       // not a JSON body. `_nbwsSourceIds` was computed once at the top of
       // this handler (see the send guard there); null means no filter.
       if (Array.isArray(_nbwsSourceIds)) fd.append('source_ids', JSON.stringify(_nbwsSourceIds));
+      // search_hint: bare mindmap-node label, captured once at the top of
+      // this handler (see the gate there) — best-effort condensation-fallback
+      // anchor server-side, never required (#112).
+      if (_nbwsSearchHint) fd.append('search_hint', _nbwsSearchHint);
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && activeDocIdForSend) {
         try {

@@ -20,6 +20,14 @@ Source-text assertions only, following the precedent set by
 test_notebook_workspace_static.py: this repo has no build step and no JS DOM
 test runner, so the wiring added to static/js/sessions.js, chat.js and
 notebookWorkspace.js can't practically be driven at runtime here.
+
+#112 follow-up: the fail-closed check itself used to call
+isNotebookWorkspaceOpen() live at the point it runs — past an
+await(materializePendingSession()) — which a caller that legitimately closes
+the workspace mid-await (the mindmap-node-click entry point) could bypass,
+since the guard would then see "closed" and skip. It now consumes a
+synchronous, pre-await snapshot instead; see
+test_notebook_workspace_static.py's search_hint/#22 tests.
 """
 
 from pathlib import Path
@@ -97,13 +105,21 @@ def test_materialize_pending_session_exposes_last_notebook_binding():
 
 
 def test_first_send_fail_closed_blocks_ungrounded_pending_session():
+    """#112 update: the guard inside this block no longer re-reads
+    isNotebookWorkspaceOpen() live (that live read, past the
+    materializePendingSession() await, was itself the bug a mindmap-node
+    click could bypass — see test_notebook_workspace_static.py's
+    test_chat_js_snapshots_workspace_open_state_before_await). It now
+    consumes _nbwsWorkspaceOpenAtSubmit, a synchronous snapshot taken before
+    this await, further up in handleChatSubmit."""
     block = _between(
         _CHAT,
         "if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {",
         "\n    }\n",
     )
     assert "sessionModule.materializePendingSession()" in block
-    assert "isNotebookWorkspaceOpen" in block
+    assert "_nbwsWorkspaceOpenAtSubmit" in block
+    assert "isNotebookWorkspaceOpen" not in block
     assert "getLastMaterializedNotebookId" in block
     assert "chat-error" in block
     assert "_releaseSendFlag();" in block

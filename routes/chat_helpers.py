@@ -656,6 +656,7 @@ async def build_chat_context(
     agent_mode: bool = False,
     allow_tool_preprocessing: bool = True,
     source_ids: list = None,
+    search_hint: str = None,
 ) -> ChatContext:
     """Build the full context (preface + messages) for an LLM call.
 
@@ -760,6 +761,10 @@ async def build_chat_context(
         # source_ids is a notebook feature (per-source checkboxes); outside a
         # notebook there is no bounded source set to restrict, so drop it.
         source_ids=source_ids if notebook_id else None,
+        # search_hint (#112) is likewise notebook-only — it only means
+        # anything as a fallback anchor for the notebook RAG-condensation
+        # step below.
+        search_hint=search_hint if notebook_id else None,
     )
     if use_rag is not None or is_research_spinoff or casual_low_signal or notebook_id:
         _preface_kwargs["use_rag"] = use_rag_val

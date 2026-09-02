@@ -9,6 +9,7 @@ instruction instead of a silently context-free turn — which would otherwise
 let the model answer from general knowledge, exactly what a notebook forbids.
 """
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
@@ -83,6 +84,77 @@ def test_notebook_retrieval_log_carries_notebook_and_source_ids(caplog):
     assert len(rag_lines) == 1
     assert "notebook_id='nb-1'" in rag_lines[0]
     assert "source_ids=['doc-1', 'doc-2']" in rag_lines[0]
+    assert "query='what is X?'" in rag_lines[0]
+
+
+def test_search_hint_anchors_condensation_fallback_on_llm_failure(monkeypatch, caplog):
+    """#112 voorstel B: when condensation itself fails, the RAG query must
+    fall back to the bare search_hint (e.g. a clicked mindmap node's label),
+    not the raw templated message whose generic filler words ("bronnen",
+    "notebook", "samenvatting") would otherwise skew the keyword score."""
+    def failing_llm(*args, **kwargs):
+        raise ValueError("LLM down")
+    monkeypatch.setattr("src.llm_core.llm_call", failing_llm)
+
+    hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={}, history=[])
+    templated_msg = (
+        'Geef een samenvatting en uitleg over "Skills/integraties" op basis '
+        'van de bronnen van dit notebook.'
+    )
+
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(
+            proc, notebook_id="nb-1", session=session,
+            message=templated_msg, search_hint="Skills/integraties",
+        )
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert "query='Skills/integraties'" in rag_lines[0]
+
+
+def test_search_hint_anchors_condensation_fallback_on_empty_response(monkeypatch, caplog):
+    """Same as above, but condensation returns an empty string rather than
+    raising — the other failure mode _condense_notebook_query handles."""
+    monkeypatch.setattr("src.llm_core.llm_call", lambda *a, **k: "   ")
+
+    hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={}, history=[])
+    templated_msg = (
+        'Geef een samenvatting en uitleg over "Resultaten" op basis van de '
+        'bronnen van dit notebook.'
+    )
+
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(
+            proc, notebook_id="nb-1", session=session,
+            message=templated_msg, search_hint="Resultaten",
+        )
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert "query='Resultaten'" in rag_lines[0]
+
+
+def test_no_search_hint_falls_back_to_raw_message_unchanged(monkeypatch, caplog):
+    """Regression: without a search_hint, condensation failure must still
+    fall back to the raw message exactly as before #112."""
+    def failing_llm(*args, **kwargs):
+        raise ValueError("LLM down")
+    monkeypatch.setattr("src.llm_core.llm_call", failing_llm)
+
+    hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={}, history=[])
+
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(proc, notebook_id="nb-1", session=session, message="what is X?")
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
     assert "query='what is X?'" in rag_lines[0]
 
 

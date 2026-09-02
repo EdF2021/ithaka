@@ -453,12 +453,109 @@ def test_mindmap_node_click_submits_before_closing_workspace():
     handling the submit event — if the workspace is closed first, that gate
     always reads "closed" and source_ids silently drops for this entry point
     regardless of the user's checked sources. This assertion fails on the
-    old (broken) ordering. (Note: the separate issue-#22 fail-closed guard
-    sits past an await elsewhere in handleChatSubmit and is NOT restored by
-    this reorder — that remains a known gap for this entry point.)"""
+    old (broken) ordering. (The separate issue-#22 fail-closed guard, which
+    sits past an await elsewhere in handleChatSubmit, is covered by its own
+    snapshot-based fix — see the search_hint/#22 tests below.)"""
     fn = _between(_WS, "function _handleMindmapNodeClick", "\n}\n")
     assert "form.dispatchEvent(new Event('submit'" in fn
     assert "closeNotebookWorkspace();" in fn
     submit_idx = fn.index("form.dispatchEvent(new Event('submit'")
     close_idx = fn.index("closeNotebookWorkspace();")
     assert submit_idx < close_idx
+
+
+# ── #112 voorstel B: search_hint one-shot channel ────────────────────────────
+
+def test_search_hint_mechanism_exists_and_is_one_shot():
+    """getSearchHintForChat() must both return and clear the pending hint in
+    the same call — a stale hint must never leak into a later, unrelated
+    chat turn."""
+    assert "export function getSearchHintForChat" in _WS
+    fn = _between(_WS, "export function getSearchHintForChat", "\n}\n")
+    assert "_pendingSearchHint = null" in fn
+    # It must actually return the previously-set value, not just null it out.
+    assert "return hint" in fn or "return _pendingSearchHint" in fn
+
+
+def test_search_hint_exported_on_notebook_workspace_object():
+    """Consumed via window.notebookWorkspace.getSearchHintForChat() from
+    chat.js, same publication pattern as getSourceIdsForChat()."""
+    obj = _between(_WS, "const notebookWorkspace = {", "\n};")
+    assert "getSourceIdsForChat" in obj
+    assert "getSearchHintForChat" in obj
+
+
+def test_mindmap_node_click_sets_pending_search_hint_before_submit():
+    """The bare node label must be stashed as the pending hint before the
+    submit dispatch, so chat.js's synchronous gate can read it in the same
+    call stack (mirrors the submit-before-close ordering requirement)."""
+    fn = _between(_WS, "function _handleMindmapNodeClick", "\n}\n")
+    assert "_pendingSearchHint = label;" in fn
+    hint_idx = fn.index("_pendingSearchHint = label;")
+    submit_idx = fn.index("form.dispatchEvent(new Event('submit'")
+    assert hint_idx < submit_idx
+
+
+def test_chat_js_forwards_search_hint_when_workspace_open():
+    """chat.js must read the one-shot hint via getSearchHintForChat() and
+    append it to the request payload as search_hint, the same field name and
+    FormData shape as source_ids."""
+    assert "getSearchHintForChat" in _CHAT_JS
+    assert "search_hint" in _CHAT_JS
+    assert "fd.append('search_hint'" in _CHAT_JS
+
+
+def test_search_hint_consumed_unconditionally_before_early_return_paths():
+    """Regression (#112 fix-round review finding 1): getSearchHintForChat()
+    must be called exactly once, as the very first thing in handleChatSubmit
+    — before ANY early-return branch (compare mode, the isStreaming
+    cancel/stop path, the _sendInFlight race guard, ...).
+
+    Before this fix the hint was only consumed at the workspace-open gate
+    much further down. A mindmap-node click while a previous answer is
+    still streaming hits the isStreaming branch, which treats the click as
+    "cancel the stream" and returns before ever reaching that gate — the
+    hint stayed set in notebookWorkspace.js's module state and would
+    resurface as search_hint on a LATER, unrelated message once the
+    workspace was reopened (getSourceIdsForChat()'s sibling contract is a
+    live read with no such state to leak; getSearchHintForChat() is a
+    one-shot channel, so only reading it late — not the mechanism itself —
+    was the bug)."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    # Count the actual call expression, not prose mentions of the name in
+    # comments (this test's own docstring companion comment in chat.js says
+    # "getSearchHintForChat()" without the receiver).
+    assert fn.count("window.notebookWorkspace.getSearchHintForChat()") == 1
+    hint_read_idx = fn.index("window.notebookWorkspace.getSearchHintForChat()")
+    compare_return_idx = fn.index(
+        "if (window.compareModule && window.compareModule.isActive())"
+    )
+    streaming_idx = fn.index("if (isStreaming) {")
+    send_in_flight_idx = fn.index("if (_sendInFlight) return;")
+    assert hint_read_idx < compare_return_idx
+    assert hint_read_idx < streaming_idx
+    assert hint_read_idx < send_in_flight_idx
+
+
+# ── #112 issue-#22 fail-closed guard: snapshot instead of live re-read ──────
+
+def test_chat_js_snapshots_workspace_open_state_before_await():
+    """The #22 fail-closed guard (further down, past an await in the
+    hasPendingChat() branch) must reuse a synchronous, pre-await snapshot of
+    isNotebookWorkspaceOpen() rather than re-reading it live after the await
+    — a caller like _handleMindmapNodeClick may legitimately close the
+    workspace while that await is pending, which would otherwise make the
+    guard silently see "closed" and skip its check."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    assert "_nbwsWorkspaceOpenAtSubmit" in fn
+    snapshot_idx = fn.index("_nbwsWorkspaceOpenAtSubmit = ")
+    await_idx = fn.index("await sessionModule.materializePendingSession()")
+    assert snapshot_idx < await_idx
+    # The guard itself must consume the snapshot, not a live call, after the await.
+    guard_region = fn[await_idx:]
+    guard_if = _between(
+        guard_region,
+        "if (_nbwsWorkspaceOpenAtSubmit &&",
+        "getLastMaterializedNotebookId())) {",
+    )
+    assert "isNotebookWorkspaceOpen" not in guard_if
