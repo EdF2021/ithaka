@@ -151,6 +151,81 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     if (body) chatRenderer.appendReportButton(body, sessionId);
   }
 
+  // Active generate_video job polls, keyed by job id, so a page/session
+  // switch (or a duplicate poll for the same job on reload) can stop them.
+  const _videoJobPolls = new Map();
+  const VIDEO_POLL_INTERVAL_MS = 5000;
+  const VIDEO_POLL_MAX_MS = 12 * 60 * 1000;
+
+  /**
+   * Poll GET /api/video/jobs/{id} every 5s (max 12 min) and swap the pending
+   * bubble for the finished <video> (or a red error line) in place.
+   */
+  function startVideoJobPoll(jobId, bubbleEl, opts = {}) {
+    if (!jobId || !bubbleEl) return;
+    // Avoid double-polling the same job (e.g. re-render on reload).
+    const existing = _videoJobPolls.get(jobId);
+    if (existing) { clearInterval(existing.intervalId); _videoJobPolls.delete(jobId); }
+
+    const startedSessionId = sessionModule && sessionModule.getCurrentSessionId ? sessionModule.getCurrentSessionId() : null;
+    const startTime = Date.now();
+
+    const stop = () => {
+      const entry = _videoJobPolls.get(jobId);
+      if (entry) { clearInterval(entry.intervalId); _videoJobPolls.delete(jobId); }
+    };
+
+    const tick = async () => {
+      // Stop polling if the user switched away from the session this job started in.
+      if (startedSessionId != null && sessionModule && sessionModule.getCurrentSessionId
+        && sessionModule.getCurrentSessionId() !== startedSessionId) {
+        stop();
+        return;
+      }
+      if (Date.now() - startTime > VIDEO_POLL_MAX_MS) {
+        stop();
+        chatRenderer.renderVideoError(bubbleEl, 'Video is taking too long; check back later');
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/api/video/jobs/${encodeURIComponent(jobId)}`, { credentials: 'same-origin' });
+        if (res.status === 404) {
+          stop();
+          chatRenderer.renderVideoError(bubbleEl, 'Video job no longer known');
+          return;
+        }
+        if (!res.ok) return; // transient error — keep polling
+        const job = await res.json();
+        if (job.status === 'done') {
+          stop();
+          // The bubble may have been removed from the DOM (chat cleared,
+          // session switched away without a still-running-job guard, ...)
+          // while this fetch was in flight — don't resurrect it.
+          if (bubbleEl.isConnected) {
+            const rendered = chatRenderer.buildVideoBubble(job);
+            bubbleEl.replaceWith(rendered);
+            uiModule.scrollHistory();
+          }
+        } else if (job.status === 'error') {
+          stop();
+          if (bubbleEl.isConnected) chatRenderer.renderVideoError(bubbleEl, job.error || 'Video generation failed');
+        }
+        // status === 'running' — keep polling
+      } catch (e) {
+        console.warn('[chat] video job poll failed', e);
+        // transient network error — keep polling until timeout
+      }
+    };
+
+    const intervalId = setInterval(tick, VIDEO_POLL_INTERVAL_MS);
+    _videoJobPolls.set(jobId, { intervalId, sessionId: startedSessionId });
+    // Fire the first check immediately rather than waiting a full interval —
+    // a job that already finished (page reload landing after completion, or
+    // one that's since vanished) resolves right away instead of showing a
+    // spinner for up to 5s first.
+    tick();
+  }
+
   function _stripDocumentFenceForChat(text, { final = false } = {}) {
     let s = String(text || '').replace(/<?\|end\|>?/g, '');
     const markerMatch = /```(?:create_document|documen(?:t)?)\s*\n/i.exec(s);
@@ -2813,6 +2888,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                   uiModule.scrollHistory();
                   // Notify gallery to refresh if open
                   window.dispatchEvent(new CustomEvent('gallery-refresh'));
+                }
+                // --- Video generation started: show a pending bubble and poll for it ---
+                if (json.video_job_id) {
+                  const chatBox = document.getElementById('chat-history');
+                  const videoBubble = chatRenderer.buildVideoPendingBubble(json.video_job_id, json.video_model, json.video_cost_estimate);
+                  chatBox.appendChild(videoBubble);
+                  uiModule.scrollHistory();
+                  startVideoJobPoll(json.video_job_id, videoBubble, { model: json.video_model, cost: json.video_cost_estimate });
                 }
                 // --- Render browser screenshots in tool output ---
                 if (json.screenshot && currentToolBubble) {
@@ -5589,6 +5672,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     showWelcomeScreen: chatRenderer.showWelcomeScreen,
     checkPendingResearch,
     getImageCost: chatRenderer.getImageCost,
+    startVideoJobPoll,
     setDisplayOverride,
     setHideUserBubble,
     setPendingContinue,
