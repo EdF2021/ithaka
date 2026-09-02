@@ -66,12 +66,23 @@ logger = logging.getLogger(__name__)
 ITHAKA_MAIL_ORIGIN = "ithaka-ui"
 EMAIL_READ_ATTACHMENT_VERSION = 2
 
-# /api/email/unread-state cache freshness window: the local message index is
-# only filled lazily when the mail-list UI is opened, so a widget-only user
-# can sit on a stale count indefinitely. Index rows younger than this are
-# trusted as-is (fast path); older rows trigger a live IMAP UNSEEN recount
-# so the dashboard badge tracks the actual mailbox instead of the last UI visit.
+# /api/email/unread-state TTL: the local message index (`email_message_index`)
+# only ever holds messages the mail-list UI has paged through, so counting
+# UNSEEN rows *within* that partial subset structurally undercounts on large
+# mailboxes (#119 — index said 907/1143 indexed while the live INBOX had
+# 2140+ unseen). The route now always counts live via the same IMAP UNSEEN
+# search the old fallback used, and caches that live count in-memory for
+# this many seconds so the dashboard poll stays cheap (at most one IMAP
+# round-trip per account/folder per TTL window) — the reason the index-count
+# path existed in the first place.
 _UNREAD_STATE_TTL_S = 120
+
+# In-memory cache for the live unread count, keyed by (owner, account_key,
+# folder) -> (unread_count, max_uid, monotonic_timestamp). Process-local by
+# design — a multi-worker deployment just means each worker pays its own
+# IMAP round-trip every TTL window, which is the same cost the old
+# index-COUNT path was built to avoid.
+_unread_state_cache: dict = {}
 
 
 def _safe_attachment_zip_name(name: str, fallback: str) -> str:
@@ -2028,16 +2039,17 @@ def setup_email_routes():
     ):
         """Cheap unread summary for notification dots.
 
-        Reads the local message index first so periodic UI polling does not
-        trigger Gmail SEARCH/LIST round-trips — but that index is only ever
-        filled lazily when the mail-list UI is opened (`_email_index_upsert`
-        via `_list_emails_sync`), so a widget-only user could sit on a stale
-        count indefinitely. To keep the dashboard badge honest without paying
-        an IMAP round-trip on every poll, index rows are trusted as-is only
-        while younger than `_UNREAD_STATE_TTL_S`; older (or missing) rows
-        trigger a live IMAP UNSEEN recount, with the stale index value kept
-        as a fallback if that live check fails (slow/broken IMAP → cached
-        number, not a 5xx).
+        Always counts live (UID SEARCH UNSEEN, same helper the old fallback
+        path used) — see #119: the local `email_message_index` only ever
+        holds messages the mail-list UI has paged through, so counting
+        UNSEEN rows *within* that partial subset structurally undercounts
+        on a large mailbox. The live count is cached in an in-memory dict
+        for `_UNREAD_STATE_TTL_S` so the dashboard poll still costs at most
+        one IMAP round-trip per account/folder per TTL window. If the live
+        IMAP call fails, the last known in-memory value is returned (marked
+        stale) rather than a 5xx; if there is no in-memory value yet either,
+        the old index-COUNT path is used once as a last-resort estimate,
+        and failing that, a zero count is returned — never an error status.
         """
         fixture_result = _fixture_email_list(folder, 1, 0, "unread", None, owner)
         if fixture_result is not None:
@@ -2050,14 +2062,13 @@ def setup_email_routes():
             }
 
         # Resolve the implicit "no account_id" call to the same concrete
-        # default-account id the mail-list UI uses, so the index rows we
-        # read here land in the same account_key bucket the UI wrote them
-        # under. The mail library (emailLibrary.js `_loadAccounts`) always
-        # auto-selects and sends an explicit account_id — even for a single
-        # default account — so `_email_index_upsert` never writes under the
-        # literal "default" bucket `_account_cache_key(None, owner)` used to
-        # assume. Without this, indexed_total was always 0 for this route
-        # and every poll silently took the live IMAP fallback.
+        # default-account id the mail-list UI uses, so the cache key (and
+        # the index-fallback lookup) line up with the account_key bucket
+        # the UI's own calls write/read under. The mail library
+        # (emailLibrary.js `_loadAccounts`) always auto-selects and sends an
+        # explicit account_id — even for a single default account — so
+        # without this resolution, the widget-only call and the mail-list
+        # UI would land under different account_key buckets.
         resolved_account_id = account_id
         if not resolved_account_id:
             try:
@@ -2066,9 +2077,62 @@ def setup_email_routes():
                 logger.debug("unread-state default account resolution failed", exc_info=True)
                 resolved_account_id = account_id
 
-        cached_state = None
+        account_key = _account_cache_key(resolved_account_id, owner)
+        cache_key = (owner or "", account_key, folder)
+
+        now_mono = time.monotonic()
+        cached_entry = _unread_state_cache.get(cache_key)
+        if cached_entry is not None and (now_mono - cached_entry[2]) <= _UNREAD_STATE_TTL_S:
+            return {
+                "unread_count": cached_entry[0],
+                "max_uid": cached_entry[1],
+                "folder": folder,
+                "sync": {"source": "memory"},
+                "fresh": True,
+            }
+
         try:
-            account_key = _account_cache_key(resolved_account_id, owner)
+            result = await _asyncio.to_thread(
+                _list_emails_sync, folder, 1, 0, "unread", resolved_account_id, None, False, owner,
+            )
+        except Exception:
+            logger.debug("unread-state live IMAP recount failed", exc_info=True)
+            result = None
+
+        if result and not result.get("error"):
+            emails = result.get("emails") or []
+            max_uid = 0
+            if emails:
+                try:
+                    max_uid = max(int(e.get("uid") or 0) for e in emails)
+                except Exception:
+                    max_uid = 0
+            unread_count = int(result.get("total") or len(emails) or 0)
+            _unread_state_cache[cache_key] = (unread_count, max_uid, now_mono)
+            return {
+                "unread_count": unread_count,
+                "max_uid": max_uid,
+                "folder": folder,
+                "sync": {"source": "live"},
+                "fresh": True,
+            }
+
+        # Live recount failed (or `_list_emails_sync` caught an error, e.g.
+        # a slow/broken IMAP connection) — prefer a stale-but-known count
+        # over a 5xx so the widget doesn't just break.
+        if cached_entry is not None:
+            return {
+                "unread_count": cached_entry[0],
+                "max_uid": cached_entry[1],
+                "folder": folder,
+                "sync": {"source": "memory_stale"},
+                "fresh": False,
+            }
+
+        # No in-memory value yet either — fall back once to the old index
+        # COUNT path as a last-resort estimate (still better than nothing,
+        # even though it can undercount on a large mailbox).
+        try:
             conn = _sql3.connect(SCHEDULED_DB)
             try:
                 row = conn.execute(
@@ -2091,57 +2155,25 @@ def setup_email_routes():
             indexed_total = int((total_row or [0])[0] or 0)
             if indexed_total:
                 updated_at = (total_row or [None, None])[1]
-                cached_state = {
+                return {
                     "unread_count": int((row or [0])[0] or 0),
                     "max_uid": int((row or [0, 0])[1] or 0),
                     "folder": folder,
                     "sync": {
-                        "source": "index",
+                        "source": "index_fallback",
                         "indexed": indexed_total,
                         "updated_at": updated_at,
                     },
+                    "fresh": _unread_index_is_fresh(updated_at),
                 }
-                if _unread_index_is_fresh(updated_at):
-                    cached_state["fresh"] = True
-                    return cached_state
-                cached_state["fresh"] = False
         except Exception:
-            logger.debug("unread-state index lookup skipped", exc_info=True)
+            logger.debug("unread-state index fallback lookup failed", exc_info=True)
 
-        try:
-            result = await _asyncio.to_thread(
-                _list_emails_sync, folder, 1, 0, "unread", resolved_account_id, None, False, owner,
-            )
-        except Exception:
-            logger.debug("unread-state live IMAP fallback failed", exc_info=True)
-            result = None
-
-        if result and not result.get("error"):
-            emails = result.get("emails") or []
-            max_uid = 0
-            if emails:
-                try:
-                    max_uid = max(int(e.get("uid") or 0) for e in emails)
-                except Exception:
-                    max_uid = 0
-            return {
-                "unread_count": int(result.get("total") or len(emails) or 0),
-                "max_uid": max_uid,
-                "folder": folder,
-                "sync": {"source": "imap_fallback"},
-                "fresh": True,
-            }
-
-        # Live recount failed (or a `_list_emails_sync`-caught error, e.g.
-        # a slow/broken IMAP connection) — prefer a stale-but-known count
-        # over a 5xx so the widget doesn't just break.
-        if cached_state is not None:
-            return cached_state
         return {
             "unread_count": 0,
             "max_uid": 0,
             "folder": folder,
-            "sync": {"source": "imap_fallback_failed"},
+            "sync": {"source": "unavailable"},
             "fresh": False,
         }
 
