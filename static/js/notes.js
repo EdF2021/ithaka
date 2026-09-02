@@ -4193,7 +4193,9 @@ function _wireCanvas(container, initialImageUrl) {
     input.className = 'note-form-draw-textinput';
     input.placeholder = 'type then Enter';
     const color = colorInput?.value || '#222';
-    const maxW = Math.max(120, Math.floor(toLocalPx(r.width - px - 4, _z)));
+    // `-4` is a handwritten local design buffer, not a measurement — stays
+    // outside the division (same convention as sizeCss's `top` below).
+    const maxW = Math.max(120, Math.floor(toLocalPx(r.width - px, _z) - 4));
     input.style.cssText = [
       'position:absolute',
       `left:${toLocalPx(px, _z)}px`,

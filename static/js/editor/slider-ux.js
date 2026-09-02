@@ -168,12 +168,16 @@ export function wireSliderUx({ registerDocClickAway }) {
     // subtree, so a delta between two getBoundingClientRect() reads is still
     // viewport-space and needs dividing once before assigning as local px
     // (same re-multiplication issue as fixed popups; see uiZoom.js, PR #76/#77).
+    // The `-1`/`+8` below are handwritten local design constants (not
+    // measurements) and stay OUTSIDE the division, same as every other local
+    // term in this codebase (sizeCss in notes.js, paddingTop/lineH in
+    // document.js) — only the viewport-space delta gets divided.
     const _z = zoomOf(document.documentElement);
     const crect = chip.getBoundingClientRect();
     const rrect = row.getBoundingClientRect();
     inp.style.left = toLocalPx(crect.left - rrect.left, _z) + 'px';
-    inp.style.top = toLocalPx(crect.top - rrect.top - 1, _z) + 'px';
-    inp.style.width = Math.max(40, toLocalPx(crect.width + 8, _z)) + 'px';
+    inp.style.top = (toLocalPx(crect.top - rrect.top, _z) - 1) + 'px';
+    inp.style.width = Math.max(40, toLocalPx(crect.width, _z) + 8) + 'px';
     inp.focus();
     inp.select();
     const commit = () => {
