@@ -36,18 +36,25 @@ from src.runtime_paths import get_app_root
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "all-minilm:l6-v2"
-_DEFAULT_FASTEMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_FASTEMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 class EmbeddingClient:
     """Drop-in replacement for SentenceTransformer.encode() using an HTTP API."""
 
     def __init__(self, url: Optional[str] = None, model: Optional[str] = None, api_key: Optional[str] = None):
-        self.url = url or os.getenv(
-            "EMBEDDING_URL",
-            f"http://{os.getenv('LLM_HOST', 'localhost')}:11434/v1/embeddings",
+        # `or` (not os.getenv's default arg) so a PRESENT-but-EMPTY value falls
+        # back to the default. docker-compose.yml injects
+        # `EMBEDDING_URL=${EMBEDDING_URL:-}` / `EMBEDDING_MODEL=${EMBEDDING_MODEL:-}`,
+        # which sets the var to "" when the host hasn't defined it.
+        # os.getenv(name, default) only substitutes default when the var is
+        # ABSENT, so it would silently pass through "" (see issue #124: an
+        # empty EMBEDDING_URL produced a misleading "missing http(s)://
+        # protocol" boot warning instead of falling back cleanly).
+        self.url = url or os.getenv("EMBEDDING_URL") or (
+            f"http://{os.getenv('LLM_HOST', 'localhost')}:11434/v1/embeddings"
         )
-        self.model = model or os.getenv("EMBEDDING_MODEL", _DEFAULT_MODEL)
+        self.model = model or os.getenv("EMBEDDING_MODEL") or _DEFAULT_MODEL
         self.api_key = api_key or os.getenv("EMBEDDING_API_KEY")
         self._dim: Optional[int] = None
         # Short connect timeout so a DOWN embedding endpoint (e.g. Ollama not
@@ -142,7 +149,11 @@ class FastEmbedClient:
                 "embeddings server."
             ) from e
 
-        self.model = model or os.getenv("FASTEMBED_MODEL", _DEFAULT_FASTEMBED_MODEL)
+        # See the matching comment in EmbeddingClient.__init__: `or`, not
+        # os.getenv's default arg, so a PRESENT-but-EMPTY FASTEMBED_MODEL
+        # (docker-compose.yml's `${FASTEMBED_MODEL:-...}`) falls back to the
+        # deliberate multilingual default instead of an empty model_name.
+        self.model = model or os.getenv("FASTEMBED_MODEL") or DEFAULT_FASTEMBED_MODEL
         # Persistent cache under data/ so the model survives reboots and so
         # the download lands exactly where the admin panel's _is_downloaded()
         # check looks (both default to this same path).
