@@ -363,6 +363,7 @@ class ChatProcessor:
         session: Any = None,
         notebook_id: Optional[str] = None,
         source_ids: Optional[List[str]] = None,
+        search_hint: Optional[str] = None,
     ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]]]:
         """RAG: search if rag_manager available, inject only above threshold.
 
@@ -380,6 +381,18 @@ class ChatProcessor:
         such as "and what about chapter 2?" make poor embedding queries on
         their own. The personal-docs path (``notebook_id`` is None) is left
         untouched.
+
+        ``search_hint``, when given, is a short best-effort anchor (e.g. a
+        clicked mindmap node's bare label) — condensation itself still runs
+        unconditionally (multi-turn follow-ups still need it), but if it
+        fails or returns empty, the fallback is ``search_hint`` instead of
+        the raw ``message``. This matters for entry points that send a
+        templated sentence around the actual anchor text (#112): the
+        template's generic filler words ("bronnen", "notebook",
+        "samenvatting") aren't in the RAG keyword-score stopword list, so
+        falling back to the full sentence lets them skew the 30%
+        keyword-overlap weight toward irrelevant chunks that merely mention
+        "notebook" or "bronnen". Falling back to the bare hint avoids that.
         """
         preface: List[Dict[str, str]] = []
         rag_sources: List[Dict[str, Any]] = []
@@ -393,7 +406,7 @@ class ChatProcessor:
                 search_query = message
                 if notebook_id and session is not None:
                     search_query = self._condense_notebook_query(
-                        message, session, fallback=message,
+                        message, session, fallback=(search_hint or message),
                     )
 
                 k = 8 if notebook_id else 5
@@ -601,6 +614,7 @@ class ChatProcessor:
         use_skills: bool = True,
         notebook_id: Optional[str] = None,
         source_ids: Optional[List[str]] = None,
+        search_hint: Optional[str] = None,
     ) -> Tuple[List[Dict[str, str]], List[Dict[str, Any]], List[Dict[str, str]], List[Dict[str, Any]]]:
         """Build the context preface for LLM calls.
 
@@ -674,7 +688,9 @@ class ChatProcessor:
 
         # RAG: search if enabled and rag_manager available, inject only above threshold
         if use_rag:
-            rag_preface, rag_sources = self._rag_preface(message, owner, session, notebook_id, source_ids)
+            rag_preface, rag_sources = self._rag_preface(
+                message, owner, session, notebook_id, source_ids, search_hint,
+            )
             preface.extend(rag_preface)
 
         # A notebook turn with no surviving sources must refuse out loud. This

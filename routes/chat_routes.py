@@ -523,6 +523,18 @@ def setup_chat_routes(
         time_filter = chat_request.time_filter
         preset_id = chat_request.preset_id
         source_ids = chat_request.source_ids
+        # search_hint (#112): best-effort, so an out-of-contract value (too
+        # long — the pydantic model itself does not enforce a max length, to
+        # avoid a hard 422 for what's meant to be ignorable) is dropped here
+        # rather than surfaced as an error. Mirrors the /api/chat_stream
+        # validation below.
+        search_hint = chat_request.search_hint
+        if isinstance(search_hint, str):
+            search_hint = search_hint.strip()
+            if not search_hint or len(search_hint) > 300:
+                search_hint = None
+        else:
+            search_hint = None
 
         # Verify the caller owns this session before loading it.
         # Without this, any authenticated user can post into another user's chat.
@@ -578,6 +590,7 @@ def setup_chat_routes(
             webhook_manager=webhook_manager,
             allow_tool_preprocessing=allow_tool_preprocessing,
             source_ids=source_ids,
+            search_hint=search_hint,
         )
 
         # Research injection
@@ -896,6 +909,20 @@ def setup_chat_routes(
                 ):
                     source_ids = _parsed_source_ids
 
+        # search_hint: bare mindmap-node label (#112), a best-effort anchor
+        # for the notebook RAG-condensation fallback (see
+        # ChatProcessor._condense_notebook_query) — used only when
+        # condensation itself fails or returns empty, so an invalid value is
+        # silently ignored rather than rejected with a 400.
+        search_hint = None
+        _raw_search_hint = form_data.get("search_hint")
+        if _raw_search_hint is None:
+            _raw_search_hint = (body or {}).get("search_hint")
+        if isinstance(_raw_search_hint, str):
+            _stripped_search_hint = _raw_search_hint.strip()
+            if _stripped_search_hint and len(_stripped_search_hint) <= 300:
+                search_hint = _stripped_search_hint
+
         no_memory = str(form_data.get("no_memory", "")).lower() == "true"
         pre_context_tool_policy = build_effective_tool_policy(
             last_user_message=message,
@@ -924,6 +951,7 @@ def setup_chat_routes(
             agent_mode=(chat_mode == "agent"),
             allow_tool_preprocessing=allow_tool_preprocessing,
             source_ids=source_ids,
+            search_hint=search_hint,
         )
 
         _research_flags = {"do": do_research}  # Mutable container for generator scope

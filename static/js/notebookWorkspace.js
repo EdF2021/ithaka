@@ -371,6 +371,26 @@ export function getSourceIdsForChat() {
   return selectable.filter(id => _state.selection.has(id));
 }
 
+// One-shot search-hint channel for the *next* chat submit only (#112). Unlike
+// getSourceIdsForChat() above (a live read of persistent selection state),
+// this is a single-use handoff: a caller (currently only
+// _handleMindmapNodeClick) sets it right before dispatching the chat form
+// submit, and getSearchHintForChat() below both returns and clears it in the
+// same call, so it can never leak into a later, unrelated turn.
+let _pendingSearchHint = null;
+
+/**
+ * Read-and-clear the pending search hint (a bare label such as a clicked
+ * mindmap node's text) for the chat request about to be sent. Returns null
+ * when nothing is pending. Always clears the pending value, whether or not
+ * the caller ends up using it.
+ */
+export function getSearchHintForChat() {
+  const hint = _pendingSearchHint;
+  _pendingSearchHint = null;
+  return hint;
+}
+
 /** The id of the notebook bound to the currently open workspace, or null
  *  when the workspace is closed / no notebook is loaded yet. */
 export function getCurrentNotebookId() {
@@ -1657,14 +1677,20 @@ function _handleMindmapNodeClick(e) {
   if (!msgInput) return;
   msgInput.value = msg;
   msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+  // Bare node label as the one-shot search-hint for this submit only — used
+  // server-side to anchor the RAG-condensation fallback instead of the full
+  // templated sentence above, whose generic filler words ("bronnen",
+  // "notebook", "samenvatting") otherwise weigh into the keyword score
+  // (#112). Set right before dispatch so getSearchHintForChat()'s
+  // synchronous read in chat.js's send gate sees it.
+  _pendingSearchHint = label;
   const form = document.getElementById('chat-form');
   // Dispatch submit before closing the workspace: chat.js's handleChatSubmit
-  // source_ids gate reads isNotebookWorkspaceOpen() synchronously before its
-  // first await, so the workspace must still read as open at dispatch time
-  // or source_ids silently drops for this entry point (#112). Note: the
-  // separate issue-#22 fail-closed guard sits further down, past an await in
-  // the hasPendingChat() branch — this reorder does not reach far enough to
-  // restore that guard for this entry point; it stays a known gap.
+  // source_ids gate (and, since the #22 fix there, its snapshot of
+  // isNotebookWorkspaceOpen() for the fail-closed guard) reads
+  // isNotebookWorkspaceOpen() synchronously before its first await, so the
+  // workspace must still read as open at dispatch time or source_ids/the
+  // guard silently miss this entry point (#112).
   if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
   closeNotebookWorkspace();
 }
@@ -2033,6 +2059,7 @@ const notebookWorkspace = {
   isNotebookWorkspaceOpen,
   registerCloseHook,
   getSourceIdsForChat,
+  getSearchHintForChat,
   getCurrentNotebookId,
   EMPTY_SELECTION_MESSAGE,
   _state,

@@ -835,8 +835,31 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     // Computed once here and reused unchanged at the fd.append site below —
     // not recomputed, so a mid-send checkbox change can't desync the guard
     // from what actually gets sent.
+    //
+    // isNotebookWorkspaceOpen() is also snapshotted here into
+    // _nbwsWorkspaceOpenAtSubmit, synchronously and before any await below.
+    // The issue-#22 fail-closed guard further down reuses this snapshot
+    // instead of re-reading live state after an await, because a caller
+    // (e.g. notebookWorkspace.js's mindmap-node-click handler) may
+    // legitimately close the workspace between dispatching this submit and
+    // that guard's await-resume — which would otherwise make the guard
+    // silently see "closed" and skip its check for an entry point where the
+    // workspace genuinely was open at submit time.
+    const _nbwsWorkspaceOpenAtSubmit = !!(window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen());
     let _nbwsSourceIds = null;
-    if (window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen()) {
+    // search_hint: a bare mindmap-node label, set by notebookWorkspace.js
+    // right before it dispatches this submit (see getSearchHintForChat()
+    // there — reading it always clears it, a one-shot channel, so a stale
+    // hint can never leak into a later, unrelated turn even if this branch
+    // doesn't forward it). Only forwarded to the backend when the workspace
+    // was open at submit time, mirroring the source_ids gate below (#112).
+    const _nbwsSearchHintRaw = window.notebookWorkspace && window.notebookWorkspace.getSearchHintForChat
+      ? window.notebookWorkspace.getSearchHintForChat()
+      : null;
+    const _nbwsSearchHint = (_nbwsWorkspaceOpenAtSubmit && typeof _nbwsSearchHintRaw === 'string' && _nbwsSearchHintRaw.trim())
+      ? _nbwsSearchHintRaw.trim()
+      : null;
+    if (_nbwsWorkspaceOpenAtSubmit) {
       _nbwsSourceIds = window.notebookWorkspace.getSourceIdsForChat ? window.notebookWorkspace.getSourceIdsForChat() : null;
       if (Array.isArray(_nbwsSourceIds) && _nbwsSourceIds.length === 0) {
         uiModule.showError(window.notebookWorkspace.EMPTY_SELECTION_MESSAGE || 'Select at least one source');
@@ -852,13 +875,16 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       _sendPerf.mark('pending_session_done');
       if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
 
-      // Fail-closed vangnet (issue #22): the notebook workspace is open right
-      // now, but the session just materialized without a notebook binding —
-      // sending would let RAG grounding silently drop while the notebook UI
-      // still implies grounded answers. The primary fix is
-      // materializePendingSession reading the open workspace's notebook id
-      // live at materialize time; this only catches a bypassed path.
-      if (window.notebookWorkspace?.isNotebookWorkspaceOpen?.() &&
+      // Fail-closed vangnet (issue #22): the notebook workspace was open at
+      // submit time (see the synchronous _nbwsWorkspaceOpenAtSubmit snapshot
+      // above — not re-read live here, since a caller may have closed the
+      // workspace during the await above), but the session just materialized
+      // without a notebook binding — sending would let RAG grounding
+      // silently drop while the notebook UI still implies grounded answers.
+      // The primary fix is materializePendingSession reading the open
+      // workspace's notebook id live at materialize time; this only catches
+      // a bypassed path.
+      if (_nbwsWorkspaceOpenAtSubmit &&
           !(sessionModule.getLastMaterializedNotebookId && sessionModule.getLastMaterializedNotebookId())) {
         const box = document.getElementById('chat-history');
         if (box) {
@@ -1238,6 +1264,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       // not a JSON body. `_nbwsSourceIds` was computed once at the top of
       // this handler (see the send guard there); null means no filter.
       if (Array.isArray(_nbwsSourceIds)) fd.append('source_ids', JSON.stringify(_nbwsSourceIds));
+      // search_hint: bare mindmap-node label, captured once at the top of
+      // this handler (see the gate there) — best-effort condensation-fallback
+      // anchor server-side, never required (#112).
+      if (_nbwsSearchHint) fd.append('search_hint', _nbwsSearchHint);
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && activeDocIdForSend) {
         try {
