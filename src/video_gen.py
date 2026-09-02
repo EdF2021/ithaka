@@ -167,7 +167,6 @@ async def start_generation(
         "aspectRatio": aspect_ratio,
         "resolution": resolution,
         "durationSeconds": str(duration_seconds),
-        "numberOfVideos": 1,
     }
     if negative_prompt:
         parameters["negativePrompt"] = negative_prompt
