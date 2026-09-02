@@ -1020,6 +1020,18 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     let finalMeta = null;
     let spinner = null;
     let timedOut = false;
+    // Declared here, at handleChatSubmit's top level, instead of at their
+    // original point of use further down inside the try — `try`/`catch` are
+    // sibling block scopes, so a `const`/`let` declared inside the try is
+    // NOT visible inside the catch at all (this is plain lexical scoping,
+    // not a temporal-dead-zone timing issue). The catch block below reads
+    // both of these unconditionally, so leaving them declared inside the
+    // try makes the catch throw its own `ReferenceError: X is not defined`
+    // on every foreground error it handles (timeouts, aborts, stream
+    // errors), masking the real error and escaping as a second unhandled
+    // promise rejection (issue #135).
+    let streamingTTS = false;
+    let _isAgent = false;
     let processingProbeTimer = null;
     let processingProbeAbort = null;
     let _renderStream = () => {};
@@ -1371,7 +1383,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       currentAbort = abortCtrl;
 
       const _tState = Storage.loadToggleState();
-      const _isAgent = (_tState.mode || 'chat') === 'agent';
+      _isAgent = (_tState.mode || 'chat') === 'agent';
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
@@ -1540,7 +1552,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       let isThinking = false;
       let thinkingStartTime = null;
       // Streaming TTS: synthesize sentence-by-sentence during streaming
-      const streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
+      streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
       if (streamingTTS) window.aiTTSManager.streamingStart();
       if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onStreamStart();
       // Multi-bubble agent tracking
