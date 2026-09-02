@@ -4172,6 +4172,12 @@ function _wireCanvas(container, initialImageUrl) {
     // Position is anchored to the wrap, not the canvas; since the canvas is
     // the first child of the wrap and the wrap has no padding, they share an
     // origin, so we offset from the canvas rect directly.
+    // UI text-scale zoom (:root.ui-scale-125) — `input` below is
+    // position:absolute inside `wrap` (position:relative), both inside the
+    // zoomed root, so this getBoundingClientRect()-derived delta is still
+    // viewport-space and needs dividing once before assigning as local px
+    // (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const px = t.clientX - r.left;
     const py = t.clientY - r.top;
     const logical = _pos(e);
@@ -4187,11 +4193,13 @@ function _wireCanvas(container, initialImageUrl) {
     input.className = 'note-form-draw-textinput';
     input.placeholder = 'type then Enter';
     const color = colorInput?.value || '#222';
-    const maxW = Math.max(120, Math.floor(r.width - px - 4));
+    // `-4` is a handwritten local design buffer, not a measurement — stays
+    // outside the division (same convention as sizeCss's `top` below).
+    const maxW = Math.max(120, Math.floor(toLocalPx(r.width - px, _z) - 4));
     input.style.cssText = [
       'position:absolute',
-      `left:${px}px`,
-      `top:${Math.max(0, py - sizeCss * 0.7)}px`,
+      `left:${toLocalPx(px, _z)}px`,
+      `top:${Math.max(0, toLocalPx(py, _z) - sizeCss * 0.7)}px`,
       `font:${sizeCss}px Arial, sans-serif`,
       `color:${color}`,
       'background:#ffffff',

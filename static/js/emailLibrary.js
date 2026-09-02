@@ -1601,7 +1601,15 @@ export function openEmailLibrary(opts = {}) {
       }
       const card = _fab.parentElement;            // .admin-card (positioned)
       const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-      const overflowBelow = card ? Math.max(0, Math.round(card.getBoundingClientRect().bottom - vh)) : 0;
+      // UI text-scale zoom (:root.ui-scale-125) — `_fab` is position:absolute
+      // inside `.admin-card` (position:relative), both inside the zoomed
+      // root, so this getBoundingClientRect()/viewport-height delta is
+      // viewport-space; divide once before folding into the calc() string.
+      // The `18px`/`env(...)` base offset stays as-is — a local design
+      // constant that already scales with zoom like any CSS-declared value
+      // (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
+      const overflowBelow = card ? Math.max(0, Math.round(toLocalPx(card.getBoundingClientRect().bottom - vh, _z))) : 0;
       _fab.style.bottom = `calc(18px + env(safe-area-inset-bottom, 0px) + ${overflowBelow}px)`;
     }
     if (window.visualViewport) {

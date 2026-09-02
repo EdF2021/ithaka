@@ -7878,9 +7878,16 @@ import { zoomOf, toLocalPx } from './uiZoom.js';
     const marker = document.createElement('span');
     marker.textContent = '​';
     mirror.appendChild(marker);
+    // UI text-scale zoom (:root.ui-scale-125) — `mirror` is position:absolute
+    // inside `wrap` (position:relative), both inside the zoomed root, so this
+    // getBoundingClientRect() delta is still viewport-space; divide once here
+    // so every caller (renderAllSelectionHighlights' addRect) gets an
+    // already-local value to add to paddingTop/paddingLeft/scrollTop (see
+    // uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const r = marker.getBoundingClientRect();
     const m = mirror.getBoundingClientRect();
-    return { x: r.left - m.left, y: r.top - m.top };
+    return { x: toLocalPx(r.left - m.left, _z), y: toLocalPx(r.top - m.top, _z) };
   }
 
   /** Render persistent highlight overlays for all selections */
