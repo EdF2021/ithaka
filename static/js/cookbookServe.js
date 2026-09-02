@@ -2695,8 +2695,8 @@ function _rerenderCachedModels() {
           // already local (see uiZoom.js, PR #76/#77).
           const _z = zoomOf(document.documentElement);
           const r = anchorBtn.getBoundingClientRect();
-          const vw = toLocalPx(window.innerWidth  || document.documentElement.clientWidth, _z);
-          const vh = toLocalPx(window.innerHeight || document.documentElement.clientHeight, _z);
+          const vw = toLocalPx(window.innerWidth, _z);
+          const vh = toLocalPx(window.innerHeight, _z);
           const pw = popup.offsetWidth  || 320;
           const ph = popup.offsetHeight || 200;
           let left = toLocalPx(r.left, _z);
