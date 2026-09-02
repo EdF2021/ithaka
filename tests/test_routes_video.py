@@ -210,6 +210,9 @@ def test_serve_video_owner_gets_file(monkeypatch, tmp_path):
     assert r.status_code == 200
     assert r.content == content
     assert r.headers["content-type"] == "video/mp4"
+    # private (not public): an owner-gated resource must never be stored or
+    # replayed by a shared/intermediate cache for another caller.
+    assert r.headers["cache-control"].startswith("private,")
 
 
 def test_serve_video_not_done_status_is_404(monkeypatch, tmp_path):

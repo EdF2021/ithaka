@@ -8,6 +8,7 @@ src/notebook_audio.py's NOTEBOOK_AUDIO_DIR pattern.
 """
 import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -163,6 +164,51 @@ async def test_download_video_error_status_raises():
 # --------------------------------------------------------------------------
 # resolve_gemini_endpoint
 # --------------------------------------------------------------------------
+
+_GEMINI_BASE_SHAPES = [
+    "https://generativelanguage.googleapis.com",
+    "https://generativelanguage.googleapis.com/v1",
+    "https://generativelanguage.googleapis.com/v1beta",
+    "https://generativelanguage.googleapis.com/v1beta/",
+    "https://generativelanguage.googleapis.com/v1beta/openai",
+    "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+]
+
+
+@pytest.mark.parametrize("raw_base", _GEMINI_BASE_SHAPES)
+def test_normalize_gemini_base_always_yields_v1beta(raw_base):
+    assert video_gen._normalize_gemini_base(raw_base) == "https://generativelanguage.googleapis.com/v1beta"
+
+
+@pytest.mark.parametrize("raw_base", _GEMINI_BASE_SHAPES)
+def test_resolve_gemini_endpoint_normalizes_every_stored_shape(raw_base):
+    """Whatever shape an admin saved base_url in (bare host, /v1, /v1beta,
+    the OpenAI-compat proxy path with or without /chat/completions), the
+    Veo REST base returned is always the same canonical .../v1beta."""
+    class EP:
+        base_url = raw_base
+        api_key = "K"
+        is_enabled = True
+
+    class Q:
+        def filter(self, *a):
+            return self
+
+        def all(self):
+            return [EP()]
+
+    class S:
+        def query(self, *a):
+            return Q()
+
+        def close(self):
+            pass
+
+    base, key = video_gen.resolve_gemini_endpoint(db_session_factory=lambda: S())
+    assert base == "https://generativelanguage.googleapis.com/v1beta"
+    assert key == "K"
+
 
 def test_resolve_gemini_endpoint_strips_openai_suffix():
     class EP:
@@ -376,6 +422,30 @@ async def test_job_safety_block_is_error(tmp_path, monkeypatch):
     assert job["status"] == "error"
     assert "safety" in job["error"].lower()
     assert not (tmp_path / f"{job_id}.mp4").exists()
+
+
+async def test_run_job_cancelled_sets_error_status(monkeypatch):
+    """A cancelled asyncio.Task (e.g. app shutdown mid-job) must still leave
+    the job registry in a terminal, reportable state — not stuck 'running'
+    forever — and re-raise so the task's cancellation itself isn't swallowed."""
+    job_id = "f" * 32
+    entry = {
+        "status": "running", "prompt": "x", "model": "veo-3.1-generate-preview",
+        "error": None, "video_url": None, "cost_estimate": 1.0,
+        "owner": "ed", "started_at": time.time(), "completed_at": None, "task": None,
+    }
+    video_gen._active_jobs[job_id] = entry
+
+    async def _raise_cancelled(*a, **k):
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(video_gen, "_generate", _raise_cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await video_gen._run_job(job_id, None)
+
+    assert entry["status"] == "error"
+    assert entry["error"] == "Generatie afgebroken"
+    assert entry["completed_at"] is not None
 
 
 def test_get_job_recovers_from_disk(tmp_path, monkeypatch):

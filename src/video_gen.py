@@ -57,7 +57,9 @@ VEO_PRICE_PER_SECOND_720P = {
 VIDEO_FILENAME_RE = re.compile(r"^[a-f0-9]{32}\.mp4$")
 VIDEO_HEADERS = {
     # Every generation gets a fresh uuid4 filename, so immutable is safe.
-    "Cache-Control": "public, max-age=31536000, immutable",
+    # private (not public): this is an owner-gated resource — a shared/
+    # intermediate cache must never store or replay it for another caller.
+    "Cache-Control": "private, max-age=31536000, immutable",
     "X-Content-Type-Options": "nosniff",
 }
 
@@ -92,11 +94,35 @@ def _error_text(resp: httpx.Response) -> str:
 # Gemini endpoint resolution
 # --------------------------------------------------------------------------
 
+# Matches the /v1 or /v1beta API-version segment wherever it starts in a
+# stored base_url, so it can be cut and replaced with a canonical /v1beta —
+# handles a bare "/v1" endpoint, an already-correct "/v1beta" one, and the
+# OpenAI-compat proxy path some tooling writes for the same endpoint
+# (".../v1beta/openai" or ".../v1beta/openai/chat/completions").
+_GEMINI_V1_SEGMENT_RE = re.compile(r"/v1(?:beta)?(?:/|$)")
+
+
+def _normalize_gemini_base(base: str) -> str:
+    """Normalize a stored Gemini base_url to https://.../v1beta.
+
+    Endpoints may be saved as a bare host, a /v1 or /v1beta suffix, or the
+    OpenAI-compat proxy path for the same endpoint — all of these must
+    resolve to the same Veo REST base.
+    """
+    base = (base or "").rstrip("/")
+    if base.endswith("/v1beta"):
+        return base
+    match = _GEMINI_V1_SEGMENT_RE.search(base)
+    if match:
+        return base[: match.start()] + "/v1beta"
+    return base + "/v1beta"
+
+
 def resolve_gemini_endpoint(db_session_factory=None) -> tuple[str, str]:
     """First enabled ModelEndpoint pointing at the Gemini API.
 
-    Returns (base_url without a trailing /openai suffix, api_key).
-    Raises RuntimeError("Geen Gemini-endpoint met API-key") when none is
+    Returns (base_url normalized to .../v1beta, api_key). Raises
+    RuntimeError("Geen Gemini-endpoint met API-key") when none is
     configured or none of them carries a key.
     """
     from core.database import ModelEndpoint, SessionLocal
@@ -110,9 +136,7 @@ def resolve_gemini_endpoint(db_session_factory=None) -> tuple[str, str]:
             api_key = getattr(ep, "api_key", None)
             if "generativelanguage.googleapis.com" not in base or not api_key:
                 continue
-            if base.endswith("/openai"):
-                base = base[: -len("/openai")]
-            return base, api_key
+            return _normalize_gemini_base(base), api_key
     finally:
         db.close()
     raise RuntimeError("Geen Gemini-endpoint met API-key")
