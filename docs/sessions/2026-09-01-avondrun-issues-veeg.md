@@ -64,8 +64,9 @@ worktrees, regie/reviews/merges centraal; elke PR met CI + bewijs in chat vóór
 - Prod herbouwd op dev t/m #121; live geverifieerd: app gezond, Mail-widget toont de echte
   live-telling (2140, screenshot in sessie).
 - **PR #123** (unread altijd live tellen met in-memory TTL-cache — heft het 907↔2140-flip-floppen
-  van het partiële index-pad op): CI groen, **merge door Ed tegengehouden** — wacht op zijn
-  beslissing (comment op #119). Tot die tijd kan het widget-getal wisselen per TTL-pad.
+  van het partiële index-pad op): de "denied merge" van 2026-09-01 bleek een misklik; op Eds
+  "waarom merge je niet??" (2026-09-02 08:00) alsnog gemerged (`183ab45`), prod herbouwd en live
+  geverifieerd: poll 1 `2142/live`, poll 2 `2142/memory` — stabiel. Issue #119 gesloten.
 - #121-restgap: mobile-only notes-drag-ghost-maat niet visueel verifieerbaar (native touch-DnD
   buiten CDP-bereik) — genoteerd op #122.
 - Open issues na deze run: #112 (RAG voorstel B + prod-validatie), #122 (zoom-restklasse),
