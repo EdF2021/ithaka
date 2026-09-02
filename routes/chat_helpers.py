@@ -623,15 +623,36 @@ def _session_is_research_spinoff(sess) -> bool:
     return False
 
 
+# Client-side sentinels that must never be treated as a real notebook id.
+# A broken client binding (e.g. a JS `undefined` stringified into a FormData
+# field, or a stray "null") must never reach the Chroma `where` filter as a
+# literal value — that filter then matches nothing and RAG silently returns
+# zero results instead of falling back to unscoped chat (#112).
+_NOTEBOOK_ID_SENTINELS = frozenset({"undefined", "null"})
+
+
 def _session_notebook_id(sess):
     """The notebook this session is bound to, or None.
 
     A bound session answers strictly from that notebook's sources. Tolerates
     sessions that predate the column (attribute missing) and normalises the
     empty string to None so ``if _session_notebook_id(sess)`` is the single
-    truth test everywhere (tool lockdown reads this too).
+    truth test everywhere (tool lockdown reads this too). Also normalises a
+    stringified-JS-undefined/null binding to None — a broken client read must
+    degrade to "no notebook", never poison the RAG where-filter with a
+    literal value that matches nothing (#112).
     """
-    return getattr(sess, "notebook_id", None) or None
+    raw = getattr(sess, "notebook_id", None) or None
+    if raw is None:
+        return None
+    if raw.strip().lower() in _NOTEBOOK_ID_SENTINELS:
+        logger.warning(
+            "session %s: notebook_id is the literal string %r — treating as "
+            "unbound (broken client binding, #112)",
+            getattr(sess, "id", "?"), raw,
+        )
+        return None
+    return raw
 
 
 async def build_chat_context(

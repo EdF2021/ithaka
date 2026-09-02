@@ -866,6 +866,17 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     // silently see "closed" and skip its check for an entry point where the
     // workspace genuinely was open at submit time.
     const _nbwsWorkspaceOpenAtSubmit = !!(window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen());
+    // notebook_id (#112): read at the exact same synchronous snapshot moment
+    // as _nbwsWorkspaceOpenAtSubmit above — not later, inside whatever
+    // eventually materializes the session — so a caller that legitimately
+    // closes the workspace mid-await (the mindmap-node-click entry point)
+    // can never leave a materialize call reading post-close state. Passed
+    // through to materializePendingSession(), which still falls back to its
+    // own live read for callers that have no such snapshot (document
+    // panel/library sends never go through this handler).
+    const _nbwsNotebookIdAtSubmit = _nbwsWorkspaceOpenAtSubmit
+      ? ((window.notebookWorkspace.getCurrentNotebookId && window.notebookWorkspace.getCurrentNotebookId()) || null)
+      : null;
     let _nbwsSourceIds = null;
     // search_hint: _nbwsSearchHintRaw was already read-and-cleared at the
     // very top of this handler (see the comment there for why it must be
@@ -887,7 +898,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     // Materialize pending session (deferred from model click) on first message
     if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {
       _sendPerf.mark('pending_session_begin');
-      const ok = await sessionModule.materializePendingSession();
+      const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
       _sendPerf.mark('pending_session_done');
       if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
 
@@ -922,7 +933,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       try {
         const pending = sessionModule.getPendingChat && sessionModule.getPendingChat();
         if (pending && pending.url && pending.modelId) {
-          const ok = await sessionModule.materializePendingSession();
+          const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         }
       } catch (_) {}
@@ -948,7 +959,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           _sendPerf.mark('direct_chat_create_begin');
           await sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
           _sendPerf.mark('direct_chat_create_done');
-          const ok = await sessionModule.materializePendingSession();
+          const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
           _sendPerf.mark('direct_chat_materialize_done');
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         } else {

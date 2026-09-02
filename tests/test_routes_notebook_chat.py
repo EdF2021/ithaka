@@ -336,6 +336,32 @@ def test_session_notebook_id_helper():
     assert _session_notebook_id(s) == "nb-1"
 
 
+def test_session_notebook_id_rejects_stringified_undefined(caplog):
+    """#112: a broken client read (FormData.append() stringifying an actual
+    JS `undefined`, or a stray "null") must degrade to "no notebook", not
+    reach the RAG where-filter as a literal value that matches nothing and
+    silently zeroes out retrieval. Each rejection is logged so a bad binding
+    is diagnosable from prod logs alone."""
+    from routes.chat_helpers import _session_notebook_id
+
+    class _S:
+        id = "sess-1"
+
+    s = _S()
+    with caplog.at_level("WARNING", logger="routes.chat_helpers"):
+        for bad in ("undefined", "null", "UNDEFINED", "  undefined  ", "Null"):
+            s.notebook_id = bad
+            assert _session_notebook_id(s) is None, bad
+
+    warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 5
+    assert all("sess-1" in w for w in warnings)
+
+    # A real notebook id that merely contains the word must NOT be swallowed.
+    s.notebook_id = "undefined-behavior-notebook"
+    assert _session_notebook_id(s) == "undefined-behavior-notebook"
+
+
 def test_session_dataclass_carries_notebook_id():
     """The binding must survive on the in-memory session, not just the DB row."""
     from core.models import Session

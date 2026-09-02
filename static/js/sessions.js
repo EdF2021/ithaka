@@ -2245,8 +2245,23 @@ export function createDirectChat(url, modelId, endpointId) {
   if (msgInput) { msgInput.disabled = false; msgInput.value = ''; msgInput.focus(); }
 }
 
-/** Actually create the session in the DB. Called on first message send. */
-export async function materializePendingSession() {
+/**
+ * Actually create the session in the DB. Called on first message send.
+ *
+ * `notebookIdAtSubmit` (#112): an OPTIONAL pre-captured snapshot of the open
+ * workspace's notebook id, read by the caller at its own submit-time entry
+ * point (chat.js's handleChatSubmit — same synchronous instant as its
+ * _nbwsWorkspaceOpenAtSubmit snapshot), strictly before this function is
+ * even invoked. When the caller passes one (including explicit `null`,
+ * meaning "no workspace was open"), it wins over a live read here — a value
+ * captured earlier than this function's own body can only be as fresh or
+ * fresher, never staler, and removes any implicit reliance on there being no
+ * await between the caller's snapshot and this call. `undefined` (the
+ * parameter omitted entirely — every non-notebook caller: documentLibrary.js,
+ * document.js, chat.js's default-session fallbacks) keeps the original
+ * live-read-at-materialize behavior below.
+ */
+export async function materializePendingSession(notebookIdAtSubmit) {
   const pending = _pendingChat;
   if (!pending) return false;
   _pendingChat = null;
@@ -2258,9 +2273,11 @@ export async function materializePendingSession() {
   // as ground truth (issue #22 review round 1: capture-at-create produced a
   // stale silent mis-bind after a notebook switch, and a false-positive
   // block when a workspace opened after the pending chat was created).
-  const nbId = window.notebookWorkspace?.isNotebookWorkspaceOpen?.()
-    ? (window.notebookWorkspace?.getCurrentNotebookId?.() || null)
-    : null;
+  const nbId = (notebookIdAtSubmit !== undefined)
+    ? notebookIdAtSubmit
+    : (window.notebookWorkspace?.isNotebookWorkspaceOpen?.()
+        ? (window.notebookWorkspace?.getCurrentNotebookId?.() || null)
+        : null);
   // Recorded before the network round-trip so chat.js can fail-closed-check
   // the bind even though _pendingChat itself is already cleared (issue #22).
   _lastMaterializedNotebookId = nbId;
