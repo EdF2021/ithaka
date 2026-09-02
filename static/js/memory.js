@@ -913,7 +913,18 @@ export function renderMemoryList() {
           if (Math.abs(dy) < Math.abs(dx)) { _sw = null; return; }
           if (dy > 0) {
             _swDy = dy;
-            dropdown.style.transform = 'translateY(' + dy + 'px)';
+            // UI text-scale zoom (:root.ui-scale-125) — `dy` is a
+            // viewport-space touch delta (clientY); `dropdown` sits inside
+            // the zoomed root, so the transform must be divided by zoom
+            // before assignment or the popup will outrun the finger under
+            // ui-scale-125 (same re-multiplication bug class as
+            // position:top/left; see uiZoom.js, PR #76/#77). The `_swDy >
+            // 60` release threshold below stays viewport-space (a
+            // gesture-distance tolerance, same precedent as windowDrag.js's
+            // SNAP_PX/DOCK_EDGE_PX), and the `translateY(120px)` snap-away
+            // distance stays a local design constant, same as the `/ 240`
+            // fade.
+            dropdown.style.transform = 'translateY(' + toLocalPx(dy, zoomOf(document.documentElement)) + 'px)';
             dropdown.style.opacity = String(Math.max(0.3, 1 - dy / 240));
           }
         };
