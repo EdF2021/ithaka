@@ -3597,6 +3597,10 @@ async def _execute_round_tool_blocks(
         for k in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
             if k in result:
                 tool_output_data[k] = result[k]
+        # Forward video job data from generate_video tool
+        for k in ("video_job_id", "video_model", "video_status", "video_cost_estimate", "video_url"):
+            if k in result:
+                tool_output_data[k] = result[k]
         # Forward screenshots from browser tools (base64 images)
         if result.get("images"):
             img = result["images"][0]
@@ -3698,6 +3702,10 @@ async def _execute_round_tool_blocks(
             for ik in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
                 if result.get(ik):
                     tool_event[ik] = result[ik]
+        if result.get("video_job_id"):
+            for vk in ("video_job_id", "video_model", "video_status", "video_cost_estimate", "video_url"):
+                if vk in result:
+                    tool_event[vk] = result[vk]
         if result.get("doc_id"):
             tool_event["doc_id"] = result["doc_id"]
             tool_event["doc_title"] = result.get("title", "")
