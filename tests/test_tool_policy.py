@@ -298,6 +298,68 @@ def test_notebook_lockdown_blocked_fenced_tool_does_not_trigger_round_two(monkey
     )
 
 
+def test_notebook_lockdown_blocked_native_tool_call_does_not_trigger_round_two(monkeypatch):
+    """Same as test_notebook_lockdown_blocked_fenced_tool_does_not_trigger_round_two,
+    but for a *native* function-calling tool call (data type "tool_calls")
+    rather than a fenced code block. agent_loop.py's discard branch clears
+    both `tool_blocks`/`converted_calls` (fenced path) and
+    `native_tool_calls`/`used_native` (native path) -- this covers the
+    native path, which the fenced-only test above cannot exercise since
+    `used_native` stays False there.
+    """
+    from routes.chat_routes import _apply_notebook_tool_lockdown
+
+    _patch_loop_basics(monkeypatch)
+    calls = 0
+
+    async def _fake_stream(_candidates, messages, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield _delta_chunk("Referentie-antwoord op basis van bron 1 [1, ¶1].")
+            yield "data: " + json.dumps({
+                "type": "tool_calls",
+                "calls": [{
+                    "id": "call_1",
+                    "name": "bash",
+                    "arguments": json.dumps({"command": "echo should-not-run"}),
+                }],
+            }) + "\n\n"
+        else:
+            # If this ever executes, the bug has regressed: round 2 should
+            # never be reached under notebook lockdown.
+            yield _delta_chunk(
+                "Referentiecontext ontvangen. Heb je een vervolgvraag over de notebook-bronnen?"
+            )
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(al, "stream_llm_with_fallback", _fake_stream, raising=False)
+    sess = SimpleNamespace(notebook_id="nb-141")
+    base_policy = build_effective_tool_policy(last_user_message="Wat zegt bron 1 hierover?")
+    policy = _apply_notebook_tool_lockdown(sess, base_policy)
+    assert policy.block_all_tool_calls is True
+
+    chunks = _collect(
+        al.stream_agent_loop(
+            "http://local.test/v1",
+            "local-model",
+            [{"role": "user", "content": "Wat zegt bron 1 hierover?"}],
+            max_rounds=3,
+            relevant_tools={"bash"},
+            tool_policy=policy,
+        )
+    )
+    events = _events(chunks)
+    assert calls == 1, "notebook lockdown must not start a second agent round"
+    assert not any(event.get("type") == "tool_start" for event in events)
+    assert not any(
+        "Referentiecontext ontvangen" in event.get("delta", "") for event in events
+    )
+    assert any(
+        "Referentie-antwoord" in event.get("delta", "") for event in events
+    )
+
+
 def test_notebook_lockdown_keeps_round_two_when_round_one_is_fence_only(monkeypatch):
     """Guard for the discard added by #141: if round 1 is *only* the blocked
     fenced tool block (no prose at all), discarding it outright would leave

@@ -4542,12 +4542,13 @@ async def stream_agent_loop(
         # never will, so a detected fenced/native tool call is never a real
         # action -- it's the model hallucinating a call it can't make (e.g. a
         # weaker/unrecognized model not classified as native-tool-capable, so
-        # its illustrative fence gets parsed as Pattern-1). Executing it just
-        # yields a canned "blocked by policy" result, and looping that result
-        # back to the model produces a spurious, confusing round-2 reply
-        # ("Referentiecontext ontvangen...") on top of the already-correct
-        # round-1 answer. Discard it here and let this round finish as a
-        # normal no-tool-call turn instead. Gated on the dedicated
+        # its illustrative fence gets parsed as Pattern-1, or a native call
+        # the model emitted despite no schemas being offered). Executing it
+        # just yields a canned "blocked by policy" result, and looping that
+        # result back to the model produces a spurious, confusing round-2
+        # reply ("Referentiecontext ontvangen...") on top of the already-
+        # correct round-1 answer. Discard it here and let this round finish
+        # as a normal no-tool-call turn instead. Gated on the dedicated
         # `discard_blocked_tool_calls` flag (set only by notebook lockdown),
         # not on block_all_tool_calls in general, so guide-only mode keeps
         # its existing, separately-tested round-2 behavior.
@@ -4563,27 +4564,45 @@ async def stream_agent_loop(
             and tool_policy.discard_blocked_tool_calls
             and tool_blocks
         ):
+            # Apply the discard tentatively so `used_native` here already
+            # equals what it will be if we keep it -- that keeps this
+            # skip_fenced expression textually identical to (and never able
+            # to drift from) the persisted-text one at `cleaned_round` below,
+            # instead of duplicating a second, independently-maintained
+            # formula. Rolled back below if no prose survives.
+            _blocked_tool_blocks = tool_blocks
+            _blocked_converted_calls = converted_calls
+            _blocked_native_tool_calls = native_tool_calls
+            _blocked_used_native = used_native
+            tool_blocks = []
+            converted_calls = []
+            if used_native:
+                native_tool_calls = []
+            used_native = False
             _prose_survives_discard = bool(
                 strip_tool_blocks(
-                    round_response, skip_fenced=(_is_api_model and not guide_only)
+                    round_response,
+                    skip_fenced=(_is_api_model and not used_native and not guide_only),
                 ).strip()
             )
             if _prose_survives_discard:
                 logger.info(
-                    "Agent round %s: discarding %d fenced tool block(s) - notebook lockdown blocks all tools this turn",
-                    round_num, len(tool_blocks),
+                    "Agent round %s: discarding %d tool block(s) - notebook lockdown blocks all tools this turn",
+                    round_num, len(_blocked_tool_blocks),
                 )
-                tool_blocks = []
-                converted_calls = []
-                if used_native:
-                    native_tool_calls = []
-                used_native = False
             else:
+                # No prose would survive -- roll back and keep the existing
+                # blocked-tool round-trip so the model still gets a chance
+                # at a real answer instead of an empty turn.
+                tool_blocks = _blocked_tool_blocks
+                converted_calls = _blocked_converted_calls
+                native_tool_calls = _blocked_native_tool_calls
+                used_native = _blocked_used_native
                 logger.info(
                     "Agent round %s: notebook lockdown blocked %d tool block(s) but no prose "
                     "survives discarding them; keeping the blocked-tool round-trip so the "
                     "model still gets a chance at a real answer",
-                    round_num, len(tool_blocks),
+                    round_num, len(_blocked_tool_blocks),
                 )
 
         if _ody_doc_stream_create_mode and tool_blocks:
