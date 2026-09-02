@@ -43,7 +43,7 @@ async def test_start_generation_posts_predict_long_running():
     assert seen["url"].endswith("/v1beta/models/veo-3.1-generate-preview:predictLongRunning")
     assert seen["key"] == "KEY"
     assert seen["body"]["instances"][0]["prompt"] == "a cat"
-    assert seen["body"]["parameters"]["durationSeconds"] == "8"
+    assert seen["body"]["parameters"]["durationSeconds"] == 8
     assert seen["body"]["parameters"]["aspectRatio"] == "16:9"
     assert "negativePrompt" not in seen["body"]["parameters"]
 

@@ -166,7 +166,7 @@ async def start_generation(
     parameters = {
         "aspectRatio": aspect_ratio,
         "resolution": resolution,
-        "durationSeconds": str(duration_seconds),
+        "durationSeconds": int(duration_seconds),
     }
     if negative_prompt:
         parameters["negativePrompt"] = negative_prompt
