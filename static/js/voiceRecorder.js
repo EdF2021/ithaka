@@ -209,7 +209,10 @@ async function transcribeOnServer(audioBlob) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail?.message || 'Transcription failed');
+    const serverDetail = err.detail?.message || err.detail?.error
+      || (typeof err.detail === 'string' ? err.detail : null)
+      || 'Transcription failed';
+    throw new Error(`HTTP ${res.status}: ${serverDetail}`);
   }
 
   const data = await res.json();
@@ -305,6 +308,12 @@ export function startRecording(onFileCreated, showToast, showError, opts = {}) {
             }
           } catch (e) {
             console.error('STT transcription error:', e);
+            // The 'Transcription failed' prefix is load-bearing: voiceMode.js'
+            // _onRecordingError() matches on it to tell a recoverable
+            // transcription error (handled by the 3-strikes onDone('error')
+            // counter below) apart from an unrecoverable mic-level error
+            // (permissions/device/secure-context), which has no matching
+            // onDone call. Keep both in sync if this message changes.
             if (showError) showError('Transcription failed: ' + e.message);
             // Fallback: attach as file
             const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });

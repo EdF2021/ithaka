@@ -38,9 +38,16 @@ def setup_stt_routes(stt_service):
 
             text = stt_service.transcribe(audio_bytes)
             if text is None:
+                # last_error carries the upstream reason (HTTP status,
+                # network failure, ...) when the provider's a remote API
+                # endpoint — surface it instead of a bare "failed" (the
+                # 2026-09-02 incident: a chat-only endpoint 500'd every
+                # transcription with no clue why).
+                reason = getattr(stt_service, "last_error", None)
+                message = f"Transcription failed: {reason}" if reason else "Transcription failed"
                 raise HTTPException(
                     status_code=500,
-                    detail={"message": "Transcription failed"}
+                    detail={"message": message}
                 )
 
             return {"text": text}

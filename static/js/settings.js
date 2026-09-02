@@ -1138,16 +1138,25 @@ async function initSttSettings() {
   updateVisibility();
 
   async function saveSTT() {
+    var enabled = sttEnabledToggle ? sttEnabledToggle.checked : false;
+    // Picking an API endpoint triggers a server-side probe (routes/auth_routes.py
+    // POST /api/auth/settings) that can take a few seconds — show something
+    // other than a frozen field while it runs.
+    sttMsg.textContent = 'Checking...'; sttMsg.style.color = 'var(--fg)';
     try {
-      var enabled = sttEnabledToggle ? sttEnabledToggle.checked : false;
-      await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+      var res = await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stt_enabled: enabled, stt_provider: provSel.value, stt_model: getModel() || 'base', stt_language: langInput.value.trim() }) });
+      if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        var detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message);
+        throw new Error(detail || 'Save failed');
+      }
       sttMsg.textContent = 'Saved'; sttMsg.style.color = 'var(--fg)'; setTimeout(() => { sttMsg.textContent = ''; }, 2000);
       // Notify voiceRecorder of effective provider and update send button icon
       if (window.voiceRecorderModule) window.voiceRecorderModule._sttProvider = effectiveProvider();
       if (window._updateSendBtnIcon) window._updateSendBtnIcon();
-    } catch (e) { sttMsg.textContent = 'Failed to save'; sttMsg.style.color = 'var(--red)'; }
+    } catch (e) { sttMsg.textContent = e.message || 'Failed to save'; sttMsg.style.color = 'var(--red)'; }
   }
 
   provSel.addEventListener('change', function() { updateVisibility(); saveSTT(); });
