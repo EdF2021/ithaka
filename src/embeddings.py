@@ -170,6 +170,56 @@ def _preload_onnxruntime_cuda_dlls() -> None:
         logger.debug("onnxruntime.preload_dlls() skipped: %s", e)
 
 
+_onnxruntime_providers_logged = False  # process-level latch: log once
+
+
+def _log_onnxruntime_providers(embedding) -> None:
+    """Log (once per process) the onnxruntime execution providers fastembed
+    actually selected, so a silent CPU fallback (e.g. CUDA libs still
+    unresolvable despite the GPU image) is visible in the logs instead of
+    only inferable from embedding latency.
+
+    Reaches the real onnxruntime InferenceSession via
+    ``TextEmbedding.model.model`` (fastembed's embedding-backend wrapper
+    around the session; verified empirically against the installed
+    fastembed version) and falls back to onnxruntime's static
+    ``get_available_providers()`` if that introspection doesn't pan out
+    (e.g. a lazy-loaded or differently-shaped model, or a test stub).
+    Best-effort throughout: this must never break embedding.
+    """
+    global _onnxruntime_providers_logged
+    if _onnxruntime_providers_logged:
+        return
+    _onnxruntime_providers_logged = True
+    try:
+        import onnxruntime
+
+        session = getattr(getattr(embedding, "model", None), "model", None)
+        session_providers = None
+        if session is not None and hasattr(session, "get_providers"):
+            session_providers = session.get_providers()
+            logger.info("fastembed onnxruntime providers: %s", session_providers)
+        else:
+            logger.info(
+                "fastembed onnxruntime providers: unknown (could not introspect "
+                "session); onnxruntime available providers: %s",
+                onnxruntime.get_available_providers(),
+            )
+
+        if session_providers is not None:
+            available = onnxruntime.get_available_providers()
+            if "CUDAExecutionProvider" in available and (
+                not session_providers or session_providers[0] != "CUDAExecutionProvider"
+            ):
+                logger.warning(
+                    "CUDA execution provider available but not selected — "
+                    "fastembed is running on CPU (session providers=%s)",
+                    session_providers,
+                )
+    except Exception as e:
+        logger.debug("onnxruntime provider logging skipped: %s", e)
+
+
 class FastEmbedClient:
     """Local embedding client using fastembed (ONNX). No external service needed."""
 
@@ -225,6 +275,7 @@ class FastEmbedClient:
                 logger.debug("embedding cache symlink-heal skipped: %s", _e)
         kwargs = {"model_name": self.model, "cache_dir": cache_dir}
         self._embedding = TextEmbedding(**kwargs)
+        _log_onnxruntime_providers(self._embedding)
         self._dim: Optional[int] = None
         self.url = "local://fastembed"
         logger.info(f"FastEmbed loaded model={self.model}")
