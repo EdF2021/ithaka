@@ -2469,6 +2469,35 @@ function initializeEventListeners() {
     }
   })();
 
+  (function initRealtimeVoiceToggle() {
+    const rtBtn = document.getElementById('overflow-realtime-btn');
+    const rtIndicator = document.getElementById('realtime-indicator-btn');
+    if (!rtBtn) return;
+
+    realtimeVoice.init(function rtStateChange(state) {
+      const { active, state: phase } = state;
+      rtBtn.classList.toggle('active', active);
+      updatePlusDot();
+      if (rtIndicator) {
+        rtIndicator.style.display = active ? '' : 'none';
+        rtIndicator.classList.toggle('active', active);
+        rtIndicator.title = active
+          ? (phase === 'speaking' ? 'Realtime gesprek — AI spreekt…' : phase === 'connecting' ? 'Realtime gesprek — verbinden…' : 'Realtime gesprek actief — klik om te stoppen')
+          : 'Realtime Gesprek';
+      }
+    });
+
+    rtBtn.addEventListener('click', () => {
+      realtimeVoice.toggle();
+    });
+
+    if (rtIndicator) {
+      rtIndicator.addEventListener('click', () => {
+        realtimeVoice.deactivate();
+      });
+    }
+  })();
+
 
   // ── Compare indicator (sidebar only, no overflow) ──
   const compareIndicatorBtn = el('compare-indicator-btn');

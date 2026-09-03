@@ -1175,6 +1175,13 @@
                 <span>Voice Mode</span>
                 <span class="overflow-active-dot"></span>
               </button>
+              <button type="button" class="overflow-menu-item" id="overflow-realtime-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="2"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                </svg>
+                <span>Realtime Gesprek</span>
+                <span class="overflow-active-dot"></span>
+              </button>
               <button type="button" class="overflow-menu-item" id="overflow-preset-btn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="m18 2 4 4"/><path d="m17 7 3-3"/><path d="M19 9 8.7 19.3c-1 1-2.5 1-3.4 0l-.6-.6c-1-1-1-2.5 0-3.4L15 5"/><path d="m9 11 4 4"/><path d="m5 19-3 3"/><path d="m14 4 6 6"/>
@@ -1243,6 +1250,14 @@
               <line x1="8" y1="23" x2="16" y2="23"/>
             </svg>
             <span style="font-size:11px;margin-left:2px;">Voice</span>
+            <svg class="tool-indicator-x" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+          </button>
+          <!-- Realtime Conversation indicator (hidden until active) -->
+          <button type="button" class="input-icon-btn tool-indicator" title="Realtime gesprek actief — klik om te stoppen" id="realtime-indicator-btn" style="display:none;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="2"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            </svg>
+            <span style="font-size:11px;margin-left:2px;">Realtime</span>
             <svg class="tool-indicator-x" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
           </button>
         </div>
@@ -1784,6 +1799,61 @@
                 <input id="set-sttLangInput" type="text" placeholder="auto-detect, or e.g. nl" style="flex:1;padding:5px;">
               </div>
               <div id="set-sttSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
+            </div>
+          </div>
+          <div class="admin-card">
+            <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:1px;opacity:0.6;flex-shrink:0"><circle cx="12" cy="12" r="2"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>Realtime Conversation<span style="flex:1"></span><label class="admin-switch"><input type="checkbox" id="set-realtimeEnabledToggle"><span class="admin-slider"></span></label></h2>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Direct WebRTC-gesprek met de OpenAI Realtime API — naast de gewone Voice Mode hierboven, lagere latency, kan onderbroken worden (barge-in).</div>
+            <div id="set-realtimeConfigWrap" style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Provider</label>
+                <select id="set-realtimeProviderSelect" class="settings-select">
+                  <option value="disabled">Disabled</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Model</label>
+                <input id="set-realtimeModelInput" type="text" placeholder="gpt-realtime-2.1-mini" style="flex:1;padding:5px;">
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Voice</label>
+                <select id="set-realtimeVoiceSelect" class="settings-select">
+                  <option value="alloy">alloy</option>
+                  <option value="ash">ash</option>
+                  <option value="ballad">ballad</option>
+                  <option value="coral">coral</option>
+                  <option value="echo">echo</option>
+                  <option value="sage">sage</option>
+                  <option value="shimmer">shimmer</option>
+                  <option value="verse">verse</option>
+                  <option value="marin">marin</option>
+                  <option value="cedar">cedar</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Noise reduction</label>
+                <select id="set-realtimeNoiseSelect" class="settings-select">
+                  <option value="near_field">near_field</option>
+                  <option value="far_field">far_field</option>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">VAD threshold</label>
+                <input id="set-realtimeVadThreshold" type="number" min="0" max="1" step="0.05" style="width:70px;padding:5px;">
+                <label class="settings-label">Prefix ms</label>
+                <input id="set-realtimeVadPrefixMs" type="number" min="0" step="50" style="width:70px;padding:5px;">
+                <label class="settings-label">Silence ms</label>
+                <input id="set-realtimeVadSilenceMs" type="number" min="0" step="50" style="width:70px;padding:5px;">
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label">Max minuten</label>
+                <input id="set-realtimeMaxMinutes" type="number" min="1" step="1" style="width:70px;padding:5px;">
+              </div>
+              <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                <label class="settings-label">Instructions</label>
+                <textarea id="set-realtimeInstructions" rows="5" class="settings-select" style="font-family:inherit;resize:none"></textarea>
+              </div>
+              <div id="set-realtimeSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>
           <!-- Teacher Model settings card hidden as part of the 2.0

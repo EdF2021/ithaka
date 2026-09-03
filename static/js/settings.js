@@ -1261,6 +1261,94 @@ async function initSttSettings() {
   if (sttEnabledToggle) sttEnabledToggle.addEventListener('change', function() { syncSttDisabled(); saveSTT(); });
 }
 
+async function initRealtimeSettings() {
+  var provSel = el('set-realtimeProviderSelect');
+  var modelInput = el('set-realtimeModelInput');
+  var voiceSelect = el('set-realtimeVoiceSelect');
+  var noiseSelect = el('set-realtimeNoiseSelect');
+  var vadThreshold = el('set-realtimeVadThreshold');
+  var vadPrefixMs = el('set-realtimeVadPrefixMs');
+  var vadSilenceMs = el('set-realtimeVadSilenceMs');
+  var maxMinutes = el('set-realtimeMaxMinutes');
+  var instructions = el('set-realtimeInstructions');
+  var enabledToggle = el('set-realtimeEnabledToggle');
+  var configWrap = el('set-realtimeConfigWrap');
+  var msg = el('set-realtimeSettingsMsg');
+  if (!provSel) return;
+
+  function syncDisabled() {
+    var off = enabledToggle && !enabledToggle.checked;
+    var card = enabledToggle ? enabledToggle.closest('.admin-card') : null;
+    if (card) card.style.opacity = off ? '0.45' : '';
+    if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
+  }
+
+  // Add API endpoints that might support the Realtime API
+  try {
+    var epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin' });
+    var endpoints = await epRes.json();
+    endpoints.forEach(function(ep) {
+      if (!ep.is_enabled) return;
+      var opt = document.createElement('option'); opt.value = 'endpoint:' + ep.id; opt.textContent = ep.name + ' (API)'; provSel.appendChild(opt);
+    });
+  } catch (e) { console.warn('Failed to load endpoints for Realtime', e); }
+
+  try {
+    var settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var settings = await settingsRes.json();
+    if (settings.realtime_provider) provSel.value = settings.realtime_provider;
+    if (settings.realtime_model) modelInput.value = settings.realtime_model;
+    if (settings.realtime_voice) voiceSelect.value = settings.realtime_voice;
+    if (settings.realtime_noise_reduction) noiseSelect.value = settings.realtime_noise_reduction;
+    vadThreshold.value = settings.realtime_vad_threshold != null ? settings.realtime_vad_threshold : 0.5;
+    vadPrefixMs.value = settings.realtime_vad_prefix_ms != null ? settings.realtime_vad_prefix_ms : 300;
+    vadSilenceMs.value = settings.realtime_vad_silence_ms != null ? settings.realtime_vad_silence_ms : 500;
+    maxMinutes.value = settings.realtime_max_minutes != null ? settings.realtime_max_minutes : 10;
+    if (settings.realtime_instructions) instructions.value = settings.realtime_instructions;
+    if (enabledToggle) enabledToggle.checked = settings.realtime_enabled === true;
+  } catch (e) { console.warn('Failed to load Realtime settings', e); }
+
+  syncDisabled();
+
+  async function saveRealtime() {
+    var enabled = enabledToggle ? enabledToggle.checked : false;
+    msg.textContent = 'Saving...'; msg.style.color = 'var(--fg)';
+    try {
+      var res = await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          realtime_enabled: enabled,
+          realtime_provider: provSel.value,
+          realtime_model: modelInput.value.trim() || 'gpt-realtime-2.1-mini',
+          realtime_voice: voiceSelect.value,
+          realtime_noise_reduction: noiseSelect.value,
+          realtime_vad_threshold: parseFloat(vadThreshold.value) || 0.5,
+          realtime_vad_prefix_ms: parseInt(vadPrefixMs.value, 10) || 300,
+          realtime_vad_silence_ms: parseInt(vadSilenceMs.value, 10) || 500,
+          realtime_max_minutes: parseInt(maxMinutes.value, 10) || 10,
+          realtime_instructions: instructions.value,
+        }) });
+      if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        var detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message);
+        throw new Error(detail || 'Save failed');
+      }
+      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = ''; }, 2000);
+    } catch (e) { msg.textContent = e.message || 'Failed to save'; msg.style.color = 'var(--red)'; }
+  }
+
+  provSel.addEventListener('change', saveRealtime);
+  modelInput.addEventListener('change', saveRealtime);
+  voiceSelect.addEventListener('change', saveRealtime);
+  noiseSelect.addEventListener('change', saveRealtime);
+  vadThreshold.addEventListener('change', saveRealtime);
+  vadPrefixMs.addEventListener('change', saveRealtime);
+  vadSilenceMs.addEventListener('change', saveRealtime);
+  maxMinutes.addEventListener('change', saveRealtime);
+  instructions.addEventListener('change', saveRealtime);
+  if (enabledToggle) enabledToggle.addEventListener('change', function() { syncDisabled(); saveRealtime(); });
+}
+
 /* ═══════════════════════════════════════════
    SEARCH TAB
    ═══════════════════════════════════════════ */
@@ -2564,6 +2652,7 @@ function initAll() {
   initVisionSettings();
   initTtsSettings();
   initSttSettings();
+  initRealtimeSettings();
   initSearchSettings();
   initResearchSettings();
   initResearchSearchSettings();
