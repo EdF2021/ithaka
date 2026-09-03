@@ -733,9 +733,12 @@ git commit -m "feat(realtime): POST /api/realtime/session route"
 - Test: `tests/test_realtime_voice_js.py`
 
 **Interfaces:**
-- Consumes: `addMessage(role, content, modelName, metadata)` from
-  `static/js/chatRenderer.js` (existing, `chatRenderer.js:2439`); `POST /api/realtime/session`
-  from Task 3 (fields `client_secret`, `expires_at`, `max_minutes`, `model`).
+- Consumes: `window.chatRenderer.addMessage(role, content, modelName, metadata)` — resolved
+  at call time from `window`, not statically imported (mirrors `voiceMode.js`'s documented
+  rationale: avoids pulling `chatRenderer.js`'s whole import chain — which touches
+  `document`/`window` at module scope in several places — into a Node-testable pure module);
+  `POST /api/realtime/session` from Task 3 (fields `client_secret`, `expires_at`,
+  `max_minutes`, `model`).
 - Produces: named exports `classifyRealtimeEvent(event)` and
   `shouldCancelForBargeIn(state, action)` (both pure, no DOM/network — testable in Node);
   default export `RealtimeVoice` object with `.init(onStateChange)`, `.activate()`,
@@ -885,8 +888,6 @@ Expected: FAIL — `Cannot find module './static/js/realtimeVoice.js'` (skipped 
  * already baked into the client_secret at mint time — nothing is sent over
  * the data channel to configure the session.
  */
-
-import { addMessage } from './chatRenderer.js'
 
 /**
  * Map one OpenAI Realtime server event to an internal action. Pure — no
@@ -1062,7 +1063,7 @@ const RealtimeVoice = {
         this._notify()
         break
       case 'user_transcript':
-        if (action.text.trim()) addMessage('user', action.text, null, null)
+        if (action.text.trim() && window.chatRenderer?.addMessage) window.chatRenderer.addMessage('user', action.text, null, null)
         break
       case 'assistant_delta':
         this._state = 'speaking'
@@ -1072,7 +1073,7 @@ const RealtimeVoice = {
       case 'assistant_done': {
         const text = action.text || this._assistantBuffer
         this._assistantBuffer = ''
-        if (text.trim()) addMessage('assistant', text, null, null)
+        if (text.trim() && window.chatRenderer?.addMessage) window.chatRenderer.addMessage('assistant', text, null, null)
         break
       }
       case 'response_done':
@@ -1122,6 +1123,22 @@ Add directly after:
 ```js
 window.realtimeVoice = realtimeVoice;
 ```
+
+`chatRenderer` is already imported in `static/app.js` (`import chatRenderer from
+'./js/chatRenderer.js';`, line 19) but not yet exposed on `window`. Find:
+
+```js
+window.uiModule = uiModule;
+```
+
+Add directly after:
+
+```js
+window.chatRenderer = chatRenderer;
+```
+
+(`realtimeVoice.js` reads `window.chatRenderer.addMessage(...)` at call time rather than
+statically importing `chatRenderer.js` — see this task's Interfaces note on why.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
