@@ -765,6 +765,12 @@ def _validate_block(raw: object, where: str, *, nested: bool, seen_ids: set) -> 
     icon = raw.get("icon")
     icon = icon if isinstance(icon, str) and icon in _ICONS else None
     prompt = _req_str(raw, "illustration_prompt", where, max_len=200, required=False)
+    if prompt:
+        # Collapse embedded newlines/tabs: build_illustration_prompt splices
+        # this straight into a line-indexed do_generate_image payload, where
+        # a stray newline could push the prompt's own tokens into the
+        # size/quality lines (src/notebook_illustrations.py).
+        prompt = " ".join(prompt.split())
     if prompt and _TEXT_IN_IMAGE_RE.search(prompt):
         raise ValueError(
             f'{where}: illustration_prompt mag geen tekst in beeld vragen '

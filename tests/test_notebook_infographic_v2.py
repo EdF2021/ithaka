@@ -96,6 +96,14 @@ def test_extract_keeps_illustrations_map_and_drops_unknown_icon():
     assert data["blocks"][0]["children"][1]["icon"] is None
 
 
+def test_extract_collapses_whitespace_in_illustration_prompt():
+    raw = _valid_data()
+    raw["blocks"][1]["illustration_prompt"] = "a glowing  hub\nconnecting\tsix   nodes"
+    data = extract_infographic(json.dumps(raw))
+    hero = next(b for b in data["blocks"] if b["type"] == "hero")
+    assert hero["illustration_prompt"] == "a glowing hub connecting six nodes"
+
+
 def test_iter_blocks_flattens_in_document_order():
     data = extract_infographic(json.dumps(_valid_data()))
     assert [b["id"] for b in iter_blocks(data)] == [

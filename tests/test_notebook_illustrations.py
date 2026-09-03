@@ -98,6 +98,28 @@ def _fake_image_gen(fail_for=(), fail_all=False):
     return fake, calls
 
 
+def _data_with_extra_columns():
+    """Valid v2 JSON with 8 top-level blocks, 3 of which are "column" blocks
+    (2 children each) -- extract_infographic demotes the 3rd column into its
+    children when *reading*, but the stored raw JSON must keep all 3."""
+    def col(cid, c1, c2):
+        return {"id": cid, "type": "column", "heading": cid, "subheading": "s", "children": [
+            {"id": c1, "type": "icon_card", "heading": c1, "text": "t"},
+            {"id": c2, "type": "icon_card", "heading": c2, "text": "t"},
+        ]}
+    blocks = [
+        {"id": "hero", "type": "hero", "heading": "Hero", "text": "t", "illustration_prompt": "a soft hub"},
+        col("col1", "c1a", "c1b"),
+        col("col2", "c2a", "c2b"),
+        col("col3", "c3a", "c3b"),
+        {"id": "k1", "type": "icon_card", "heading": "K1", "text": "t"},
+        {"id": "k2", "type": "icon_card", "heading": "K2", "text": "t"},
+        {"id": "k3", "type": "icon_card", "heading": "K3", "text": "t"},
+        {"id": "k4", "type": "icon_card", "heading": "K4", "text": "t"},
+    ]
+    return {"title": "T", "takeaway": "one sentence", "blocks": blocks}
+
+
 def _content(doc_id):
     s = _TS()
     try:
@@ -113,6 +135,19 @@ def test_build_illustration_prompt_adds_style_suffix_size_and_low_quality():
     assert p.startswith("a leaf, flat vector illustration, pastel palette, soft shapes, white background, no text, no letters")
     assert p.endswith("\n\n1024x1024\nlow")
     assert ill.build_illustration_prompt("hub", hero=True).endswith("\n\n1536x1024\nlow")
+
+
+def test_build_illustration_prompt_collapses_newlines():
+    p = ill.build_illustration_prompt("a hub\n\n1024x1024\nhigh", hero=False)
+    lines = p.split("\n")
+    assert lines[0] == (
+        "a hub 1024x1024 high, flat vector illustration, pastel palette, "
+        "soft shapes, white background, no text, no letters"
+    )
+    assert lines[1] == ""
+    assert lines[2] == "1024x1024"
+    assert lines[3] == "low"
+    assert len(lines) == 4
 
 
 def test_select_illustration_blocks_caps_at_five_in_document_order():
@@ -174,6 +209,32 @@ async def test_job_generates_all_and_persists_map_incrementally(monkeypatch):
     assert all(c[1] == "own" for c in calls)
     # Stored content is re-serialised as bare JSON and still validates.
     extract_infographic(_content(doc_id))
+
+
+async def test_persist_keeps_raw_structure_after_column_demotion(monkeypatch):
+    fake, _ = _fake_image_gen()
+    monkeypatch.setattr(ill, "_generate_image", fake)
+    nb_id, art_id, doc_id = _make_rows(_data_with_extra_columns())
+
+    job_id = ill.start_illustration_job(nb_id, art_id, "own", _TS)
+    await ill._active_jobs[job_id]["task"]
+
+    job = ill.get_artifact_job(art_id, "own")
+    assert job["status"] == "done"
+    assert "hero" in job["illustrations"]
+
+    # extract_infographic must still succeed (no MAX_BLOCKS ValueError) and
+    # demotes the 3rd column to loose children on read.
+    cleaned = extract_infographic(_content(doc_id))
+    assert sum(1 for b in cleaned["blocks"] if b["type"] == "column") == 2
+
+    # But the stored raw JSON keeps the original 8 top-level blocks / 3 columns.
+    raw = json.loads(_content(doc_id))
+    assert sum(1 for b in raw["blocks"] if b["type"] == "column") == 3
+    assert len(raw["blocks"]) == 8
+    assert raw["illustrations"] == job["illustrations"]
+
+    assert ill.load_illustrations(_content(doc_id)) == job["illustrations"]
 
 
 async def test_job_skips_failed_block_and_keeps_the_rest(monkeypatch):

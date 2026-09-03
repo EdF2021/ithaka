@@ -33,6 +33,7 @@ from typing import Optional
 from core.database import Document, Notebook, NotebookArtifact, SessionLocal
 from src.constants import GENERATED_IMAGES_DIR, NOTEBOOK_INFOGRAPHICS_DIR
 from src.notebook_infographic import MAX_ILLUSTRATIONS, extract_infographic, iter_blocks
+from src.notebook_slides import _JSON_FENCE_RE
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,17 @@ _active_jobs: dict[str, dict] = {}
 # ---------------------------------------------------------------------------
 
 def build_illustration_prompt(prompt: str, *, hero: bool) -> str:
-    """do_generate_image content: prompt line, blank, size, quality."""
+    """do_generate_image content: prompt line, blank, size, quality.
+
+    do_generate_image parses this string by line index (prompt/model/size/
+    quality). ``illustration_prompt`` can contain newlines (LLM output
+    influenced by untrusted source text; the validator only caps length),
+    which would otherwise push the prompt's own tokens into the size/quality
+    lines and detach the style suffix — so all whitespace is collapsed first.
+    """
     size = _HERO_SIZE if hero else _BLOCK_SIZE
-    return f"{prompt.strip()}{_STYLE_SUFFIX}\n\n{size}\n{_QUALITY}"
+    normalized = " ".join(prompt.split())
+    return f"{normalized}{_STYLE_SUFFIX}\n\n{size}\n{_QUALITY}"
 
 
 def select_illustration_blocks(data: dict) -> list[dict]:
@@ -136,18 +145,51 @@ def get_artifact_job(artifact_id: str, owner: str) -> Optional[dict]:
     }
 
 
-def _load_artifact_data(session, artifact_id: str, owner: str) -> Optional[tuple[dict, Document]]:
-    row = (
+def _load_artifact_row(session, artifact_id: str, owner: str):
+    """Ownership-scoped (NotebookArtifact, Document) row, or None."""
+    return (
         session.query(NotebookArtifact, Document)
         .join(Document, Document.id == NotebookArtifact.document_id)
         .join(Notebook, Notebook.id == NotebookArtifact.notebook_id)
         .filter(NotebookArtifact.id == artifact_id, Notebook.owner == owner)
         .first()
     )
+
+
+def _load_artifact_data(session, artifact_id: str, owner: str) -> Optional[tuple[dict, Document]]:
+    """Cleaned/validated dict (via extract_infographic) for the *start* path
+    only (block selection). Never write this cleaned copy back to storage —
+    see _load_raw_json / _persist."""
+    row = _load_artifact_row(session, artifact_id, owner)
     if row is None:
         return None
     artifact, document = row
     return extract_infographic(document.current_content), document
+
+
+def _load_raw_json(content: str) -> dict:
+    """Extract the stored JSON object as-is, without extract_infographic's
+    cleaning/repair pass (string stripping, unknown-icon dropping and, in
+    particular, demoting a 3rd+ "column" block into its children).
+
+    Mirrors extract_infographic's own fence-search + json.loads exactly, so
+    _persist can round-trip the artifact's Document JSON without ever
+    changing its block structure — writing back a demoted/cleaned copy would
+    make the *next* extract_infographic call see more top-level blocks than
+    before (a demoted column's children spliced in) and can push the count
+    past MAX_BLOCKS, breaking the artifact.
+    """
+    m = _JSON_FENCE_RE.search(content or "")
+    raw = (m.group(1) if m else (content or "")).strip()
+    if not raw:
+        raise ValueError("geen JSON gevonden in het antwoord")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"ongeldige JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError("JSON is geen object")
+    return data
 
 
 def start_illustration_job(notebook_id: str, artifact_id: str, owner: str,
@@ -244,15 +286,22 @@ def _copy_generated(result: dict, artifact_id: str, block_id: str) -> str:
 
 def _persist(factory, artifact_id: str, owner: str, block_id: str, filename: str) -> bool:
     """Write illustrations[block_id] into the Document JSON. False when the
-    artifact is gone (job should stop)."""
+    artifact is gone (job should stop).
+
+    Loads the *raw* stored JSON (_load_raw_json) rather than the cleaned
+    dict extract_infographic returns — writing the cleaned dict back would
+    permanently demote a 3rd+ column block into loose top-level blocks, and
+    the next extract_infographic call could then fail the MAX_BLOCKS check.
+    """
     session = factory()
     try:
-        loaded = _load_artifact_data(session, artifact_id, owner)
-        if loaded is None:
+        row = _load_artifact_row(session, artifact_id, owner)
+        if row is None:
             return False
-        data, document = loaded
-        data.setdefault("illustrations", {})[block_id] = filename
-        document.current_content = json.dumps(data, ensure_ascii=False, indent=2)
+        _artifact, document = row
+        raw = _load_raw_json(document.current_content)
+        raw.setdefault("illustrations", {})[block_id] = filename
+        document.current_content = json.dumps(raw, ensure_ascii=False, indent=2)
         session.commit()
         return True
     finally:
