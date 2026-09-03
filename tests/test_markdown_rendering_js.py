@@ -18,15 +18,22 @@ def node_available():
         pytest.skip("node binary not on PATH")
 
 
-def _run_markdown_case(markdown: str, render_expr: str = "mod.mdToHtml(input)"):
+def _run_markdown_case(markdown: str, render_expr: str = "mod.mdToHtml(input)", body_classes=None):
+    body_classes_literal = json.dumps(list(body_classes or []))
     script = textwrap.dedent(
         r"""
         import fs from 'node:fs';
 
+        const __bodyClasses = new Set(__BODY_CLASSES__);
         globalThis.window = { location: { origin: 'http://localhost' }, katex: null };
         globalThis.document = {
           readyState: 'loading',
           addEventListener() {},
+          body: {
+            classList: {
+              contains(c) { return __bodyClasses.has(c); },
+            },
+          },
           createElement(tag) {
             if (tag !== 'template') throw new Error(`unsupported element: ${tag}`);
             return {
@@ -37,7 +44,9 @@ def _run_markdown_case(markdown: str, render_expr: str = "mod.mdToHtml(input)"):
             };
           },
         };
-        globalThis.MutationObserver = class { observe() {} };
+        globalThis.MutationObserver = class { observe() {} };"""
+    ).replace("__BODY_CLASSES__", body_classes_literal) + textwrap.dedent(
+        r"""
 
         let source = fs.readFileSync('./static/js/markdown.js', 'utf8');
         source = source.replace(
@@ -198,6 +207,34 @@ def test_inline_code_content_is_html_escaped(node_available):
 
     assert "<code>&lt;b&gt;$1 &amp; &#39;q&#39;&lt;/b&gt;</code>" in html
     assert "<b>" not in html
+
+
+def test_fenced_code_block_gets_run_and_edit_buttons_outside_notebook(node_available):
+    # Baseline (non-notebook chat): the code block stays runnable/editable.
+    html = _run_markdown_case("```python\nprint(1)\n```")
+
+    assert 'class="run-code"' in html
+    assert 'class="edit-code"' in html
+
+
+def test_fenced_code_block_hides_run_and_edit_buttons_in_notebook_session(node_available):
+    # Notebook chat sessions run under server-side tool lockdown (#143) — a
+    # fenced ```python``` block the model still emits is never executed, so a
+    # "Run" button on it is misleading (issue #145). document.body carries the
+    # `notebook-session` class for the lifetime of a notebook-bound session
+    # (see static/js/sessions.js `_syncNotebookToolVisibility`, the same
+    # mechanism that hides the no-op RAG toggle there), so mdToHtml can key off
+    # it directly without every chat.js render call site threading a flag
+    # through.
+    html = _run_markdown_case(
+        "```python\nprint(1)\n```",
+        body_classes=["notebook-session"],
+    )
+
+    assert 'class="run-code"' not in html
+    assert 'class="edit-code"' not in html
+    # Copy still makes sense — the model's text is still worth copying.
+    assert 'class="copy-code"' in html
 
 
 def test_dotted_python_import_paths_are_not_autolinked(node_available):
