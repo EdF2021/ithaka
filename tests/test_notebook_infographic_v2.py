@@ -274,7 +274,7 @@ def test_render_v2_contains_all_block_types_and_grid():
     assert 'style="width:100%"' in out
     assert "42%" in out and "geslaagd" in out  # key numbers
     assert out.count('class="ig2-step-n"') == 2   # two numbered steps (CSS rule excluded)
-    assert "@media (max-width: 959px)" in out  # mobile breakpoint per spec (< 960)
+    assert "@media (max-width: 879px)" in out  # breakpoint lowered to 880px so the in-panel viewer (~926px) gets the 3-column grid
     assert "min-width: 0" in out
     assert "align-items: stretch" in out       # mobile: loose cards stay full width
 

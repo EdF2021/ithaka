@@ -1004,7 +1004,7 @@ body {{ font-family: var(--font-body); background: var(--bg); color: var(--text)
 
 /* Mobile: one column in document order. Wrappers dissolve (display:
    contents) so `order` sorts every block globally. */
-@media (max-width: 959px) {{
+@media (max-width: 879px) {{
   .ig2-grid, .ig2-grid.ig2-grid--one {{ display: flex; flex-direction: column; gap: 1rem; align-items: stretch; }}
   .ig2-col, .ig2-center {{ display: contents; }}
   .ig2-wrap {{ padding: 1.25rem 0.9rem 2rem; }}
