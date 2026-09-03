@@ -77,3 +77,17 @@ def test_video_job_start_post_is_still_tracked():
 def test_similar_but_longer_video_path_is_still_tracked():
     path = "/api/notebooks/nb-123/video/job-456/extra"
     assert should_track_interactive_request(path, "GET") is True
+
+
+def test_infographic_illustrations_status_poll_get_is_not_tracked():
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/illustrations", "GET") is False
+
+
+def test_infographic_illustrations_post_and_sibling_paths_are_still_tracked():
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/illustrations", "POST") is True
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/report", "GET") is True
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/illustrations/extra", "GET") is True

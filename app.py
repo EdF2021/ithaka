@@ -1264,6 +1264,20 @@ async def _startup_event():
 
     _startup_tasks.append(asyncio.create_task(_notebook_video_janitor_loop()))
 
+    # Infographic-illustration janitor — sweeps NOTEBOOK_INFOGRAPHICS_DIR
+    # hourly for PNGs whose artifact no longer exists (same shape as above).
+    async def _notebook_illustration_janitor_loop():
+        await asyncio.sleep(300)
+        while True:
+            try:
+                from src.notebook_illustrations import cleanup_orphaned_illustrations
+                await asyncio.to_thread(cleanup_orphaned_illustrations, SessionLocal)
+            except Exception as e:
+                logger.debug(f"Notebook illustration janitor skipped: {e}")
+            await asyncio.sleep(3600)
+
+    _startup_tasks.append(asyncio.create_task(_notebook_illustration_janitor_loop()))
+
     # Chat/agent video-gen janitor — sweeps VIDEO_DIR (Veo clips generated via
     # the generate_video tool, distinct from the notebook-studio videos
     # above) hourly for stray `.video-*.tmp` downloads and `<hex>.mp4`/
