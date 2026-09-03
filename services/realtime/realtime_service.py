@@ -115,7 +115,12 @@ class RealtimeService:
             logger.error(f"Realtime client_secrets mint failed: {e}")
             raise ValueError(f"Kon geen verbinding maken met het Realtime-endpoint: {e}") from e
 
-        data = r.json()
+        try:
+            data = r.json()
+        except Exception as e:
+            logger.error(f"Realtime client_secrets mint returned invalid JSON: {e}")
+            raise ValueError("Ongeldig antwoord van het Realtime-endpoint") from e
+
         return {
             "client_secret": data.get("value"),
             "expires_at": data.get("expires_at"),

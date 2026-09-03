@@ -173,6 +173,25 @@ def test_create_session_raises_on_http_status_error(monkeypatch):
         service.create_session()
 
 
+def test_create_session_raises_dutch_error_on_malformed_json_response(monkeypatch):
+    service = RealtimeService()
+    service._load_settings = lambda: _settings()
+    _wire_fake_db(monkeypatch, ep=_FakeEp())
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    import services.realtime.realtime_service as mod
+    monkeypatch.setattr(mod.httpx, "post", lambda *a, **k: _FakeResp())
+
+    with pytest.raises(ValueError, match="Ongeldig antwoord van het Realtime-endpoint"):
+        service.create_session()
+
+
 def test_create_session_raises_on_network_failure(monkeypatch):
     service = RealtimeService()
     service._load_settings = lambda: _settings()
