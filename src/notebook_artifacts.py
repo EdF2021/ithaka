@@ -188,12 +188,12 @@ Lever exact één codefence met taalaanduiding "json" en daarin één JSON-objec
 {
   "title": "titel in het Nederlands (max 80 tekens)",
   "subtitle": "ondertitel (optioneel, max 120 tekens)",
-  "takeaway": "één zin met de kernboodschap",
+  "takeaway": "één zin met de kernboodschap (max 240 tekens)",
   "blocks": [
     {"id": "slug", "type": "column", "heading": "kop", "subheading": "korte toelichting",
      "illustration_prompt": "optioneel", "children": [ ...2 tot 3 sub-blokken van type steps, icon_card of key_numbers... ]},
     {"id": "slug", "type": "steps", "heading": "kop", "items": [{"label": "kort", "text": "max 120 tekens"}]},
-    {"id": "slug", "type": "icon_card", "heading": "kop", "icon": "sleutel", "text": "1 tot 2 zinnen, max 200 tekens"},
+    {"id": "slug", "type": "icon_card", "heading": "kop", "icon": "chat", "text": "1 tot 2 zinnen, max 200 tekens"},
     {"id": "slug", "type": "hero", "heading": "kop", "illustration_prompt": "...", "text": "max 240 tekens"},
     {"id": "slug", "type": "comparison", "heading": "kop", "rows": [{"label": "kort", "value": "letterlijke bronwaarde", "ratio": 0.6}]},
     {"id": "slug", "type": "key_numbers", "heading": "kop", "items": [{"number": "42%", "label": "max 8 woorden"}]}
@@ -204,7 +204,7 @@ Regels voor de structuur:
 - 5 tot 8 blokken op het hoogste niveau; precies één "hero"; één of twee "column"-blokken (elk met 2 tot 3 children; children mogen zelf geen column of hero zijn).
 - "steps" heeft 2 tot 5 stappen; "comparison" 2 tot 4 rijen; "key_numbers" 3 tot 5 items.
 - "id" is een unieke slug (a-z, 0-9, - of _); "heading" maximaal 60 tekens.
-- "icon" is optioneel en één van: sources, audio, video, chat, graph, bars, target, warning, gear, people, doc, search, spark. Laat weg als geen sleutel past.
+- "icon" is optioneel; de waarde moet exact één van deze sleutels zijn: sources, audio, video, chat, graph, bars, target, warning, gear, people, doc, search, spark. Laat weg als geen sleutel past.
 - "illustration_prompt" is optioneel, in het Engels, maximaal 200 tekens: beschrijf een eenvoudige scène of metafoor zonder merknamen of personen en vraag nooit om tekst in beeld (geen text, label, caption, words, letters). Geef er maximaal 5, in elk geval bij de hero.
 
 Regels voor de inhoud:

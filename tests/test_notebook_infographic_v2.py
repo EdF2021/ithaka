@@ -194,4 +194,5 @@ def test_prompt_asks_for_json_schema_and_dutch():
     assert "illustration_prompt" in prompt
     assert "Engels" in prompt                 # illustration prompts in English
     assert "## Key numbers" not in prompt     # legacy markdown structure is gone
+    assert '"sleutel"' not in prompt          # example icon must be a real allowed key
     assert _KIND_VALIDATORS["infographic"] is extract_infographic
