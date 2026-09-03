@@ -21,6 +21,7 @@ import sessionModule from './js/sessions.js';
 import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
 import voiceMode from './js/voiceMode.js';
+import realtimeVoice from './js/realtimeVoice.js';
 import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js?v=20260630tasksactivity';
@@ -53,8 +54,10 @@ const API_BASE = window.location.origin;
 window.themeModule = themeModule;
 window.sessionModule = sessionModule;
 window.uiModule = uiModule;
+window.chatRenderer = chatRenderer;
 window.adminModule = adminModule;
 window.voiceMode = voiceMode;
+window.realtimeVoice = realtimeVoice;
 window.cookbookModule = cookbookModule;
 
 function _isMobileChatInput() {
