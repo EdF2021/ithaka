@@ -41225,6 +41225,8 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
   text-align: left;
   cursor: pointer;
   min-height: 96px;
+  /* Global button rules fix a height; cards must grow with their text. */
+  height: auto;
 }
 .nbrp-card:hover {
   background: color-mix(in srgb, var(--red) 8%, var(--panel));
@@ -41269,6 +41271,62 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 }
 .nbrp-editor-error { color: var(--red); font-size: 12px; min-height: 16px; margin: 6px 0; }
 .nbrp-generate-btn { align-self: flex-end; }
+/* Podcast customize modal (notebookWorkspace.js _openPodcastModal) — reuses
+   the report modal's cards/grid/textarea; only the selected state, the
+   length toggle and the footer row are its own. */
+.nbrp-card.is-selected {
+  border-color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, var(--panel));
+}
+.nbrp-card.is-selected .nbrp-card-title::after {
+  content: "";
+  margin-left: auto;
+  width: 10px;
+  height: 6px;
+  border-left: 2px solid var(--fg);
+  border-bottom: 2px solid var(--fg);
+  transform: rotate(-45deg) translateY(-2px);
+  flex-shrink: 0;
+}
+.nbpc-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 640px) {
+  .nbpc-row { grid-template-columns: 1fr; gap: 4px; }
+}
+.nbpc-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.nbpc-toggle button {
+  background: var(--panel);
+  color: var(--fg);
+  border: none;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.nbpc-toggle button + button { border-left: 1px solid var(--border); }
+.nbpc-toggle button.is-selected {
+  background: color-mix(in srgb, var(--fg) 12%, var(--panel));
+  font-weight: 600;
+}
+.nbpc-sources {
+  font-size: 13px;
+  padding: 6px 0;
+  opacity: 0.85;
+}
+.nbpc-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
 /* Web-source search (fase 4d) — input + button row above the upload zone,
    results as .list-item rows with an inline add button. Existing tokens and
    classes only. */
@@ -41843,6 +41901,10 @@ body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
    (#115). Same fix and value as .doc-editor-pane above: lift it just past
    #nbws-root's 10005. */
 body.notebook-workspace-open #nbrp-modal { z-index: 10010; }
+/* Same for the podcast customize modal (_openPodcastModal) — same cause,
+   same fix; without it the sheet is invisible behind the Studio tab on
+   mobile. */
+body.notebook-workspace-open #nbpc-modal { z-index: 10010; }
 
 /* ── Mobile tabs (Task 7, <=700px) — replaces the side-by-side
    sources/chat/studio columns with ONE full-width "page" at a time, switched
