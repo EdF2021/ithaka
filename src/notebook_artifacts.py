@@ -19,6 +19,7 @@ why the background workload would self-deadlock.
 
 from __future__ import annotations
 
+from typing import Optional
 import logging
 import re
 import uuid
@@ -320,23 +321,27 @@ def is_artifacts_generate_request(method: str, path: str) -> bool:
 # Source collection
 # --------------------------------------------------------------------------
 
-def _source_entries(notebook: Notebook, db_session) -> list[tuple[str, str]]:
+def _source_entries(notebook: Notebook, db_session,
+                    source_ids: Optional[list[str]] = None) -> list[tuple[str, str]]:
     """Return [(filename, text)] for the notebook's usable sources.
 
     Only sources that were indexed successfully *and* still have a backing
     Document with content qualify - a failed upload or a source whose Document
-    was deleted from the Library has no full text to summarize.
+    was deleted from the Library has no full text to summarize. `source_ids`
+    (document ids, the same ids the workspace's source checkboxes carry)
+    narrows the set further; None means every usable source.
     """
-    rows = (
+    query = (
         db_session.query(NotebookSource)
         .filter(
             NotebookSource.notebook_id == notebook.id,
             NotebookSource.status == "indexed",
             NotebookSource.document_id.isnot(None),
         )
-        .order_by(NotebookSource.created_at, NotebookSource.filename)
-        .all()
     )
+    if source_ids is not None:
+        query = query.filter(NotebookSource.document_id.in_(list(source_ids)))
+    rows = query.order_by(NotebookSource.created_at, NotebookSource.filename).all()
     entries = []
     for src in rows:
         doc = db_session.get(Document, src.document_id)
@@ -421,15 +426,17 @@ def _assemble_source_blocks(headers: list[str], entries: list[tuple[str, str]]) 
     return result
 
 
-def gather_source_text(notebook: Notebook, db_session) -> str:
+def gather_source_text(notebook: Notebook, db_session,
+                       source_ids: Optional[list[str]] = None) -> str:
     """Build the source payload for the model, capped at MAX_CONTEXT_CHARS.
 
     Blocks are "=== BRON: <filename> ===" headers followed by the document's
     full text; the water-filling truncation strategy is
     _assemble_source_blocks (see its docstring). Returns "" when the
-    notebook has no usable sources.
+    notebook has no usable sources. `source_ids` (document ids) restricts
+    the payload to a subset; None means all usable sources.
     """
-    entries = _source_entries(notebook, db_session)
+    entries = _source_entries(notebook, db_session, source_ids)
     if not entries:
         return ""
 

@@ -603,3 +603,55 @@ def test_chat_js_every_materialize_call_in_submit_forwards_snapshot():
     calls = fn.count("await sessionModule.materializePendingSession(")
     assert calls >= 3
     assert fn.count("materializePendingSession(_nbwsNotebookIdAtSubmit)") == calls
+
+
+# ── Podcast customize modal ("Audio-overzicht aanpassen") ───────────────────
+# NotebookLM-style second screen after clicking the Audio tile: format cards,
+# length toggle, focus textarea, source count from the existing checkbox
+# selection, then "Nu genereren". Source-text assertions like the rest of
+# this file (no JS DOM runner in this repo).
+
+def test_audio_tile_opens_the_customize_modal_instead_of_generating():
+    assert "function _openPodcastModal" in _WS
+    assert "nbpc-modal" in _WS
+    assert "Audio-overzicht aanpassen" in _WS
+    # The tile's click handler goes through the modal, never straight to POST.
+    assert "addEventListener('click', _openPodcastModal)" in _WS
+
+
+def test_podcast_modal_offers_four_formats_and_two_lengths():
+    for key in ("deep", "overview", "critique", "debate"):
+        assert f"key: '{key}'" in _WS, key
+    for key in ("short", "standard"):
+        assert f"'{key}'" in _WS, key
+    for label in ("Gedetailleerd", "Overzicht", "Kritiek", "Debat", "Kort", "Standaard"):
+        assert label in _WS, label
+
+
+def test_podcast_modal_posts_json_options_with_the_source_selection():
+    # The POST body carries the four option keys; source_ids reuses the same
+    # selection contract the chat uses (null = all sources).
+    assert "getSourceIdsForChat()" in _WS
+    for key in ("format:", "length:", "focus:", "source_ids:"):
+        assert key in _WS, key
+    assert "nbpc-focus" in _WS
+    assert "maxlength=\"500\"" in _WS
+
+
+def test_podcast_modal_reuses_report_modal_styling():
+    # No parallel component: the cards/grid/textarea are the report modal's
+    # classes; only the selected-state and the length toggle are new CSS.
+    assert "nbrp-card nbpc-format-card" in _WS
+    assert ".nbrp-card.is-selected" in _CSS
+    assert ".nbpc-toggle" in _CSS
+    # Cards must grow with their text (a global button height otherwise
+    # clips the four format descriptions at min-height).
+    card = _between(_CSS, ".nbrp-card {", "\n}")
+    assert "height: auto;" in card
+
+
+def test_podcast_modal_z_index_clears_workspace_root_on_mobile():
+    # Same #115 trap as the report modal: a plain .modal appended to <body>
+    # sits at z 250 behind #nbws-root's 10005, so on mobile (opaque Studio
+    # tab) the sheet is invisible without this lift.
+    assert "body.notebook-workspace-open #nbpc-modal { z-index: 10010; }" in _CSS

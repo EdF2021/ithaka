@@ -1369,15 +1369,27 @@ async function _pollPodcast() {
   _podcastPoll.timer = setTimeout(_pollPodcast, 2000);
 }
 
-async function _generatePodcast(btn) {
+async function _generatePodcast(btn, options) {
   if (!_state.notebook || _podcastPoll) return;
   _showArtifactError('');
   if (btn) btn.disabled = true;
 
+  // Customize-modal payload (see _openPodcastModal). source_ids reuses the
+  // chat's selection contract: null = every source (key omitted server-side
+  // semantics), string[] = the checked subset. The empty-selection case is
+  // blocked in the modal before we get here.
+  const opts = options || _podcastOpts;
+  const payload = {
+    format: opts.format,
+    length: opts.length,
+    focus: opts.focus || '',
+    source_ids: getSourceIdsForChat(),
+  };
   let jobId;
   try {
     const data = await _fetchJson(
-      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/podcast`, { method: 'POST' });
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/podcast`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     jobId = data.job_id;
   } catch (e) {
     _showArtifactError(`Could not generate (${e.message})`);
@@ -1395,6 +1407,148 @@ async function _generatePodcast(btn) {
 // Registered once at module load (this module is a persistent singleton, not
 // re-instantiated per open), so no matching unregister call is needed.
 registerCloseHook(_stopPodcastPoll);
+
+// ---- Podcast customize modal ("Audio-overzicht aanpassen") -----------------
+//
+// NotebookLM-style second screen between the Audio tile and the job start:
+// format cards, length toggle, source count (from the sources-panel
+// checkboxes — no second picker), an optional focus prompt, then "Nu
+// genereren". Built on the report modal's markup/classes (.nbrp-*) so there
+// is no parallel card component; only the selected state and the length
+// toggle are new CSS (.nbpc-*). The chosen options are remembered for the
+// rest of the session (module state, deliberately not localStorage).
+
+const _PODCAST_FORMATS = [
+  { key: 'deep', title: 'Gedetailleerd',
+    desc: 'Een levendig gesprek tussen 2 hosts die onderwerpen in je bronnen uitpakken en aan elkaar koppelen.' },
+  { key: 'overview', title: 'Overzicht',
+    desc: 'Een kort overzicht waarmee je snel de kernideeën uit je bronnen kunt begrijpen.' },
+  { key: 'critique', title: 'Kritiek',
+    desc: 'Een review door een expert van je bronnen, met constructieve feedback om je materiaal te verbeteren.' },
+  { key: 'debate', title: 'Debat',
+    desc: 'Een doordacht debat tussen 2 hosts, waarin verschillende perspectieven op je bronnen worden belicht.' },
+];
+const _PODCAST_LENGTHS = [
+  { key: 'short', label: 'Kort' },
+  { key: 'standard', label: 'Standaard' },
+];
+const _PODCAST_FOCUS_MAX = 500;
+
+const _podcastOpts = { format: 'deep', length: 'standard', focus: '' };
+let _podcastEscHandler = null;
+
+function _podcastSourceCountText() {
+  const total = _selectableIds().length;
+  const ids = getSourceIdsForChat();
+  const selected = ids === null ? total : ids.length;
+  if (!total) return 'Geen bronnen';
+  return selected === total ? `${total} bronnen (alle)` : `${selected} van ${total} bronnen`;
+}
+
+function _podcastModalBodyHtml() {
+  const cards = _PODCAST_FORMATS.map(f => `
+    <button type="button" class="nbrp-card nbpc-format-card${_podcastOpts.format === f.key ? ' is-selected' : ''}"
+            data-format="${f.key}" role="radio" aria-checked="${_podcastOpts.format === f.key}">
+      <div class="nbrp-card-title">${_esc(f.title)}</div>
+      <div class="nbrp-card-desc">${_esc(f.desc)}</div>
+    </button>`).join('');
+  const lengths = _PODCAST_LENGTHS.map(l => `
+    <button type="button" class="${_podcastOpts.length === l.key ? 'is-selected' : ''}"
+            data-length="${l.key}" role="radio" aria-checked="${_podcastOpts.length === l.key}">${_esc(l.label)}</button>`).join('');
+  return `
+    <div class="nbrp-section-head">Indeling</div>
+    <div class="nbrp-grid" id="nbpc-format-grid" role="radiogroup" aria-label="Indeling">${cards}</div>
+    <div class="nbpc-row">
+      <div>
+        <div class="nbrp-section-head">Lengte</div>
+        <div class="nbpc-toggle" id="nbpc-length" role="radiogroup" aria-label="Lengte">${lengths}</div>
+      </div>
+      <div>
+        <div class="nbrp-section-head">Bronnen</div>
+        <div class="nbpc-sources" id="nbpc-sources">${_esc(_podcastSourceCountText())}</div>
+      </div>
+    </div>
+    <div class="nbrp-section-head">Waarop moet de host zich richten in deze aflevering?</div>
+    <textarea id="nbpc-focus" class="nbrp-editor-textarea" rows="3" maxlength="500"
+              placeholder="Optioneel, bijv. beschrijf de stappen van fase 1 naar fase 3.">${_esc(_podcastOpts.focus)}</textarea>
+    <div class="nbrp-editor-error" id="nbpc-error"></div>
+    <div class="nbpc-footer">
+      <button type="button" class="dashboard-action-btn" id="nbpc-cancel">Annuleren</button>
+      <button type="button" class="dashboard-action-btn nbrp-generate-btn" id="nbpc-generate">Nu genereren</button>
+    </div>`;
+}
+
+function _openPodcastModal() {
+  if (!_state.notebook || _podcastPoll) return;
+  if (document.getElementById('nbpc-modal')) return;
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'nbpc-modal';
+  modal.innerHTML = `
+    <div class="modal-content nbrp-modal-content" role="dialog" aria-label="Audio-overzicht aanpassen">
+      <div class="modal-header">
+        <h4 style="position:relative;top:-2px;">${_KIND_ICONS.podcast}Audio-overzicht aanpassen</h4>
+        <span style="flex:1"></span>
+        <button class="close-btn" id="nbpc-close" aria-label="Close">&#10006;</button>
+      </div>
+      <div class="modal-body nbrp-body" id="nbpc-body">${_podcastModalBodyHtml()}</div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const errEl = document.getElementById('nbpc-error');
+  const genBtn = document.getElementById('nbpc-generate');
+  const ids = getSourceIdsForChat();
+  if (ids !== null && ids.length === 0) {
+    if (errEl) errEl.textContent = EMPTY_SELECTION_MESSAGE;
+    if (genBtn) genBtn.disabled = true;
+  }
+
+  modal.querySelectorAll('.nbpc-format-card').forEach(card => {
+    card.addEventListener('click', () => {
+      _podcastOpts.format = card.dataset.format;
+      modal.querySelectorAll('.nbpc-format-card').forEach(c => {
+        const on = c === card;
+        c.classList.toggle('is-selected', on);
+        c.setAttribute('aria-checked', String(on));
+      });
+    });
+  });
+  modal.querySelectorAll('#nbpc-length button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _podcastOpts.length = btn.dataset.length;
+      modal.querySelectorAll('#nbpc-length button').forEach(b => {
+        const on = b === btn;
+        b.classList.toggle('is-selected', on);
+        b.setAttribute('aria-checked', String(on));
+      });
+    });
+  });
+  document.getElementById('nbpc-focus')?.addEventListener('input', (e) => {
+    _podcastOpts.focus = e.target.value.slice(0, _PODCAST_FOCUS_MAX);
+  });
+  document.getElementById('nbpc-close')?.addEventListener('click', _closePodcastModal);
+  document.getElementById('nbpc-cancel')?.addEventListener('click', _closePodcastModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) _closePodcastModal(); });
+  _podcastEscHandler = (e) => { if (e.key === 'Escape') _closePodcastModal(); };
+  document.addEventListener('keydown', _podcastEscHandler);
+  genBtn?.addEventListener('click', () => {
+    const tile = document.getElementById('nbws-podcast-btn');
+    _closePodcastModal();
+    _generatePodcast(tile, { ..._podcastOpts });
+  });
+}
+
+function _closePodcastModal() {
+  const modal = document.getElementById('nbpc-modal');
+  if (modal) modal.remove();
+  if (_podcastEscHandler) {
+    document.removeEventListener('keydown', _podcastEscHandler);
+    _podcastEscHandler = null;
+  }
+}
+
+// The modal must not outlive the workspace (same rule as the podcast poll).
+registerCloseHook(_closePodcastModal);
 
 // ---- Video: separate job/polling flow (own endpoint, not /artifacts) ----
 
@@ -1660,7 +1814,7 @@ function _wireStudioPanel() {
   body.querySelectorAll('.notebook-artifact-gen-btn').forEach(btn => {
     btn.addEventListener('click', () => _generateArtifact(btn.dataset.kind, btn));
   });
-  document.getElementById('nbws-podcast-btn')?.addEventListener('click', (e) => _generatePodcast(e.currentTarget));
+  document.getElementById('nbws-podcast-btn')?.addEventListener('click', _openPodcastModal);
   document.getElementById('nbws-video-btn')?.addEventListener('click', (e) => _generateVideo(e.currentTarget));
   document.getElementById('nbws-report-btn')?.addEventListener('click', _openReportModal);
 

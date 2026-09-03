@@ -167,7 +167,7 @@ def test_create_podcast_tts_checked_before_bronnen(monkeypatch, ts):
 
 def test_create_podcast_starts_job_returns_running(monkeypatch, ts):
     monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "endpoint:x")
-    monkeypatch.setattr(nbr, "start_podcast_job", lambda notebook_id, owner: "job-123")
+    monkeypatch.setattr(nbr, "start_podcast_job", lambda notebook_id, owner, **kw: "job-123")
     c = _client(monkeypatch)
     nb_id = _make_notebook(c)
     _add_source(c, nb_id)
@@ -261,7 +261,7 @@ def test_post_podcast_works_after_tts_enabled_post_boot_without_restart(monkeypa
 
     # User flips TTS on in Settings, no restart.
     provider["value"] = "endpoint:x"
-    monkeypatch.setattr(nbr, "start_podcast_job", lambda notebook_id, owner: "job-post-boot")
+    monkeypatch.setattr(nbr, "start_podcast_job", lambda notebook_id, owner, **kw: "job-post-boot")
 
     r = c.post(f"/api/notebooks/{nb_id}/podcast")
     assert r.status_code == 200
@@ -534,3 +534,57 @@ def test_list_artifacts_includes_audio_path(monkeypatch, ts):
     artifacts = r.json()["artifacts"]
     assert artifacts[0]["audio_path"] == "abc.wav"
     assert artifacts[0]["kind"] == "podcast"
+
+
+# ── Customize modal: JSON body → normalized options ──────────────────────────
+
+def test_create_podcast_forwards_json_options(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "endpoint:x")
+    seen = {}
+
+    def _start(notebook_id, owner, **kw):
+        seen.update(kw)
+        return "job-opt"
+    monkeypatch.setattr(nbr, "start_podcast_job", _start)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    src = _add_source(c, nb_id)
+
+    r = c.post(f"/api/notebooks/{nb_id}/podcast", json={
+        "format": "critique", "length": "short", "focus": " de risico's ",
+        "source_ids": [src["document_id"]],
+    })
+    assert r.status_code == 200, r.text
+    assert seen["options"] == {
+        "format": "critique", "length": "short", "focus": "de risico's",
+        "source_ids": [src["document_id"]],
+    }
+
+
+def test_create_podcast_without_body_uses_default_options(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "endpoint:x")
+    seen = {}
+    monkeypatch.setattr(nbr, "start_podcast_job",
+                        lambda notebook_id, owner, **kw: seen.update(kw) or "job-def")
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    _add_source(c, nb_id)
+
+    r = c.post(f"/api/notebooks/{nb_id}/podcast")
+    assert r.status_code == 200, r.text
+    assert seen["options"] == {"format": "deep", "length": "standard",
+                               "focus": "", "source_ids": None}
+
+
+def test_create_podcast_invalid_format_is_400(monkeypatch, ts):
+    monkeypatch.setattr(nbr, "_current_tts_provider", lambda: "endpoint:x")
+    called = []
+    monkeypatch.setattr(nbr, "start_podcast_job",
+                        lambda notebook_id, owner, **kw: called.append(1) or "job-x")
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+    _add_source(c, nb_id)
+
+    r = c.post(f"/api/notebooks/{nb_id}/podcast", json={"format": "rap"})
+    assert r.status_code == 400
+    assert called == []

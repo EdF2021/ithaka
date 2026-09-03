@@ -1,5 +1,6 @@
 """Notebook routes — CRUD for notebooks + per-notebook source upload/removal."""
 
+import json
 import asyncio
 import logging
 import os
@@ -30,6 +31,7 @@ from src.notebook_audio import (
     resolve_notebook_audio_path,
     set_synthesizer,
     start_podcast_job,
+    normalize_podcast_options,
 )
 from src.notebook_covers import (
     COVER_IMAGE_HEADERS,
@@ -733,8 +735,20 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         finally:
             db_session.close()
 
+        # Optional customize-modal payload: {format, length, focus, source_ids}.
+        # No body (the old one-click flow) means the defaults.
+        raw = await request.body()
         try:
-            job_id = start_podcast_job(notebook_id, user)
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Ongeldige JSON")
+        try:
+            options = normalize_podcast_options(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        try:
+            job_id = start_podcast_job(notebook_id, user, options=options)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RuntimeError as exc:
