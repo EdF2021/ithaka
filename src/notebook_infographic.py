@@ -39,9 +39,12 @@ instead of reusing its ~1900-line one.
 from __future__ import annotations
 
 import html
+import json
 import re
 from datetime import datetime
 from typing import List, Optional, Tuple
+
+from src.notebook_slides import _JSON_FENCE_RE
 
 _H1_RE = re.compile(r'^#\s+(.+)$')
 _H2_RE = re.compile(r'^##\s+(.+)$')
@@ -661,3 +664,189 @@ def validate_infographic_markdown(content: str) -> None:
             + "; ".join(problems)
             + ". Lever exact de gevraagde markdownstructuur."
         )
+
+
+# ---------------------------------------------------------------------------
+# v2: JSON content model (spec 2026-09-03 Deel A)
+# ---------------------------------------------------------------------------
+
+MAX_ILLUSTRATIONS = 5
+BLOCK_TYPES = frozenset({"column", "steps", "icon_card", "hero", "comparison", "key_numbers"})
+COLUMN_CHILD_TYPES = frozenset({"steps", "icon_card", "key_numbers"})
+# Whole-word, case-insensitive: an illustration prompt asking for text in
+# the image defeats the whole point of v2 (text stays in HTML).
+TEXT_IN_IMAGE_WORDS = ("text", "label", "caption", "words", "letters")
+_TEXT_IN_IMAGE_RE = re.compile(r"\b(" + "|".join(TEXT_IN_IMAGE_WORDS) + r")\b", re.IGNORECASE)
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+MIN_BLOCKS, MAX_BLOCKS = 5, 8
+MAX_COLUMNS = 2
+
+
+def is_infographic_v2(content: Optional[str]) -> bool:
+    """True when stored content is the v2 JSON model (bare object or ```json fence).
+
+    The fence may be preceded by prose (the model sometimes prefaces the
+    fenced block with a sentence), so this searches for the fence anywhere
+    in the content rather than anchoring at the start of the string — same
+    approach as extract_infographic's own _JSON_FENCE_RE.search.
+    """
+    s = (content or "").strip()
+    if s.startswith("{"):
+        return True
+    m = _JSON_FENCE_RE.search(content or "")
+    return bool(m and m.group(1).strip().startswith("{"))
+
+
+def _req_str(obj: dict, key: str, where: str, *, max_len: int, required: bool = True) -> Optional[str]:
+    val = obj.get(key)
+    if val is None or (isinstance(val, str) and not val.strip()):
+        if required:
+            raise ValueError(f'{where}: veld "{key}" ontbreekt of is leeg')
+        return None
+    if not isinstance(val, str):
+        raise ValueError(f'{where}: veld "{key}" moet een string zijn')
+    val = val.strip()
+    if len(val) > max_len:
+        raise ValueError(f'{where}: veld "{key}" is te lang (maximaal {max_len} tekens)')
+    return val
+
+
+def _validate_block(raw: object, where: str, *, nested: bool, seen_ids: set) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError(f"{where} is geen object")
+    block_id = _req_str(raw, "id", where, max_len=40)
+    if not _SLUG_RE.match(block_id):
+        raise ValueError(f'{where}: veld "id" moet een slug zijn (a-z, 0-9, - of _)')
+    if block_id in seen_ids:
+        raise ValueError(f'{where}: id "{block_id}" is niet uniek')
+    seen_ids.add(block_id)
+    btype = _req_str(raw, "type", where, max_len=20)
+    if btype not in BLOCK_TYPES:
+        raise ValueError(f'{where}: onbekend type "{btype}"')
+    if nested and btype not in COLUMN_CHILD_TYPES:
+        raise ValueError(f'{where}: type "{btype}" mag niet binnen een column staan')
+    heading = _req_str(raw, "heading", where, max_len=60)
+    icon = raw.get("icon")
+    icon = icon if isinstance(icon, str) and icon in _ICONS else None
+    prompt = _req_str(raw, "illustration_prompt", where, max_len=200, required=False)
+    if prompt and _TEXT_IN_IMAGE_RE.search(prompt):
+        raise ValueError(
+            f'{where}: illustration_prompt mag geen tekst in beeld vragen '
+            f'(geen {", ".join(TEXT_IN_IMAGE_WORDS)})'
+        )
+    block = {"id": block_id, "type": btype, "heading": heading, "icon": icon,
+             "illustration_prompt": prompt}
+
+    if btype == "column":
+        block["subheading"] = _req_str(raw, "subheading", where, max_len=120)
+        children = raw.get("children")
+        if not isinstance(children, list) or not 2 <= len(children) <= 3:
+            raise ValueError(f'{where}: veld "children" moet 2 tot 3 sub-blokken bevatten')
+        block["children"] = [
+            _validate_block(c, f"{where} > child {i}", nested=True, seen_ids=seen_ids)
+            for i, c in enumerate(children, 1)
+        ]
+    elif btype == "steps":
+        items = raw.get("items")
+        if not isinstance(items, list) or not 2 <= len(items) <= 5:
+            raise ValueError(f"{where}: steps heeft 2 tot 5 items nodig")
+        block["items"] = [
+            {"label": _req_str(it, "label", f"{where} stap {i}", max_len=60),
+             "text": _req_str(it, "text", f"{where} stap {i}", max_len=120)}
+            if isinstance(it, dict) else _raise(f"{where} stap {i} is geen object")
+            for i, it in enumerate(items, 1)
+        ]
+    elif btype == "icon_card":
+        block["text"] = _req_str(raw, "text", where, max_len=200)
+    elif btype == "hero":
+        block["text"] = _req_str(raw, "text", where, max_len=240)
+    elif btype == "comparison":
+        rows = raw.get("rows")
+        if not isinstance(rows, list) or not 2 <= len(rows) <= 4:
+            raise ValueError(f"{where}: comparison heeft 2 tot 4 rows nodig")
+        cleaned_rows = []
+        for i, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                raise ValueError(f"{where} row {i} is geen object")
+            ratio = row.get("ratio")
+            if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not 0 <= ratio <= 1:
+                raise ValueError(f"{where} row {i}: ratio moet een getal tussen 0 en 1 zijn")
+            cleaned_rows.append({
+                "label": _req_str(row, "label", f"{where} row {i}", max_len=60),
+                "value": _req_str(row, "value", f"{where} row {i}", max_len=80),
+                "ratio": float(ratio),
+            })
+        block["rows"] = cleaned_rows
+    elif btype == "key_numbers":
+        items = raw.get("items")
+        if not isinstance(items, list) or not 3 <= len(items) <= 5:
+            raise ValueError(f"{where}: key_numbers heeft 3 tot 5 items nodig")
+        cleaned_items = []
+        for i, it in enumerate(items, 1):
+            if not isinstance(it, dict):
+                raise ValueError(f"{where} item {i} is geen object")
+            label = _req_str(it, "label", f"{where} item {i}", max_len=80)
+            if len(label.split()) > 8:
+                raise ValueError(f"{where} item {i}: label maximaal 8 woorden")
+            cleaned_items.append({"number": _req_str(it, "number", f"{where} item {i}", max_len=40),
+                                  "label": label})
+        block["items"] = cleaned_items
+    return block
+
+
+def _raise(msg: str):
+    raise ValueError(msg)
+
+
+def extract_infographic(content: str) -> dict:
+    """Parse + validate v2 JSON. Raises ValueError (Dutch) on any schema miss.
+
+    Registered as the `infographic` validator in src/notebook_artifacts.py,
+    so the message is fed back to the model on retry — same contract as
+    extract_slide_deck. Returns a cleaned dict (stripped strings, unknown
+    icons dropped) with an `illustrations` map (block_id -> filename) that
+    the illustration job fills in later (src/notebook_illustrations.py).
+    """
+    m = _JSON_FENCE_RE.search(content or "")
+    raw = (m.group(1) if m else (content or "")).strip()
+    if not raw:
+        raise ValueError("geen JSON gevonden in het antwoord")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"ongeldige JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError("JSON is geen object")
+
+    title = _req_str(data, "title", "infographic", max_len=80)
+    subtitle = _req_str(data, "subtitle", "infographic", max_len=120, required=False)
+    takeaway = _req_str(data, "takeaway", "infographic", max_len=240)
+    blocks = data.get("blocks")
+    if not isinstance(blocks, list) or not MIN_BLOCKS <= len(blocks) <= MAX_BLOCKS:
+        raise ValueError(f'veld "blocks" moet {MIN_BLOCKS} tot {MAX_BLOCKS} blokken bevatten')
+    seen: set = set()
+    cleaned = [_validate_block(b, f"blok {i}", nested=False, seen_ids=seen)
+               for i, b in enumerate(blocks, 1)]
+    heroes = sum(1 for b in cleaned if b["type"] == "hero")
+    if heroes != 1:
+        raise ValueError(f"precies één blok van type hero verwacht (gevonden: {heroes})")
+    columns = sum(1 for b in cleaned if b["type"] == "column")
+    if columns < 1 or columns > MAX_COLUMNS:
+        raise ValueError(f"1 tot {MAX_COLUMNS} blokken van type column verwacht (gevonden: {columns})")
+
+    illustrations = data.get("illustrations")
+    if not isinstance(illustrations, dict):
+        illustrations = {}
+    illustrations = {k: v for k, v in illustrations.items()
+                     if isinstance(k, str) and isinstance(v, str)}
+    return {"title": title, "subtitle": subtitle, "takeaway": takeaway,
+            "blocks": cleaned, "illustrations": illustrations}
+
+
+def iter_blocks(data: dict) -> List[dict]:
+    """All blocks in document order; a column is followed by its children."""
+    out: List[dict] = []
+    for b in data.get("blocks", []):
+        out.append(b)
+        out.extend(b.get("children", []))
+    return out
