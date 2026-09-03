@@ -191,3 +191,54 @@ def test_hidden_configured_model_selects_first_enabled_chat_model(monkeypatch):
     assert url == "https://default.example/v1/chat/completions"
     assert model == "enabled-chat"
     assert headers == {"Authorization": "Bearer key-default"}
+
+
+def _multi_model_endpoint(ep_id, models, *, hidden=None):
+    return SimpleNamespace(
+        id=ep_id,
+        base_url=f"https://{ep_id}.example/v1",
+        api_key=f"key-{ep_id}",
+        cached_models=json.dumps(models),
+        hidden_models=json.dumps(hidden or []),
+        is_enabled=True,
+    )
+
+
+def test_hidden_task_model_cascades_to_utility_tier(monkeypatch):
+    """A hidden task_model must not silently auto-pick the endpoint's first
+    enabled model (which can be a 27B that spills to CPU); it falls through
+    to the Utility tier like an unconfigured task tier does."""
+    settings = {
+        "task_endpoint_id": "local",
+        "task_model": "hidden-14b",
+        "utility_endpoint_id": "local",
+        "utility_model": "small-utility",
+    }
+    endpoint = _multi_model_endpoint(
+        "local",
+        ["hidden-14b", "huge-27b", "small-utility"],
+        hidden=["hidden-14b"],
+    )
+    _install_resolver_fakes(monkeypatch, settings, [endpoint])
+
+    url, model, headers = resolve_endpoint("task")
+
+    assert url == "https://local.example/v1/chat/completions"
+    assert model == "small-utility"
+
+
+def test_hidden_utility_model_cascades_to_default_tier(monkeypatch):
+    settings = {
+        "utility_endpoint_id": "local",
+        "utility_model": "hidden-util",
+        "default_endpoint_id": "cloud",
+        "default_model": "cloud-chat",
+    }
+    local = _multi_model_endpoint("local", ["hidden-util", "huge-27b"], hidden=["hidden-util"])
+    cloud = _multi_model_endpoint("cloud", ["cloud-chat"])
+    _install_resolver_fakes(monkeypatch, settings, [local, cloud])
+
+    url, model, headers = resolve_endpoint("utility")
+
+    assert url == "https://cloud.example/v1/chat/completions"
+    assert model == "cloud-chat"

@@ -381,6 +381,25 @@ def resolve_endpoint(
         # model). Treat it as unset so the picker below selects a live one
         # instead of dispatching to a disabled model that 400s.
         if model and model in _endpoint_hidden_models(ep):
+            if setting_prefix != "default":
+                # Cascade to the next tier instead of auto-picking. Auto-pick
+                # returns the endpoint's *first* enabled model, which for a
+                # local Ollama endpoint was a 27B that spilled to CPU and ran
+                # every hourly email task at full fan speed.
+                next_prefix = "default" if setting_prefix == "utility" else "utility"
+                logger.warning(
+                    "[resolve_endpoint] %s_model %r is hidden on endpoint %s; "
+                    "falling back to the %s tier",
+                    setting_prefix, model, ep_id, next_prefix,
+                )
+                return resolve_endpoint(
+                    next_prefix, fallback_url, fallback_model, fallback_headers, owner=owner
+                )
+            logger.warning(
+                "[resolve_endpoint] default_model %r is hidden on endpoint %s; "
+                "auto-picking the first enabled chat model",
+                model, ep_id,
+            )
             model = ""
         # If no (usable) model specified, pick the first enabled chat model.
         if not model:
