@@ -610,8 +610,36 @@ def generate_infographic(
     markdown: str,
     notebook_name: str,
     generated_at: datetime,
+    *,
+    illustrations_url_base: str = "/api/notebook-illustration/",
+    poll_url: Optional[str] = None,
 ) -> str:
-    """Render an infographic artifact's markdown as a self-contained HTML poster.
+    """Render a stored infographic artifact as a self-contained HTML page.
+
+    v2 content (JSON, see is_infographic_v2) goes to render_infographic_v2;
+    `poll_url` (set by the route while an illustration job runs) makes the
+    page poll for illustrations. Legacy markdown keeps the poster renderer
+    below. Corrupt v2 JSON degrades to the legacy fallback card with a
+    Dutch notice instead of raising.
+    """
+    if is_infographic_v2(markdown):
+        try:
+            data = extract_infographic(markdown)
+        except ValueError as exc:
+            fallback_md = (
+                f"# {(title or 'Infographic').strip()}\n\n"
+                f"Deze inhoud kon niet als infographic worden gerenderd ({exc}).\n"
+            )
+            return _render_legacy(title, fallback_md, notebook_name, generated_at)
+        return render_infographic_v2(
+            data, notebook_name, generated_at,
+            illustrations_url_base=illustrations_url_base, poll_url=poll_url,
+        )
+    return _render_legacy(title, markdown, notebook_name, generated_at)
+
+
+def _render_legacy(title, markdown, notebook_name, generated_at) -> str:
+    """Render legacy infographic markdown as a self-contained HTML poster.
 
     `title` is used only as a fallback: a "# " heading in `markdown` (the
     generation prompt in src/notebook_artifacts.py asks for one) wins as the
@@ -855,3 +883,265 @@ def iter_blocks(data: dict) -> List[dict]:
         out.append(b)
         out.extend(b.get("children", []))
     return out
+
+
+# ---------------------------------------------------------------------------
+# v2 rendering (spec Deel C)
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_V2 = """\
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+:root {{
+  --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --bg: #fbf9f4; --bg-surface: #ffffff; --border: rgba(0,0,0,0.08);
+  --text: #1a1817; --text-dim: #5a5651; --text-muted: #8a8580;
+  --accent: #b8543a; --gold: #c9952e; --gold-bg: rgba(201,149,46,0.09);
+  --radius: 12px; --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
+}}
+/* Always-light, like every notebook viewer (#98). */
+body {{ font-family: var(--font-body); background: var(--bg); color: var(--text); line-height: 1.5; font-size: 15px; -webkit-font-smoothing: antialiased; }}
+.ig2-wrap {{ max-width: 1280px; margin: 0 auto; padding: 2rem 1.5rem 2.5rem; }}
+.ig2-head {{ text-align: center; padding: 0 0 1.6rem; }}
+.ig2-head-label {{ text-transform: uppercase; letter-spacing: 0.28em; font-size: 0.66rem; font-weight: 600; color: var(--accent); margin-bottom: 0.7rem; }}
+.ig2-head h1 {{ font-family: var(--font-display); font-size: clamp(1.6rem, 3.2vw, 2.4rem); font-weight: 700; line-height: 1.12; letter-spacing: -0.02em; max-width: 60ch; margin: 0 auto; }}
+.ig2-head p {{ color: var(--text-dim); margin-top: 0.5rem; font-size: 0.98rem; }}
+
+/* Desktop: [column] [hero + rest] [column]. Wrappers are flex columns so
+   `order` (document index) keeps document order inside each wrapper. */
+.ig2-grid {{ display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 1.5rem; align-items: start; }}
+.ig2-grid.ig2-grid--one {{ grid-template-columns: 1.25fr 1fr; }}
+.ig2-col, .ig2-center {{ display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }}
+.ig2-block {{ order: var(--o, 0); min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 1.1rem 1.15rem 1.2rem; }}
+.ig2-block h2 {{ font-size: 0.86rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.45rem; }}
+.ig2-block p {{ color: var(--text-dim); font-size: 0.88rem; }}
+.ig2-art {{ display: flex; justify-content: center; margin-bottom: 0.75rem; }}
+.ig2-icon {{ width: 58px; height: 58px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--pc-tint); color: var(--pc); }}
+.ig2-icon svg {{ width: 28px; height: 28px; }}
+.ig2-img {{ width: 100%; max-width: 320px; height: auto; border-radius: 10px; display: block; opacity: 1; transition: opacity 0.4s ease; }}
+.ig2-img--fade {{ opacity: 0; }}
+
+.ig2-column {{ background: transparent; border: 0; box-shadow: none; padding: 0; }}
+.ig2-column-head {{ padding: 0 0.25rem 0.75rem; text-align: center; }}
+.ig2-column-head h2 {{ color: var(--pc); }}
+.ig2-column-head p {{ font-size: 0.82rem; }}
+.ig2-column-body {{ display: flex; flex-direction: column; gap: 1rem; }}
+
+.ig2-steps {{ list-style: none; counter-reset: none; position: relative; margin-top: 0.3rem; }}
+.ig2-steps li {{ display: grid; grid-template-columns: 28px 1fr; gap: 0.6rem; position: relative; padding-bottom: 0.9rem; }}
+.ig2-steps li::before {{ content: ""; position: absolute; left: 13px; top: 28px; bottom: 0; width: 2px; background: var(--pc-tint); }}
+.ig2-steps li:last-child::before {{ display: none; }}
+.ig2-steps li:last-child {{ padding-bottom: 0; }}
+.ig2-step-n {{ width: 28px; height: 28px; border-radius: 50%; background: var(--pc); color: #fff; font-size: 0.78rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }}
+.ig2-steps strong {{ display: block; font-size: 0.86rem; }}
+
+.ig2-hero {{ text-align: center; padding: 1.4rem 1.4rem 1.5rem; }}
+.ig2-hero .ig2-img {{ max-width: 100%; }}
+.ig2-hero .ig2-icon {{ width: 96px; height: 96px; }}
+.ig2-hero .ig2-icon svg {{ width: 44px; height: 44px; }}
+.ig2-hero h2 {{ font-family: var(--font-display); font-size: 1.3rem; text-transform: none; letter-spacing: -0.01em; }}
+.ig2-hero p {{ font-size: 0.98rem; color: var(--text); }}
+
+.ig2-cmp-row {{ display: grid; grid-template-columns: minmax(64px, auto) 1fr auto; gap: 0.5rem 0.8rem; align-items: center; margin-bottom: 0.6rem; }}
+.ig2-cmp-label {{ font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; text-align: right; }}
+.ig2-cmp-track {{ height: 16px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); overflow: hidden; }}
+.ig2-cmp-fill {{ height: 100%; border-radius: 8px; background: var(--pc); }}
+.ig2-cmp-value {{ font-size: 0.78rem; color: var(--text-dim); white-space: nowrap; }}
+
+.ig2-stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 0.6rem; margin-top: 0.4rem; }}
+.ig2-stat {{ text-align: center; padding: 0.6rem 0.4rem; border-radius: 10px; background: var(--pc-tint); }}
+.ig2-stat-n {{ font-family: var(--font-display); font-size: 1.35rem; font-weight: 700; color: var(--pc); line-height: 1.1; }}
+.ig2-stat-l {{ font-size: 0.72rem; color: var(--text-dim); margin-top: 0.2rem; }}
+
+.ig-takeaway {{ margin-top: 1.6rem; padding: 0.9rem 1.3rem; border-left: 3px solid var(--gold); background: var(--gold-bg); border-radius: 0 var(--radius) var(--radius) 0; font-family: var(--font-display); font-style: italic; font-size: 0.98rem; text-align: center; }}
+.ig2-meta {{ text-align: center; font-size: 0.75rem; color: var(--text-muted); margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); }}
+
+/* Mobile: one column in document order. Wrappers dissolve (display:
+   contents) so `order` sorts every block globally. */
+@media (max-width: 959px) {{
+  .ig2-grid, .ig2-grid.ig2-grid--one {{ display: flex; flex-direction: column; gap: 1rem; }}
+  .ig2-col, .ig2-center {{ display: contents; }}
+  .ig2-wrap {{ padding: 1.25rem 0.9rem 2rem; }}
+  .ig2-cmp-row {{ grid-template-columns: 1fr auto; }}
+  .ig2-cmp-label {{ grid-column: 1 / -1; text-align: left; }}
+}}
+@media print {{ body {{ background: #fff !important; }} .ig2-block {{ box-shadow: none; }} }}
+</style>
+</head>
+<body>
+<div class="ig2-wrap"{pending_attrs}>
+  <div class="ig2-head">
+    <div class="ig2-head-label">Ithaka &mdash; Infographic</div>
+    <h1>{title}</h1>{subtitle_html}
+  </div>
+  {grid_html}
+  <div class="ig-takeaway">{takeaway}</div>
+  <div class="ig2-meta">{notebook_name} &middot; {date}</div>
+</div>
+{script}
+</body>
+</html>
+"""
+
+# Not run through str.format — braces are literal. Polls the status endpoint
+# every 3 s (max 120 s) and swaps each icon for its <img> with a short fade.
+_VIEWER_SCRIPT = """<script>
+(function () {
+  var root = document.querySelector('.ig2-wrap[data-illustrations="pending"]');
+  if (!root) return;
+  var url = root.getAttribute('data-poll-url');
+  if (!url) return;
+  var INTERVAL = 3000, MAX_MS = 120000, started = Date.now();
+  function stop() { root.removeAttribute('data-illustrations'); }
+  function apply(map) {
+    Object.keys(map || {}).forEach(function (id) {
+      var slot = root.querySelector('.ig2-art[data-block-id="' + CSS.escape(id) + '"]');
+      if (!slot || slot.getAttribute('data-done') === '1') return;
+      slot.setAttribute('data-done', '1');
+      var img = new Image();
+      img.className = 'ig2-img ig2-img--fade';
+      img.alt = '';
+      img.onload = function () {
+        slot.innerHTML = '';
+        slot.appendChild(img);
+        requestAnimationFrame(function () { img.classList.remove('ig2-img--fade'); });
+      };
+      img.src = map[id];
+    });
+  }
+  function tick() {
+    fetch(url, { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d && d.illustrations) apply(d.illustrations);
+        if (!d || d.status !== 'running' || Date.now() - started > MAX_MS) { stop(); return; }
+        setTimeout(tick, INTERVAL);
+      })
+      .catch(function () {
+        if (Date.now() - started > MAX_MS) { stop(); return; }
+        setTimeout(tick, INTERVAL);
+      });
+  }
+  setTimeout(tick, INTERVAL);
+})();
+</script>"""
+
+
+def _icon_body(block: dict) -> str:
+    key = block.get("icon")
+    return _ICONS[key] if key in _ICONS else _pick_icon(block.get("heading", ""))
+
+
+def _art_html(block: dict, illustrations: dict, url_base: str) -> str:
+    """Illustration slot: <img> when the job delivered one, else icon circle."""
+    filename = illustrations.get(block["id"])
+    if filename:
+        src = html.escape(url_base + filename, quote=True)
+        inner = f'<img class="ig2-img" src="{src}" loading="lazy" alt="">'
+    else:
+        inner = f'<span class="ig2-icon"><svg {_ICON_ATTRS}>{_icon_body(block)}</svg></span>'
+    return f'<div class="ig2-art" data-block-id="{html.escape(block["id"], quote=True)}">{inner}</div>'
+
+
+def _block_body_html(block: dict) -> str:
+    t = block["type"]
+    if t == "steps":
+        items = "".join(
+            f'<li><span class="ig2-step-n">{i}</span><div><strong>{html.escape(it["label"])}</strong>'
+            f'<p>{html.escape(it["text"])}</p></div></li>'
+            for i, it in enumerate(block["items"], 1)
+        )
+        return f'<ol class="ig2-steps">{items}</ol>'
+    if t in ("icon_card", "hero"):
+        return f"<p>{html.escape(block['text'])}</p>"
+    if t == "comparison":
+        return "".join(
+            '<div class="ig2-cmp-row">'
+            f'<div class="ig2-cmp-label">{html.escape(r["label"])}</div>'
+            f'<div class="ig2-cmp-track"><div class="ig2-cmp-fill" style="width:{round(r["ratio"] * 100)}%"></div></div>'
+            f'<div class="ig2-cmp-value">{html.escape(r["value"])}</div>'
+            "</div>"
+            for r in block["rows"]
+        )
+    if t == "key_numbers":
+        return '<div class="ig2-stats">' + "".join(
+            f'<div class="ig2-stat"><div class="ig2-stat-n">{html.escape(it["number"])}</div>'
+            f'<div class="ig2-stat-l">{html.escape(it["label"])}</div></div>'
+            for it in block["items"]
+        ) + "</div>"
+    return ""
+
+
+def _block_html(block: dict, order: int, palette_index: int, illustrations: dict, url_base: str) -> str:
+    color, tint = _PALETTE[palette_index % len(_PALETTE)]
+    style = f"--o:{order};--pc:{color};--pc-tint:{tint}"
+    t = block["type"]
+    if t == "column":
+        children = "".join(
+            _block_html(c, order, palette_index + 1 + i, illustrations, url_base)
+            for i, c in enumerate(block["children"])
+        )
+        return (
+            f'<section class="ig2-block ig2-column" style="{style}">'
+            f'<div class="ig2-column-head">{_art_html(block, illustrations, url_base)}'
+            f'<h2>{html.escape(block["heading"])}</h2><p>{html.escape(block["subheading"])}</p></div>'
+            f'<div class="ig2-column-body">{children}</div></section>'
+        )
+    cls = {"hero": "ig2-hero", "icon_card": "ig2-card", "steps": "ig2-card ig2-card--steps",
+           "comparison": "ig2-card ig2-card--cmp", "key_numbers": "ig2-card ig2-card--stats"}[t]
+    return (
+        f'<section class="ig2-block {cls}" style="{style}">'
+        f'{_art_html(block, illustrations, url_base)}<h2>{html.escape(block["heading"])}</h2>'
+        f'{_block_body_html(block)}</section>'
+    )
+
+
+def render_infographic_v2(data: dict, notebook_name: str, generated_at: datetime, *,
+                          illustrations_url_base: str, poll_url: Optional[str]) -> str:
+    """Render a validated v2 dict (from extract_infographic) as the poster page."""
+    illustrations = data.get("illustrations") or {}
+    blocks = data["blocks"]
+    columns = [b for b in blocks if b["type"] == "column"]
+    hero = next(b for b in blocks if b["type"] == "hero")
+    rest = [b for b in blocks if b["type"] not in ("column", "hero")]
+
+    order = {b["id"]: i for i, b in enumerate(blocks)}
+    palette = {b["id"]: i * 3 for i, b in enumerate(blocks)}
+
+    def _render(b):
+        return _block_html(b, order[b["id"]], palette[b["id"]], illustrations, illustrations_url_base)
+
+    left = _render(columns[0])
+    right = _render(columns[1]) if len(columns) > 1 else ""
+    center = _render(hero) + "".join(_render(b) for b in rest)
+    grid_cls = "ig2-grid" if right else "ig2-grid ig2-grid--one"
+    grid_html = (
+        f'<div class="{grid_cls}"><div class="ig2-col">{left}</div>'
+        f'<div class="ig2-center">{center}</div>'
+        + (f'<div class="ig2-col">{right}</div>' if right else "")
+        + "</div>"
+    )
+
+    pending_attrs = ""
+    script = ""
+    if poll_url:
+        pending_attrs = f' data-illustrations="pending" data-poll-url="{html.escape(poll_url, quote=True)}"'
+        script = _VIEWER_SCRIPT
+    subtitle_html = f"<p>{html.escape(data['subtitle'])}</p>" if data.get("subtitle") else ""
+    return _TEMPLATE_V2.format(
+        title=html.escape(data["title"]),
+        subtitle_html=subtitle_html,
+        grid_html=grid_html,
+        takeaway=html.escape(data["takeaway"]),
+        notebook_name=html.escape(notebook_name or ""),
+        date=html.escape(generated_at.strftime("%d-%m-%Y")),
+        pending_attrs=pending_attrs,
+        script=script,
+    )

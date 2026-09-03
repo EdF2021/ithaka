@@ -196,3 +196,96 @@ def test_prompt_asks_for_json_schema_and_dutch():
     assert "## Key numbers" not in prompt     # legacy markdown structure is gone
     assert '"sleutel"' not in prompt          # example icon must be a real allowed key
     assert _KIND_VALIDATORS["infographic"] is extract_infographic
+
+
+# ---- renderer v2 ----------------------------------------------------------
+
+from src.notebook_infographic import generate_infographic, render_infographic_v2  # noqa: E402
+
+_AT = datetime(2026, 9, 3)
+
+
+def test_generate_dispatches_legacy_markdown_to_old_renderer():
+    md = "# Oud\n\n## Key numbers\n- **3** — panelen\n\n## Sectie\n- feit\n\n> takeaway\n"
+    out = generate_infographic(title=None, markdown=md, notebook_name="NB", generated_at=_AT)
+    assert 'class="ig-grid"' in out
+    assert "ig2-wrap" not in out
+
+
+def test_generate_dispatches_v2_json_to_new_renderer():
+    out = generate_infographic(title="x", markdown=_fenced(_valid_data()), notebook_name="NB", generated_at=_AT)
+    assert 'class="ig2-wrap"' in out
+    assert "SamenWijzer in cijfers" in out
+    assert "Wat de bronnen zeggen" in out
+    assert "Begeleiding op maat werkt" in out            # takeaway
+    assert "NB" in out
+    assert "ig-grid\"" not in out
+
+
+def test_generate_v2_invalid_json_falls_back_to_legacy_fallback_card():
+    # Stored raw content after 3 failed validation attempts never reaches
+    # the DB (generate_artifact raises), but a hand-edited/corrupt row must
+    # still render something rather than 500.
+    out = generate_infographic(title="Kapot", markdown="{\"title\": 1}", notebook_name="NB", generated_at=_AT)
+    assert "<html" in out
+    assert "kon niet als infographic worden gerenderd" in out
+
+
+def test_render_v2_contains_all_block_types_and_grid():
+    data = extract_infographic(json.dumps(_valid_data()))
+    out = render_infographic_v2(data, "NB", _AT, illustrations_url_base="/api/notebook-illustration/", poll_url=None)
+    for cls in ("ig2-grid", "ig2-column", "ig2-steps", "ig2-card", "ig2-hero", "ig2-cmp-row", "ig2-stats", "ig-takeaway"):
+        assert cls in out, cls
+    assert 'data-block-id="hero"' in out
+    assert 'style="width:60%"' in out          # comparison ratio 0.6
+    assert 'style="width:100%"' in out
+    assert "42%" in out and "geslaagd" in out  # key numbers
+    assert out.count('class="ig2-step-n"') == 2   # two numbered steps (CSS rule excluded)
+    assert "@media (max-width: 959px)" in out  # mobile breakpoint per spec (< 960)
+    assert "min-width: 0" in out
+
+
+def test_render_v2_without_illustrations_shows_icons_not_img():
+    data = extract_infographic(json.dumps(_valid_data()))
+    out = render_infographic_v2(data, "NB", _AT, illustrations_url_base="/api/notebook-illustration/", poll_url=None)
+    assert "<img" not in out
+    assert out.count('class="ig2-icon"') == 9  # one per block incl. column children
+    assert "data-illustrations" not in out
+    assert "<script src" not in out
+
+
+def test_render_v2_with_illustrations_renders_img_with_lazy_loading():
+    raw = _valid_data()
+    raw["illustrations"] = {"hero": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa-hero-0123abcd.png"}
+    data = extract_infographic(json.dumps(raw))
+    out = render_infographic_v2(data, "NB", _AT, illustrations_url_base="/api/notebook-illustration/", poll_url=None)
+    assert ('<img class="ig2-img" src="/api/notebook-illustration/'
+            'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa-hero-0123abcd.png" loading="lazy" alt="">') in out
+    assert out.count('class="ig2-icon"') == 8
+
+
+def test_render_v2_pending_embeds_poll_url_and_inline_script():
+    data = extract_infographic(json.dumps(_valid_data()))
+    out = render_infographic_v2(data, "NB", _AT, illustrations_url_base="/api/notebook-illustration/",
+                                poll_url="/api/notebooks/nb1/artifacts/a1/illustrations")
+    assert 'data-illustrations="pending"' in out
+    assert 'data-poll-url="/api/notebooks/nb1/artifacts/a1/illustrations"' in out
+    assert "<script>" in out and "<script src" not in out
+    assert "3000" in out and "120000" in out   # 3 s interval, 120 s cap
+
+
+def test_render_v2_escapes_html_in_text():
+    raw = _valid_data()
+    raw["title"] = "<b>x</b>"
+    raw["blocks"][1]["text"] = "a <script>alert(1)</script> b"
+    data = extract_infographic(json.dumps(raw))
+    out = render_infographic_v2(data, "NB", _AT, illustrations_url_base="/x/", poll_url="/p\"><x")
+    assert "<b>x</b>" not in out and "&lt;b&gt;x&lt;/b&gt;" in out
+    assert "<script>alert" not in out
+    assert 'data-poll-url="/p&quot;&gt;&lt;x"' in out
+
+
+def test_render_v2_forces_light_theme():
+    data = extract_infographic(json.dumps(_valid_data()))
+    out = render_infographic_v2(data, "NB", _AT, illustrations_url_base="/x/", poll_url=None)
+    assert "prefers-color-scheme" not in out
