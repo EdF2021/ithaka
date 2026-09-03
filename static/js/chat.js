@@ -4267,6 +4267,35 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('pre').forEach(_markCompactPre);
   }
+  // Mutation callback, factored out (named, not inlined) so it's unit
+  // testable without a real MutationObserver — see
+  // tests/test_chat_compact_pre_streaming_js.py.
+  //
+  // The characterData branch matters for issue #145: streamingRenderer.js's
+  // append-mode fence streaming (appendOpenFence) grows an open code block by
+  // calling Text.appendData() on an existing text node instead of inserting
+  // new DOM nodes. A childList-only observer never sees that, so a <pre>
+  // classified .pre-compact while its first streamed line was still short
+  // (and single-line) stayed stuck compact — with its slim-button-row 200px
+  // right padding — even once the block grew to many lines, squeezing the
+  // code down to a couple of characters per line on narrow viewports.
+  // Re-running _markCompactPre on every characterData mutation inside a
+  // <pre> keeps the classification live as the block grows.
+  function _handleCompactPreMutations(muts) {
+    for (const m of muts) {
+      if (m.type === 'characterData') {
+        const host = m.target.parentElement;
+        const pre = host && host.closest && host.closest('pre');
+        if (pre) _markCompactPre(pre);
+        continue;
+      }
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === 'PRE') _markCompactPre(n);
+        if (n.querySelectorAll) _scanCompactPres(n);
+      }
+    }
+  }
   // Global observer so any <pre> added anywhere in the app (chat stream,
   // chat re-renders, document library chat previews, slash commands,
   // research previews, etc.) gets tagged without each call site needing
@@ -4275,16 +4304,8 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     if (window._cmpPreObserverWired) return;
     window._cmpPreObserverWired = true;
     _scanCompactPres(document.body);
-    const obs = new MutationObserver((muts) => {
-      for (const m of muts) {
-        for (const n of m.addedNodes) {
-          if (n.nodeType !== 1) continue;
-          if (n.tagName === 'PRE') _markCompactPre(n);
-          if (n.querySelectorAll) _scanCompactPres(n);
-        }
-      }
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
+    const obs = new MutationObserver(_handleCompactPreMutations);
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
   })();
 
   /**
