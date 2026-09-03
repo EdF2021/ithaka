@@ -917,7 +917,7 @@ body {{ font-family: var(--font-body); background: var(--bg); color: var(--text)
 /* Desktop: [column] [hero + rest] [column]. Wrappers are flex columns so
    `order` (document index) keeps document order inside each wrapper. */
 .ig2-grid {{ display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 1.5rem; align-items: start; }}
-.ig2-grid.ig2-grid--one {{ grid-template-columns: 1.25fr 1fr; }}
+.ig2-grid.ig2-grid--one {{ grid-template-columns: 1fr 1.25fr; }}
 .ig2-col, .ig2-center {{ display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }}
 .ig2-block {{ order: var(--o, 0); min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 1.1rem 1.15rem 1.2rem; }}
 .ig2-block h2 {{ font-size: 0.86rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.45rem; }}
@@ -966,7 +966,7 @@ body {{ font-family: var(--font-body); background: var(--bg); color: var(--text)
 /* Mobile: one column in document order. Wrappers dissolve (display:
    contents) so `order` sorts every block globally. */
 @media (max-width: 959px) {{
-  .ig2-grid, .ig2-grid.ig2-grid--one {{ display: flex; flex-direction: column; gap: 1rem; }}
+  .ig2-grid, .ig2-grid.ig2-grid--one {{ display: flex; flex-direction: column; gap: 1rem; align-items: stretch; }}
   .ig2-col, .ig2-center {{ display: contents; }}
   .ig2-wrap {{ padding: 1.25rem 0.9rem 2rem; }}
   .ig2-cmp-row {{ grid-template-columns: 1fr auto; }}
@@ -1018,7 +1018,7 @@ _VIEWER_SCRIPT = """<script>
   }
   function tick() {
     fetch(url, { credentials: 'same-origin' })
-      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (r) { if (!r.ok) { throw new Error('http ' + r.status); } return r.json(); })
       .then(function (d) {
         if (d && d.illustrations) apply(d.illustrations);
         if (!d || d.status !== 'running' || Date.now() - started > MAX_MS) { stop(); return; }

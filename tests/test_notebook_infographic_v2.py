@@ -243,6 +243,20 @@ def test_render_v2_contains_all_block_types_and_grid():
     assert out.count('class="ig2-step-n"') == 2   # two numbered steps (CSS rule excluded)
     assert "@media (max-width: 959px)" in out  # mobile breakpoint per spec (< 960)
     assert "min-width: 0" in out
+    assert "align-items: stretch" in out       # mobile: loose cards stay full width
+
+
+def test_render_v2_single_column_uses_one_column_grid():
+    raw = _valid_data()
+    # Replace the second column block with an ordinary card, keeping 5
+    # top-level blocks (MIN_BLOCKS) but only one column block overall.
+    raw["blocks"][4] = {"id": "extra", "type": "icon_card", "heading": "Extra",
+                        "text": "Nog een kaart."}
+    data = extract_infographic(json.dumps(raw))
+    out = render_infographic_v2(data, "NB", _AT, illustrations_url_base="/api/notebook-illustration/", poll_url=None)
+    assert "ig2-grid--one" in out
+    assert out.count('class="ig2-col"') == 1
+    assert ".ig2-grid.ig2-grid--one { grid-template-columns: 1fr 1.25fr; }" in out
 
 
 def test_render_v2_without_illustrations_shows_icons_not_img():
@@ -272,6 +286,7 @@ def test_render_v2_pending_embeds_poll_url_and_inline_script():
     assert 'data-poll-url="/api/notebooks/nb1/artifacts/a1/illustrations"' in out
     assert "<script>" in out and "<script src" not in out
     assert "3000" in out and "120000" in out   # 3 s interval, 120 s cap
+    assert "r.ok" in out and "throw" in out    # non-ok HTTP responses retry, not stop
 
 
 def test_render_v2_escapes_html_in_text():
