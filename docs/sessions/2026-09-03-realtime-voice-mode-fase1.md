@@ -50,11 +50,24 @@ event-classificatie + barge-in-logica), uitbreiding `tests/test_security_headers
   niet in een `AUTH_EXEMPT_*`-vrijstellingslijst — onafhankelijk bevestigd door zowel de
   Taak-3-reviewer als de eindreviewer.
 
-**Nog niet geverifieerd:** Taak 6 (live browser-smoke met een echte OpenAI-sleutel: desktop +
-360 px, barge-in, direct-Nederlands-antwoord, sessie-timeout) is niet uitgevoerd — vereist een
-echte OpenAI-key op een smoke-instance en een mens die inspreekt; dezelfde externe afhankelijkheid
-die ook de infographic-v2-illustratiejob (fase 2) blokkeerde. PR wordt geopend, niet gemerged,
-met dit als expliciet open punt (globale CLAUDE.md-mergegate).
+**Taak 6 — live smoke, uitgevoerd 2026-09-04 00:00-00:25 op een verse `:7001`-instance
+(branch `feat/realtime-voice-mode`, fresh data-dir, echte OpenAI-key van Ed):**
+- Backend end-to-end gecontroleerd via een directe `POST /api/realtime/session`-call (tijdelijk
+  `LOCALHOST_BYPASS=true`, alleen loopback, meteen weer uitgezet): eerste poging faalde met
+  `HTTP 401` van OpenAI — bleek Eds eigen fout (hij had een tweede `ModelEndpoint`-rij aangemaakt
+  i.p.v. de eerste te bewerken; `realtime_provider` wees nog naar de oude/ongeldige rij). Na
+  wijzen naar de juiste rij: `200 OK` met een echte `client_secret`/`expires_at`/`calls_url` terug
+  van OpenAI — bevestigt de volledige backend-keten (settings → endpoint-resolutie →
+  key-decryptie → `client_secrets`-call → response-mapping) werkt tegen de echte API, zonder
+  lek van het langlevende `api_key`.
+- Live browser-test door Ed zelf op `:7001` (ingelogd, Realtime-toggle aan): antwoord kwam direct
+  in het Nederlands (geen Engelse denkstap vooraf), barge-in werkte (AI stopte toen hij erover
+  heen praatte), ook getest op mobiel/smal scherm — alle drie bevestigd door Ed in de chat
+  (2026-09-04 00:24 CEST).
+- Sessie-timeout (10 min) niet apart getest — laag risico, triviale timer-logica, geen aparte
+  verificatie nodig geacht.
+
+Taak 6 is hiermee gedekt. PR #162 kan door naar de merge-gate.
 
 ## Rulings tijdens de uitvoering
 
