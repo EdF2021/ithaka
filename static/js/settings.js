@@ -771,46 +771,66 @@ async function initTeacherModel() {
 }
 
 /* ── Image Generation ── */
+// `image_model` is a single admin setting read both by this card and by
+// do_generate_image() (src/ai_interaction.py) for chat image generation, so
+// selectable options here must cover both: inpaint-capable models (for the
+// built-in inpaint tool) and OpenAI's image API models (do_generate_image
+// auto-detects gpt-image-1.5 > gpt-image-1 > dall-e-3). See issue #153.
+function _buildImageModelOptions(allModelIds, currentValue) {
+  const isInpaintModel = (mid) => {
+    const lower = String(mid || '').toLowerCase();
+    return lower.includes('inpaint')
+      || lower.includes('3.5-medium')
+      || lower.includes('3-5-medium')
+      || lower.includes('sd-3.5-med');
+  };
+  const isOpenAiImageModel = (mid) => {
+    const lower = String(mid || '').toLowerCase();
+    return lower.includes('gpt-image') || lower.includes('dall-e') || lower.includes('dalle');
+  };
+  const detected = (allModelIds || []).filter(mid => isInpaintModel(mid) || isOpenAiImageModel(mid));
+  const options = sortModelIds(detected).map(mid => ({ value: mid, label: mid }));
+  // Hardcoded inpaint fallbacks shown as "(not detected)" so users know what
+  // to download/serve to enable inpaint here.
+  ['stable-diffusion-3.5-medium', 'stable-diffusion-inpainting'].forEach(mid => {
+    if (!detected.includes(mid)) options.push({ value: mid, label: mid + ' (not detected)' });
+  });
+  // The currently saved value must always be selectable, even if it isn't in
+  // the model cache at all, so the setting never appears blank (#153).
+  if (currentValue && !options.some(o => o.value === currentValue)) {
+    options.push({ value: currentValue, label: currentValue });
+  }
+  return options;
+}
+
 async function initImageSettings() {
   const modelSel = el('set-imgModelSelect');
   const qualSel = el('set-imgQualitySelect');
   const msg = el('set-imgSettingsMsg');
   const enabledToggle = el('set-imgEnabledToggle');
   const configWrap = modelSel ? modelSel.closest('div[style*="flex-direction"]') : null;
-  try {
-    const modelsRes = await fetch('/api/models', { credentials: 'same-origin' });
-    const modelsData = await modelsRes.json();
-    // Inpaint-compat allowlist — image gen here is scoped to inpainting only,
-    // so DALL-E / GPT-Image-1 (no inpaint API) are excluded. Currently:
-    //   - any model with 'inpaint' in the id
-    //   - Stable Diffusion 3.5 Medium (inpaint via diffusers pipeline)
-    const _isInpaintModel = (mid) => {
-      const lower = String(mid || '').toLowerCase();
-      return lower.includes('inpaint')
-        || lower.includes('3.5-medium')
-        || lower.includes('3-5-medium')
-        || lower.includes('sd-3.5-med');
-    };
-    const imageModels = [];
-    (modelsData.items || []).forEach(item => {
-      (item.models || []).forEach(mid => {
-        if (_isInpaintModel(mid)) imageModels.push(mid);
-      });
-    });
-    sortModelIds(imageModels).forEach(mid => { const opt = document.createElement('option'); opt.value = mid; opt.textContent = mid; modelSel.appendChild(opt); });
-    // Hardcoded fallbacks shown as "(not detected)" so users know what to
-    // download/serve to enable inpaint here.
-    ['stable-diffusion-3.5-medium', 'stable-diffusion-inpainting'].forEach(mid => {
-      if (!imageModels.includes(mid)) { const opt = document.createElement('option'); opt.value = mid; opt.textContent = mid + ' (not detected)'; modelSel.appendChild(opt); }
-    });
-  } catch (e) { console.warn('Failed to load models for image settings', e); }
+  let currentValue = '';
   try {
     const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
     const settings = await settingsRes.json();
-    if (settings.image_model) modelSel.value = settings.image_model;
+    currentValue = settings.image_model || '';
     if (settings.image_quality) qualSel.value = settings.image_quality;
     if (enabledToggle) enabledToggle.checked = settings.image_gen_enabled === true;
   } catch (e) { console.warn('Failed to load settings', e); }
+  try {
+    const modelsRes = await fetch('/api/models', { credentials: 'same-origin' });
+    const modelsData = await modelsRes.json();
+    const allModelIds = [];
+    (modelsData.items || []).forEach(item => { (item.models || []).forEach(mid => allModelIds.push(mid)); });
+    _buildImageModelOptions(allModelIds, currentValue).forEach(({ value, label }) => {
+      const opt = document.createElement('option'); opt.value = value; opt.textContent = label; modelSel.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn('Failed to load models for image settings', e);
+    // Still make the saved value selectable even if the model cache fetch failed.
+    if (currentValue) { const opt = document.createElement('option'); opt.value = currentValue; opt.textContent = currentValue; modelSel.appendChild(opt); }
+  }
+  if (currentValue) modelSel.value = currentValue;
 
   function syncImgDisabled() {
     var off = enabledToggle && !enabledToggle.checked;
