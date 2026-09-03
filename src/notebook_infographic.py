@@ -34,6 +34,11 @@ markdown-to-HTML pass-through) and the page carries no external resources
 (no CDN fonts, no remote images, no script tags) — same constraints as
 src/visual_report.py, just with a much smaller, purpose-built template
 instead of reusing its ~1900-line one.
+
+v2 (2026-09-03): new artifacts store the JSON model from
+`extract_infographic`; `generate_infographic` dispatches on
+`is_infographic_v2`. The markdown path below stays for previously
+generated artifacts.
 """
 
 from __future__ import annotations

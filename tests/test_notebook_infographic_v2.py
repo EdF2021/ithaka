@@ -179,3 +179,19 @@ def test_extract_rejects_non_json(content, fragment):
     with pytest.raises(ValueError) as exc:
         extract_infographic(content)
     assert fragment in str(exc.value)
+
+
+# ---- prompt + validator wiring -------------------------------------------
+
+def test_prompt_asks_for_json_schema_and_dutch():
+    from src.notebook_artifacts import ARTIFACT_KINDS, _KIND_VALIDATORS
+    from src.notebook_language import DUTCH_OUTPUT_RULE
+    prompt = ARTIFACT_KINDS["infographic"]["prompt"]
+    assert DUTCH_OUTPUT_RULE in prompt
+    assert '"blocks"' in prompt
+    for t in ("column", "steps", "icon_card", "hero", "comparison", "key_numbers"):
+        assert f'"{t}"' in prompt
+    assert "illustration_prompt" in prompt
+    assert "Engels" in prompt                 # illustration prompts in English
+    assert "## Key numbers" not in prompt     # legacy markdown structure is gone
+    assert _KIND_VALIDATORS["infographic"] is extract_infographic
