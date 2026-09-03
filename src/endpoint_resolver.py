@@ -387,18 +387,23 @@ def resolve_endpoint(
                 # local Ollama endpoint was a 27B that spilled to CPU and ran
                 # every hourly email task at full fan speed.
                 next_prefix = "default" if setting_prefix == "utility" else "utility"
-                logger.warning(
-                    "[resolve_endpoint] %s_model %r is hidden on endpoint %s; "
-                    "falling back to the %s tier",
-                    setting_prefix, model, ep_id, next_prefix,
-                )
-                return resolve_endpoint(
+                next_url, next_model, next_headers = resolve_endpoint(
                     next_prefix, fallback_url, fallback_model, fallback_headers, owner=owner
                 )
+                if next_url and next_model:
+                    logger.warning(
+                        "[resolve_endpoint] %s_model %r is hidden on endpoint %s; "
+                        "falling back to the %s tier (%s)",
+                        setting_prefix, model, ep_id, next_prefix, next_model,
+                    )
+                    return next_url, next_model, next_headers
+                # Next tier unresolvable (unset / disabled endpoint): keep the
+                # pre-existing last resort — auto-pick on this endpoint — rather
+                # than returning "no endpoint at all".
             logger.warning(
-                "[resolve_endpoint] default_model %r is hidden on endpoint %s; "
+                "[resolve_endpoint] %s_model %r is hidden on endpoint %s; "
                 "auto-picking the first enabled chat model",
-                model, ep_id,
+                setting_prefix, model, ep_id,
             )
             model = ""
         # If no (usable) model specified, pick the first enabled chat model.

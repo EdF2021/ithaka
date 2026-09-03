@@ -242,3 +242,23 @@ def test_hidden_utility_model_cascades_to_default_tier(monkeypatch):
 
     assert url == "https://cloud.example/v1/chat/completions"
     assert model == "cloud-chat"
+
+
+def test_hidden_task_model_with_unresolvable_next_tier_auto_picks_on_current_endpoint(monkeypatch):
+    """Cascade must not turn a working endpoint into 'no endpoint at all':
+    when utility and default are unset, fall back to the old auto-pick."""
+    settings = {
+        "task_endpoint_id": "local",
+        "task_model": "hidden-14b",
+    }
+    endpoint = _multi_model_endpoint(
+        "local",
+        ["hidden-14b", "text-embedding-3-small", "enabled-chat"],
+        hidden=["hidden-14b"],
+    )
+    _install_resolver_fakes(monkeypatch, settings, [endpoint])
+
+    url, model, headers = resolve_endpoint("task")
+
+    assert url == "https://local.example/v1/chat/completions"
+    assert model == "enabled-chat"
