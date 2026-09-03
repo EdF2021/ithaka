@@ -264,3 +264,21 @@ def test_get_artifact_job_is_owner_scoped():
     assert ill.get_artifact_job(art_id, "own") is not None
     assert ill.get_artifact_job(art_id, "other") is None
     assert ill.get_artifact_job("unknown", "own") is None
+
+
+async def test_start_running_check_is_owner_scoped(monkeypatch):
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow(content, owner):
+        started.set()
+        await release.wait()
+        return {"error": "x"}
+    monkeypatch.setattr(ill, "_generate_image", slow)
+    nb_id, art_id, _ = _make_rows(_data(1))
+    job_id = ill.start_illustration_job(nb_id, art_id, "own", _TS)
+    await started.wait()
+    with pytest.raises(ValueError, match="niet gevonden"):
+        ill.start_illustration_job(nb_id, art_id, "someone-else", _TS)
+    release.set()
+    await ill._active_jobs[job_id]["task"]

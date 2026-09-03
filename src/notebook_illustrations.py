@@ -105,11 +105,18 @@ def _reap_stale_jobs(now: float) -> None:
             _active_jobs.pop(job_id, None)
 
 
-def _find_job(artifact_id: str) -> Optional[dict]:
-    """Newest registry entry for this artifact (running preferred)."""
+def _find_job(artifact_id: str, owner: str) -> Optional[dict]:
+    """Newest registry entry for this artifact and owner (running preferred).
+
+    Owner-scoped so a caller who does not own the artifact can never learn
+    (via either the "already running" check or get_artifact_job) that a job
+    exists for it — same posture as notebook_covers.py's running-job check.
+    """
     best = None
     for entry in _active_jobs.values():
         if entry.get("artifact_id") != artifact_id:
+            continue
+        if (entry.get("owner") or "") != (owner or ""):
             continue
         if entry.get("status") == "running":
             return entry
@@ -119,8 +126,8 @@ def _find_job(artifact_id: str) -> Optional[dict]:
 
 
 def get_artifact_job(artifact_id: str, owner: str) -> Optional[dict]:
-    entry = _find_job(artifact_id)
-    if entry is None or (entry.get("owner") or "") != (owner or ""):
+    entry = _find_job(artifact_id, owner)
+    if entry is None:
         return None
     return {
         "status": entry.get("status"),
@@ -154,7 +161,7 @@ def start_illustration_job(notebook_id: str, artifact_id: str, owner: str,
     factory = db_session_factory or SessionLocal
     now = time.time()
     _reap_stale_jobs(now)
-    running = _find_job(artifact_id)
+    running = _find_job(artifact_id, owner)
     if running is not None and running.get("status") == "running":
         raise ValueError("Er loopt al een illustratie-job voor dit artifact")
 
