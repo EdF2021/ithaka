@@ -126,6 +126,7 @@ class RealtimeService:
             "expires_at": data.get("expires_at"),
             "max_minutes": settings["realtime_max_minutes"],
             "model": session_config["model"],
+            "calls_url": base_url + "/realtime/calls",
         }
 
 

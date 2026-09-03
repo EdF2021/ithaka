@@ -2425,6 +2425,9 @@ function initializeEventListeners() {
 
     voiceMode.init(function vmStateChange(state) {
       const { active, armed, busy } = state;
+      // Mutually exclusive with Realtime voice mode — both grab the mic
+      // and auto-play TTS, so activating one must deactivate the other.
+      if (active && realtimeVoice.isActive) realtimeVoice.deactivate();
       vmBtn.classList.toggle('active', active);
       updatePlusDot();
       if (vmIndicator) {
@@ -2476,6 +2479,9 @@ function initializeEventListeners() {
 
     realtimeVoice.init(function rtStateChange(state) {
       const { active, state: phase } = state;
+      // Mutually exclusive with the hands-free Voice Mode toggle — see
+      // vmStateChange above.
+      if (active && voiceMode.isActive) voiceMode.deactivate();
       rtBtn.classList.toggle('active', active);
       updatePlusDot();
       if (rtIndicator) {

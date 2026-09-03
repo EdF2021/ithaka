@@ -131,7 +131,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "font-src 'self' https://cdn.jsdelivr.net; "
                 "img-src 'self' data: blob: https:; "
                 "media-src 'self' blob:; "
-                "connect-src 'self'; "
+                # Realtime voice mode does a direct browser->OpenAI WebRTC
+                # SDP exchange (static/js/realtimeVoice.js fetch to
+                # api.openai.com) that connect-src must allow.
+                "connect-src 'self' https://api.openai.com; "
                 "frame-src 'self'; "
                 "frame-ancestors 'none'"
             )

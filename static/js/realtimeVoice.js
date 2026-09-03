@@ -87,9 +87,25 @@ const RealtimeVoice = {
         const detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message)
         throw new Error(detail || 'Kon geen Realtime-sessie starten')
       }
-      const { client_secret, max_minutes } = await sessRes.json()
+      const { client_secret, max_minutes, calls_url } = await sessRes.json()
+
+      // Re-check after every await below: a concurrent deactivate() (the
+      // user re-toggling, or toggling while a mic-permission prompt is
+      // open) may have won while this call was suspended. Without this, a
+      // deactivate() that ran mid-await would find nothing to tear down
+      // yet, report idle, and then this call would resume regardless and
+      // silently build a live session (mic + peer connection + audio)
+      // behind a UI that shows inactive. Mirrors the same guard in
+      // voiceMode.js's activate().
+      if (!this._active) return
 
       this._stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (!this._active) {
+        this._stream.getTracks().forEach((t) => t.stop())
+        this._stream = null
+        return
+      }
+
       const pc = new RTCPeerConnection()
       this._pc = pc
       this._stream.getTracks().forEach((track) => pc.addTrack(track, this._stream))
@@ -119,9 +135,12 @@ const RealtimeVoice = {
       }
 
       const offer = await pc.createOffer()
-      await pc.setLocalDescription(offer)
+      if (!this._active) { this.deactivate(); return }
 
-      const callRes = await fetch('https://api.openai.com/v1/realtime/calls', {
+      await pc.setLocalDescription(offer)
+      if (!this._active) { this.deactivate(); return }
+
+      const callRes = await fetch(calls_url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${client_secret}`,
@@ -132,6 +151,7 @@ const RealtimeVoice = {
       if (!callRes.ok) throw new Error(`OpenAI Realtime-verbinding mislukt (HTTP ${callRes.status})`)
       const answerSdp = await callRes.text()
       await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp })
+      if (!this._active) { this.deactivate(); return }
 
       this._state = 'listening'
       this._notify()

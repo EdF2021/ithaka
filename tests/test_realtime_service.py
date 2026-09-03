@@ -147,6 +147,7 @@ def test_create_session_mints_client_secret_and_never_leaks_api_key(monkeypatch)
         "expires_at": 1234567890,
         "max_minutes": 10,
         "model": "gpt-realtime-2.1-mini",
+        "calls_url": "https://api.openai.com/v1/realtime/calls",
     }
     assert "sk-super-secret" not in str(result)
     assert captured["url"] == "https://api.openai.com/v1/realtime/client_secrets"
