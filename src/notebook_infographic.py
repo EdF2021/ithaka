@@ -45,11 +45,14 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from datetime import datetime
 from typing import List, Optional, Tuple
 
 from src.notebook_slides import _JSON_FENCE_RE
+
+logger = logging.getLogger(__name__)
 
 _H1_RE = re.compile(r'^#\s+(.+)$')
 _H2_RE = re.compile(r'^##\s+(.+)$')
@@ -831,6 +834,36 @@ def _raise(msg: str):
     raise ValueError(msg)
 
 
+def _demote_extra_columns(blocks: List[dict]) -> List[dict]:
+    """Replace every column beyond the first MAX_COLUMNS with its children.
+
+    Keeps the first MAX_COLUMNS "column" blocks (document order) as-is; any
+    further column is spliced out and its already-validated children (ids
+    are globally unique, types are valid top-level types) are inserted at
+    the same position instead, in document order.
+    """
+    out: List[dict] = []
+    seen_columns = 0
+    demoted = 0
+    for b in blocks:
+        if b["type"] == "column":
+            seen_columns += 1
+            if seen_columns <= MAX_COLUMNS:
+                out.append(b)
+            else:
+                out.extend(b.get("children", []))
+                demoted += 1
+        else:
+            out.append(b)
+    if demoted:
+        logger.info(
+            "infographic: demoted %d extra column block(s) to loose top-level "
+            "blocks (had %d columns, max %d)",
+            demoted, seen_columns, MAX_COLUMNS,
+        )
+    return out
+
+
 def extract_infographic(content: str) -> dict:
     """Parse + validate v2 JSON. Raises ValueError (Dutch) on any schema miss.
 
@@ -839,6 +872,10 @@ def extract_infographic(content: str) -> dict:
     extract_slide_deck. Returns a cleaned dict (stripped strings, unknown
     icons dropped) with an `illustrations` map (block_id -> filename) that
     the illustration job fills in later (src/notebook_illustrations.py).
+    More than MAX_COLUMNS "column" blocks is repaired rather than rejected:
+    every column beyond the first two is demoted to its loose children in
+    place (see _demote_extra_columns), since the layout only has room for
+    two columns either side of the hero.
     """
     m = _JSON_FENCE_RE.search(content or "")
     raw = (m.group(1) if m else (content or "")).strip()
@@ -864,8 +901,10 @@ def extract_infographic(content: str) -> dict:
     if heroes != 1:
         raise ValueError(f"precies één blok van type hero verwacht (gevonden: {heroes})")
     columns = sum(1 for b in cleaned if b["type"] == "column")
-    if columns < 1 or columns > MAX_COLUMNS:
+    if columns < 1:
         raise ValueError(f"1 tot {MAX_COLUMNS} blokken van type column verwacht (gevonden: {columns})")
+    if columns > MAX_COLUMNS:
+        cleaned = _demote_extra_columns(cleaned)
 
     illustrations = data.get("illustrations")
     if not isinstance(illustrations, dict):

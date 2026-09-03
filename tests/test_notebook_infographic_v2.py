@@ -124,8 +124,6 @@ def test_more_than_max_illustration_prompts_is_allowed():
     (lambda d: d["blocks"].__setitem__(1, {**d["blocks"][1], "type": "icon_card"}), "hero"),
     (lambda d: d["blocks"].append({**d["blocks"][1], "id": "hero2"}), "hero"),
     (lambda d: [b.update(type="icon_card", text="x") for b in d["blocks"] if b["type"] == "column"], "column"),
-    (lambda d: d["blocks"].append({**copy.deepcopy(d["blocks"][0]), "id": "col3",
-                                   "children": [{**c, "id": c["id"] + "-x"} for c in d["blocks"][0]["children"]]}), "column"),
     (lambda d: d["blocks"][0].__setitem__("id", "hero"), "uniek"),
     (lambda d: d["blocks"][0].__setitem__("id", "Bad Id!"), "id"),
     (lambda d: d["blocks"][0]["children"].__setitem__(0, {**d["blocks"][0]["children"][0], "type": "hero"}), "column"),
@@ -181,6 +179,40 @@ def test_extract_rejects_non_json(content, fragment):
     assert fragment in str(exc.value)
 
 
+# ---- extract_infographic: extra-column repair -----------------------------
+
+def test_extract_demotes_third_column_to_loose_children():
+    raw = _valid_data()
+    third_column = {
+        **copy.deepcopy(raw["blocks"][0]), "id": "col3",
+        "children": [{**c, "id": c["id"] + "-x"} for c in raw["blocks"][0]["children"]],
+    }
+    raw["blocks"].append(third_column)
+
+    data = extract_infographic(json.dumps(raw))
+
+    types = [b["type"] for b in data["blocks"]]
+    assert types.count("column") == 2
+
+    ids = [b["id"] for b in data["blocks"]]
+    # col3 was the last block; its children replace it in place, so they
+    # land immediately after the block that preceded it ("output").
+    assert ids[-2:] == ["stappen-x", "kaart-a-x"]
+    assert "col3" not in ids
+
+    all_ids = [b["id"] for b in iter_blocks(data)]
+    assert len(all_ids) == len(set(all_ids))
+
+    # iter_blocks order is unchanged apart from the demotion: the first
+    # five top-level blocks (and the nested children of the two kept
+    # columns) are untouched, only col3 is gone and its two children now
+    # appear as loose top-level blocks instead of nested under it.
+    assert all_ids == [
+        "bronnen", "stappen", "kaart-a", "hero", "vergelijk", "cijfers",
+        "output", "kaart-b", "kaart-c", "stappen-x", "kaart-a-x",
+    ]
+
+
 # ---- prompt + validator wiring -------------------------------------------
 
 def test_prompt_asks_for_json_schema_and_dutch():
@@ -195,6 +227,7 @@ def test_prompt_asks_for_json_schema_and_dutch():
     assert "Engels" in prompt                 # illustration prompts in English
     assert "## Key numbers" not in prompt     # legacy markdown structure is gone
     assert '"sleutel"' not in prompt          # example icon must be a real allowed key
+    assert "Maximaal TWEE" in prompt
     assert _KIND_VALIDATORS["infographic"] is extract_infographic
 
 

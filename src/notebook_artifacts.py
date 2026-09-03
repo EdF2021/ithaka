@@ -201,7 +201,8 @@ Lever exact één codefence met taalaanduiding "json" en daarin één JSON-objec
 }
 
 Regels voor de structuur:
-- 5 tot 8 blokken op het hoogste niveau; precies één "hero"; één of twee "column"-blokken (elk met 2 tot 3 children; children mogen zelf geen column of hero zijn).
+- 5 tot 8 blokken op het hoogste niveau; precies één "hero".
+- Maximaal TWEE "column"-blokken (links en rechts van de hero); een derde thema wordt geen column maar losse blokken (steps, icon_card of key_numbers) op het hoogste niveau. Elke column heeft 2 tot 3 children; children mogen zelf geen column of hero zijn.
 - "steps" heeft 2 tot 5 stappen; "comparison" 2 tot 4 rijen; "key_numbers" 3 tot 5 items.
 - "id" is een unieke slug (a-z, 0-9, - of _); "heading" maximaal 60 tekens.
 - "icon" is optioneel; de waarde moet exact één van deze sleutels zijn: sources, audio, video, chat, graph, bars, target, warning, gear, people, doc, search, spark. Laat weg als geen sleutel past.
