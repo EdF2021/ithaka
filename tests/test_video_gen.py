@@ -93,7 +93,7 @@ async def test_poll_operation_running():
 
     async with _transport(h) as c:
         r = await video_gen.poll_operation("https://g/v1beta", "K", "op", client=c)
-    assert r == {"done": False, "video_uri": None, "error": None, "blocked": False}
+    assert r == {"done": False, "video_uri": None, "error": None, "blocked": False, "blocked_reason": None}
 
 
 async def test_poll_operation_done_with_uri():
@@ -105,7 +105,7 @@ async def test_poll_operation_done_with_uri():
 
     async with _transport(h) as c:
         r = await video_gen.poll_operation("https://g/v1beta", "K", "models/m/operations/1", client=c)
-    assert r == {"done": True, "video_uri": "https://x/v.mp4", "error": None, "blocked": False}
+    assert r == {"done": True, "video_uri": "https://x/v.mp4", "error": None, "blocked": False, "blocked_reason": None}
 
 
 async def test_poll_operation_done_without_sample_is_blocked():
@@ -115,6 +115,21 @@ async def test_poll_operation_done_without_sample_is_blocked():
     async with _transport(h) as c:
         r = await video_gen.poll_operation("https://g/v1beta", "K", "op", client=c)
     assert r["done"] and r["blocked"] and r["video_uri"] is None
+    assert r["blocked_reason"] is None
+
+
+async def test_poll_operation_blocked_carries_rai_reason():
+    # Real shape observed on prod 2026-09-03: done, no samples, reasons list.
+    def h(req):
+        return httpx.Response(200, json={"done": True, "response": {"generateVideoResponse": {
+            "raiMediaFilteredCount": 1,
+            "raiMediaFilteredReasons": ["Sorry, we can't create videos with real people's names or likenesses."],
+        }}})
+
+    async with _transport(h) as c:
+        r = await video_gen.poll_operation("https://g/v1beta", "K", "op", client=c)
+    assert r["done"] and r["blocked"] and r["video_uri"] is None
+    assert r["blocked_reason"] == "Sorry, we can't create videos with real people's names or likenesses."
 
 
 async def test_poll_operation_error():
@@ -422,6 +437,29 @@ async def test_job_safety_block_is_error(tmp_path, monkeypatch):
     assert job["status"] == "error"
     assert "safety" in job["error"].lower()
     assert not (tmp_path / f"{job_id}.mp4").exists()
+
+
+async def test_job_safety_block_error_includes_google_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(video_gen, "VIDEO_DIR", str(tmp_path))
+    monkeypatch.setattr(video_gen, "resolve_gemini_endpoint", lambda db_session_factory=None: ("https://g/v1beta", "K"))
+
+    def h(req):
+        u = str(req.url)
+        if u.endswith(":predictLongRunning"):
+            return httpx.Response(200, json={"name": "models/m/operations/1"})
+        return httpx.Response(200, json={"done": True, "response": {"generateVideoResponse": {
+            "raiMediaFilteredCount": 1,
+            "raiMediaFilteredReasons": ["Please remove the celebrity reference and try again."],
+        }}})
+
+    monkeypatch.setattr(video_gen, "_make_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(h)))
+
+    job_id = video_gen.start_video_job("a famous actor", "ed")
+    await video_gen._active_jobs[job_id]["task"]
+    job = video_gen.get_job(job_id, "ed")
+    assert job["status"] == "error"
+    assert job["error"].startswith("Geblokkeerd door Veo safety-filter")
+    assert "celebrity reference" in job["error"]
 
 
 async def test_run_job_cancelled_sets_error_status(monkeypatch):

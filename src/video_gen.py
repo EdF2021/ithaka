@@ -202,9 +202,11 @@ async def poll_operation(
     """GET {base}/{operation_name}.
 
     Returns {"done": bool, "video_uri": str|None, "error": str|None,
-    "blocked": bool}. `blocked` is True when Google reports the operation
-    done with no generated sample (safety-filtered, not billed per Google's
-    docs). Raises RuntimeError on a non-2xx response.
+    "blocked": bool, "blocked_reason": str|None}. `blocked` is True when
+    Google reports the operation done with no generated sample
+    (safety-filtered, not billed per Google's docs); `blocked_reason` carries
+    Google's `raiMediaFilteredReasons` text when present. Raises RuntimeError
+    on a non-2xx response.
     """
     owns_client = client is None
     c = client or _make_client()
@@ -219,22 +221,22 @@ async def poll_operation(
     data = resp.json()
 
     if not data.get("done"):
-        return {"done": False, "video_uri": None, "error": None, "blocked": False}
+        return {"done": False, "video_uri": None, "error": None, "blocked": False, "blocked_reason": None}
 
     err = data.get("error")
     if err:
         message = (err or {}).get("message") or "Onbekende Veo-fout"
-        return {"done": True, "video_uri": None, "error": message, "blocked": False}
+        return {"done": True, "video_uri": None, "error": message, "blocked": False, "blocked_reason": None}
 
-    samples = (
-        ((data.get("response") or {}).get("generateVideoResponse") or {})
-        .get("generatedSamples", [])
-    )
+    video_response = (data.get("response") or {}).get("generateVideoResponse") or {}
+    samples = video_response.get("generatedSamples", [])
     if not samples:
-        return {"done": True, "video_uri": None, "error": None, "blocked": True}
+        reasons = video_response.get("raiMediaFilteredReasons") or []
+        reason = "; ".join(str(r).strip() for r in reasons if str(r).strip()) or None
+        return {"done": True, "video_uri": None, "error": None, "blocked": True, "blocked_reason": reason}
 
     uri = (samples[0].get("video") or {}).get("uri")
-    return {"done": True, "video_uri": uri, "error": None, "blocked": False}
+    return {"done": True, "video_uri": uri, "error": None, "blocked": False, "blocked_reason": None}
 
 
 async def download_video(
@@ -513,7 +515,10 @@ async def _generate(job_id: str, entry: dict, db_session_factory) -> None:
             result = await poll_operation(base_url, api_key, operation_name, client=client)
 
         if result.get("blocked"):
-            raise RuntimeError("Geblokkeerd door Veo safety-filter — niet gefactureerd")
+            message = "Geblokkeerd door Veo safety-filter — niet gefactureerd"
+            if result.get("blocked_reason"):
+                message += f" ({result['blocked_reason']})"
+            raise RuntimeError(message)
         if result.get("error"):
             raise RuntimeError(result["error"])
         uri = result.get("video_uri")
