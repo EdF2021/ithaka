@@ -21,6 +21,7 @@ import sessionModule from './js/sessions.js';
 import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
 import voiceMode from './js/voiceMode.js';
+import realtimeVoice from './js/realtimeVoice.js';
 import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js?v=20260630tasksactivity';
@@ -53,8 +54,10 @@ const API_BASE = window.location.origin;
 window.themeModule = themeModule;
 window.sessionModule = sessionModule;
 window.uiModule = uiModule;
+window.chatRenderer = chatRenderer;
 window.adminModule = adminModule;
 window.voiceMode = voiceMode;
+window.realtimeVoice = realtimeVoice;
 window.cookbookModule = cookbookModule;
 
 function _isMobileChatInput() {
@@ -2422,6 +2425,9 @@ function initializeEventListeners() {
 
     voiceMode.init(function vmStateChange(state) {
       const { active, armed, busy } = state;
+      // Mutually exclusive with Realtime voice mode — both grab the mic
+      // and auto-play TTS, so activating one must deactivate the other.
+      if (active && realtimeVoice.isActive) realtimeVoice.deactivate();
       vmBtn.classList.toggle('active', active);
       updatePlusDot();
       if (vmIndicator) {
@@ -2462,6 +2468,38 @@ function initializeEventListeners() {
     if (vmIndicator) {
       vmIndicator.addEventListener('click', () => {
         voiceMode.deactivate();
+      });
+    }
+  })();
+
+  (function initRealtimeVoiceToggle() {
+    const rtBtn = document.getElementById('overflow-realtime-btn');
+    const rtIndicator = document.getElementById('realtime-indicator-btn');
+    if (!rtBtn) return;
+
+    realtimeVoice.init(function rtStateChange(state) {
+      const { active, state: phase } = state;
+      // Mutually exclusive with the hands-free Voice Mode toggle — see
+      // vmStateChange above.
+      if (active && voiceMode.isActive) voiceMode.deactivate();
+      rtBtn.classList.toggle('active', active);
+      updatePlusDot();
+      if (rtIndicator) {
+        rtIndicator.style.display = active ? '' : 'none';
+        rtIndicator.classList.toggle('active', active);
+        rtIndicator.title = active
+          ? (phase === 'speaking' ? 'Realtime gesprek — AI spreekt…' : phase === 'connecting' ? 'Realtime gesprek — verbinden…' : 'Realtime gesprek actief — klik om te stoppen')
+          : 'Realtime Gesprek';
+      }
+    });
+
+    rtBtn.addEventListener('click', () => {
+      realtimeVoice.toggle();
+    });
+
+    if (rtIndicator) {
+      rtIndicator.addEventListener('click', () => {
+        realtimeVoice.deactivate();
       });
     }
   })();
