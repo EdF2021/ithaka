@@ -282,3 +282,53 @@ async def test_start_running_check_is_owner_scoped(monkeypatch):
         ill.start_illustration_job(nb_id, art_id, "someone-else", _TS)
     release.set()
     await ill._active_jobs[job_id]["task"]
+
+
+# ---- resolve + janitor ------------------------------------------------------
+
+def _age(path, seconds):
+    old = time.time() - seconds
+    _os.utime(path, (old, old))
+
+
+def test_resolve_illustration_path_rejects_bad_names_and_traversal(tmp_path):
+    for bad in ("../x.png", "x.png", f"{_UUID}-hero-0123abcd.PNG", "", "a/b.png"):
+        with pytest.raises(HTTPException) as exc:
+            ill.resolve_illustration_path(bad)
+        assert exc.value.status_code == 400
+    with pytest.raises(HTTPException) as exc:
+        ill.resolve_illustration_path(f"{_UUID}-hero-0123abcd.png")
+    assert exc.value.status_code == 404
+
+
+def test_resolve_illustration_path_returns_existing_file():
+    name = f"{_UUID}-hero-0123abcd.png"
+    Path(ill.NOTEBOOK_INFOGRAPHICS_DIR, name).write_bytes(b"x")
+    assert ill.resolve_illustration_path(name).name == name
+
+
+def test_cleanup_removes_old_orphans_keeps_referenced_and_fresh():
+    nb_id, art_id, _ = _make_rows(_data(0))
+    d = Path(ill.NOTEBOOK_INFOGRAPHICS_DIR)
+    referenced_old = d / f"{art_id}-hero-0123abcd.png"
+    orphan_old = d / f"{_UUID}-hero-0123abcd.png"
+    orphan_fresh = d / f"{_UUID}-c1-0123abcd.png"
+    stray = d / "notes.txt"
+    for p in (referenced_old, orphan_old, orphan_fresh, stray):
+        p.write_bytes(b"x")
+    _age(referenced_old, 7200)
+    _age(orphan_old, 7200)
+    _age(stray, 7200)
+
+    removed = ill.cleanup_orphaned_illustrations(_TS, max_age_seconds=3600)
+
+    assert removed == 1
+    assert referenced_old.exists()
+    assert not orphan_old.exists()
+    assert orphan_fresh.exists()
+    assert stray.exists()          # non-matching names are never touched
+
+
+def test_cleanup_missing_dir_is_noop(monkeypatch, tmp_path):
+    monkeypatch.setattr(ill, "NOTEBOOK_INFOGRAPHICS_DIR", str(tmp_path / "nope"))
+    assert ill.cleanup_orphaned_illustrations(_TS) == 0

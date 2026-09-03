@@ -278,3 +278,67 @@ async def _generate(entry: dict, artifact_id: str, owner: str, factory, blocks: 
                 pass
             return
         entry["illustrations"][block_id] = filename
+
+
+# ---------------------------------------------------------------------------
+# Serving + janitor
+# ---------------------------------------------------------------------------
+
+def resolve_illustration_path(filename: str) -> Path:
+    """Whitelist + containment check. Raises HTTPException(400/404)."""
+    from fastapi import HTTPException
+    if not isinstance(filename, str) or not ILLUSTRATION_FILE_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    root = Path(NOTEBOOK_INFOGRAPHICS_DIR).resolve()
+    path = (Path(NOTEBOOK_INFOGRAPHICS_DIR) / filename).resolve()
+    try:
+        if os.path.commonpath([str(root), str(path)]) != str(root):
+            raise ValueError
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Illustration not found")
+    return path
+
+
+def cleanup_orphaned_illustrations(db_session_factory, *, max_age_seconds: int = 3600) -> int:
+    """Remove illustration files older than `max_age_seconds` whose artifact
+    id prefix no longer exists. Returns the number removed. Age is checked
+    before the DB query so a just-written file of a still-uncommitted job
+    is never touched (same reasoning as the audio/video janitors)."""
+    directory = Path(NOTEBOOK_INFOGRAPHICS_DIR)
+    if not directory.is_dir():
+        return 0
+    now = time.time()
+    candidates: list[tuple[Path, str]] = []
+    for path in directory.iterdir():
+        m = ILLUSTRATION_FILE_RE.fullmatch(path.name)
+        if not m or not path.is_file():
+            continue
+        try:
+            if now - path.stat().st_mtime <= max_age_seconds:
+                continue
+        except OSError:
+            continue
+        candidates.append((path, m.group(1)))
+    if not candidates:
+        return 0
+    session = db_session_factory()
+    try:
+        wanted = {aid for _p, aid in candidates}
+        existing = {
+            row[0] for row in session.query(NotebookArtifact.id)
+            .filter(NotebookArtifact.id.in_(wanted)).all()
+        }
+    finally:
+        session.close()
+    removed = 0
+    for path, artifact_id in candidates:
+        if artifact_id in existing:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
