@@ -746,6 +746,12 @@ from routes.stt_routes import setup_stt_routes
 app.include_router(setup_stt_routes(stt_service))
 logger.info("STT service initialized (provider managed via settings)")
 
+# Realtime voice mode
+from services.realtime import get_realtime_service
+realtime_service = get_realtime_service()
+from routes.realtime_routes import setup_realtime_routes
+app.include_router(setup_realtime_routes(realtime_service))
+
 # Video generation (Veo 3.1 chat/agent auto-routing — image/video autoroute plan)
 from routes.video_routes import setup_video_routes
 app.include_router(setup_video_routes())
