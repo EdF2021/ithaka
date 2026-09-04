@@ -27,6 +27,7 @@ import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js?v=20260630tasksactivity';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
+import meetingsModule from './js/meetings.js';
 import adminModule from './js/admin.js';
 import settingsModule from './js/settings.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
@@ -175,6 +176,7 @@ function initRailHoverLabels() {
     'rail-email': 'Email',
     'rail-gallery': 'Gallery',
     'rail-archive': 'Library',
+    'rail-meetings': 'Meetings',
     'rail-memory': 'Brain',
     'rail-notebooks': 'Notebooks',
     'rail-notes': 'Notes',
@@ -1142,6 +1144,16 @@ function initializeEventListeners() {
     toolNotesBtn.addEventListener('click', () => {
       if (notesModule) {
         notesModule.togglePanel();
+      }
+    });
+  }
+
+  // Meetings tool button
+  const toolMeetingsBtn = el('tool-meetings-btn');
+  if (toolMeetingsBtn) {
+    toolMeetingsBtn.addEventListener('click', () => {
+      if (meetingsModule) {
+        meetingsModule.togglePanel();
       }
     });
   }
@@ -3816,6 +3828,7 @@ function startIthakaApp() {
     'rail-research':  'tool-research-btn',
     'rail-cookbook':   'tool-cookbook-btn',
     'rail-archive':   'tool-library-btn',
+    'rail-meetings':  'tool-meetings-btn',
     'rail-gallery':   'tool-gallery-btn',
     'rail-tasks':     'tool-tasks-btn',
     'rail-calendar':  'tool-calendar-btn',

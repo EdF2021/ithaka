@@ -720,6 +720,11 @@ app.include_router(setup_personal_routes(personal_docs_mgr, rag_manager, rag_ava
 from routes.notebook_routes import setup_notebook_routes
 app.include_router(setup_notebook_routes(rag_manager, tts_service=tts_service))
 
+# Meetings (recording -> notulen)
+from routes.meeting_routes import setup_meeting_routes
+from src.auth_helpers import get_current_user as _meeting_get_current_user
+app.include_router(setup_meeting_routes(_meeting_get_current_user, SessionLocal))
+
 # Embedding model management
 from routes.embedding_routes import setup_embedding_routes
 app.include_router(setup_embedding_routes())
@@ -1284,6 +1289,23 @@ async def _startup_event():
             await asyncio.sleep(3600)
 
     _startup_tasks.append(asyncio.create_task(_notebook_illustration_janitor_loop()))
+
+    # Meeting-audio janitor — sweeps MEETING_AUDIO_DIR hourly for stray
+    # `.meetingjob-*` workdirs and orphaned `<uuid>.webm` files (a process
+    # kill mid-recording or mid-job can leave either behind with no Meeting
+    # row, or a row whose audio was deleted out from under it). Same shape
+    # as the podcast/video/illustration janitors above.
+    async def _meeting_audio_janitor_loop():
+        await asyncio.sleep(300)
+        while True:
+            try:
+                from src.meeting_minutes import cleanup_orphaned_meeting_audio
+                await asyncio.to_thread(cleanup_orphaned_meeting_audio, SessionLocal)
+            except Exception as e:
+                logger.debug(f"Meeting audio janitor skipped: {e}")
+            await asyncio.sleep(3600)
+
+    _startup_tasks.append(asyncio.create_task(_meeting_audio_janitor_loop()))
 
     # Chat/agent video-gen janitor — sweeps VIDEO_DIR (Veo clips generated via
     # the generate_video tool, distinct from the notebook-studio videos

@@ -14254,7 +14254,8 @@ body:has(.compare-active) .hamburger-btn { display: none !important; }
    hamburger sticking out over them is just clutter / mis-tap bait. */
 @media (max-width: 768px) {
   body.doc-view .hamburger-btn,
-  body:has(#notes-pane) .hamburger-btn { display: none !important; }
+  body:has(#notes-pane) .hamburger-btn,
+  body:has(#meetings-pane) .hamburger-btn { display: none !important; }
 }
   /* Make room for hamburger button alongside the tab/header bars (fallback if shown) */
   body.doc-view.sidebar-collapsed.hamburger-left .doc-tab-bar,
@@ -33147,11 +33148,13 @@ body.doc-find-active mark.doc-find-mark.current {
 
 /* ── Notes ── */
 /* Notes panel — body-level flex sibling of chat-container */
-body.notes-view .chat-container { flex: 1; min-width: 0; }
+body.notes-view .chat-container,
+body.meetings-view .chat-container { flex: 1; min-width: 0; }
 
 /* Mobile: notes panel takes over full screen */
 @media (max-width: 768px) {
-  body.notes-view .notes-pane {
+  body.notes-view .notes-pane,
+  body.meetings-view .notes-pane {
     position: fixed;
     inset: 0;
     max-width: 100%;
@@ -33177,7 +33180,8 @@ body.notes-view .chat-container { flex: 1; min-width: 0; }
      height instead of expanding to its content (default min-height:auto on
      flex items). Without this both grid and list views overflow the viewport
      bottom on phones. */
-  body.notes-view .notes-pane-body {
+  body.notes-view .notes-pane-body,
+  body.meetings-view .notes-pane-body {
     min-height: 0;
     -webkit-overflow-scrolling: touch;
   }
@@ -33205,11 +33209,14 @@ body.notes-view .chat-container { flex: 1; min-width: 0; }
     opacity: 0.25;
     border-radius: 2px;
   }
-  body.notes-view .chat-container {
+  body.notes-view .chat-container,
+  body.meetings-view .chat-container {
     display: none;
   }
   body.notes-view .mobile-new-chat-btn,
-  body.notes-view .hamburger-btn {
+  body.notes-view .hamburger-btn,
+  body.meetings-view .mobile-new-chat-btn,
+  body.meetings-view .hamburger-btn {
     display: none !important;
   }
 }

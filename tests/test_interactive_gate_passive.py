@@ -91,3 +91,21 @@ def test_infographic_illustrations_post_and_sibling_paths_are_still_tracked():
         "/api/notebooks/nb-123/artifacts/art-456/report", "GET") is True
     assert should_track_interactive_request(
         "/api/notebooks/nb-123/artifacts/art-456/illustrations/extra", "GET") is True
+
+
+# ── meeting-recorder detail poll gets the same passive treatment ──────────
+
+def test_meeting_detail_get_is_not_tracked():
+    assert should_track_interactive_request("/api/meetings/abc", "GET") is False
+
+
+def test_meeting_detail_post_is_still_tracked():
+    assert should_track_interactive_request("/api/meetings/abc", "POST") is True
+
+
+def test_meeting_list_get_is_still_tracked():
+    assert should_track_interactive_request("/api/meetings", "GET") is True
+
+
+def test_meeting_chunks_post_is_still_tracked():
+    assert should_track_interactive_request("/api/meetings/abc/chunks", "POST") is True

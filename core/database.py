@@ -258,6 +258,25 @@ class DocumentVersion(Base):
     document = relationship("Document", back_populates="versions")
 
 
+class Meeting(TimestampMixin, Base):
+    """A recorded/transcribed meeting (meeting-recorder feature)."""
+    __tablename__ = "meetings"
+
+    id               = Column(String, primary_key=True, index=True)
+    owner            = Column(String, nullable=False, index=True)
+    title            = Column(String, nullable=False, default="Meeting")
+    agenda           = Column(Text, nullable=True)
+    key_terms        = Column(Text, nullable=True)
+    status           = Column(String, nullable=False, default="recording")
+    phase            = Column(String, nullable=True)
+    error            = Column(Text, nullable=True)
+    audio_path       = Column(String, nullable=True)
+    bytes_total      = Column(Integer, default=0)
+    duration_seconds = Column(Integer, nullable=True)
+    document_id      = Column(String, nullable=True)
+    finished_at      = Column(DateTime, nullable=True)
+
+
 class GalleryAlbum(TimestampMixin, Base):
     """A photo album/folder."""
     __tablename__ = "gallery_albums"
