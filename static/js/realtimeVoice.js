@@ -35,6 +35,13 @@ export function classifyRealtimeEvent(event) {
       return { type: 'assistant_delta', delta: event.delta || '', responseId: event.response_id }
     case 'response.output_audio_transcript.done':
       return { type: 'assistant_done', text: event.transcript || '', responseId: event.response_id }
+    case 'response.function_call_arguments.done':
+      return {
+        type: 'function_call',
+        name: event.name || '',
+        callId: event.call_id || '',
+        arguments: typeof event.arguments === 'string' ? event.arguments : JSON.stringify(event.arguments || {}),
+      }
     case 'response.done':
       return { type: 'response_done' }
     case 'error':
@@ -56,9 +63,24 @@ export function shouldCancelForBargeIn(state, action) {
   return state === 'speaking' && action.type === 'speech_started'
 }
 
+/**
+ * Events to send back over the data channel after a tool call finished.
+ * `output` must be a string for OpenAI; anything else is JSON-stringified.
+ * Pure — unit-tested in Node.
+ * @param {string} callId
+ * @param {string|object} output
+ */
+export function buildFunctionCallOutputEvents(callId, output) {
+  const text = typeof output === 'string' ? output : JSON.stringify(output)
+  return [
+    { type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: text } },
+    { type: 'response.create' },
+  ]
+}
+
 const RealtimeVoice = {
   _active: false,
-  _state: 'idle', // idle | connecting | listening | speaking | error
+  _state: 'idle', // idle | connecting | listening | speaking | tool | error
   _onStateChange: null,
   _pc: null,
   _dc: null,
@@ -66,6 +88,7 @@ const RealtimeVoice = {
   _audioEl: null,
   _assistantBuffer: '',
   _sessionTimer: null,
+  _toolChain: Promise.resolve(),
 
   /**
    * @param {(state: {active: boolean, state: string}) => void} onStateChange
@@ -228,11 +251,56 @@ const RealtimeVoice = {
         this._state = 'listening'
         this._notify()
         break
+      case 'function_call':
+        this._toolChain = this._toolChain.then(() => this._handleFunctionCall(action)).catch(() => {})
+        break
       case 'error':
         console.error('RealtimeVoice: server error:', action.message)
         if (window.uiModule?.showError) window.uiModule.showError(action.message)
         break
     }
+  },
+
+  /** @private — one call at a time (chained via _toolChain). */
+  async _handleFunctionCall(action) {
+    if (!this._active) return
+    let output
+    if (action.name !== 'ask_ithaka') {
+      output = { error: 'Onbekende tool' }
+    } else {
+      let question = ''
+      try { question = String(JSON.parse(action.arguments || '{}').question || '') } catch (e) { question = '' }
+      if (!question.trim()) {
+        output = { error: 'Ongeldige argumenten' }
+      } else {
+        this._state = 'tool'
+        this._notify()
+        if (window.chatRenderer?.addMessage) window.chatRenderer.addMessage('assistant', 'Opgezocht via Ithaka: ' + question, null, null)
+        try {
+          const res = await fetch('/api/realtime/ask', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, call_id: action.callId }),
+          })
+          if (!this._active) return
+          if (res.ok) {
+            const data = await res.json()
+            output = { answer: data.answer || '' }
+          } else {
+            const err = await res.json().catch(() => ({}))
+            const detail = err.detail && (typeof err.detail === 'string' ? err.detail : err.detail.message)
+            output = { error: detail || 'Het opzoeken is mislukt' }
+          }
+        } catch (e) {
+          output = { error: 'Het opzoeken is mislukt' }
+        }
+        if (!this._active) return
+        this._state = 'listening'
+        this._notify()
+      }
+    }
+    if (!this._dc || this._dc.readyState !== 'open') return
+    for (const ev of buildFunctionCallOutputEvents(action.callId, output)) this._dc.send(JSON.stringify(ev))
   },
 
   /** @private */

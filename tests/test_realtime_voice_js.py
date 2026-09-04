@@ -106,3 +106,40 @@ def test_barge_in_cancels_only_while_speaking_on_speech_started():
         """
     )
     assert values == {"whileSpeaking": True, "whileListening": False, "otherAction": False}
+
+
+def test_classify_function_call_arguments_done():
+    values = _node_eval(
+        """
+        const { classifyRealtimeEvent } = await import('./static/js/realtimeVoice.js');
+        const action = classifyRealtimeEvent({
+          type: 'response.function_call_arguments.done',
+          call_id: 'call_1', name: 'ask_ithaka', arguments: '{"question":"weer?"}',
+        });
+        console.log(JSON.stringify(action));
+        """
+    )
+    assert values == {"type": "function_call", "name": "ask_ithaka", "callId": "call_1", "arguments": '{"question":"weer?"}'}
+
+
+def test_build_function_call_output_events_shape():
+    values = _node_eval(
+        """
+        const { buildFunctionCallOutputEvents } = await import('./static/js/realtimeVoice.js');
+        console.log(JSON.stringify(buildFunctionCallOutputEvents('call_1', '{"answer":"18 graden"}')));
+        """
+    )
+    assert values == [
+        {"type": "conversation.item.create", "item": {"type": "function_call_output", "call_id": "call_1", "output": '{"answer":"18 graden"}'}},
+        {"type": "response.create"},
+    ]
+
+
+def test_build_function_call_output_events_stringifies_non_string():
+    values = _node_eval(
+        """
+        const { buildFunctionCallOutputEvents } = await import('./static/js/realtimeVoice.js');
+        console.log(JSON.stringify(buildFunctionCallOutputEvents('c', { error: 'x' })[0].item.output));
+        """
+    )
+    assert values == '{"error":"x"}'
