@@ -60,6 +60,8 @@ async def _collect(question: str, owner, candidates) -> str:
             data = json.loads(event_str[6:])
         except (json.JSONDecodeError, TypeError):
             continue
+        if isinstance(data, dict) and data.get("type") == "tool_start":
+            logger.info("ask_ithaka tool_start owner=%s tool=%s", owner, data.get("tool"))
         if isinstance(data, dict) and "delta" in data and not data.get("thinking"):
             parts.append(str(data["delta"]))
     return "".join(parts)

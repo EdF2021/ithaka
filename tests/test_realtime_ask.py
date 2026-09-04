@@ -4,6 +4,7 @@ docs/superpowers/plans/2026-09-04-realtime-voice-tools.md, Task 2."""
 
 import asyncio
 import json
+import logging
 
 import pytest
 
@@ -99,3 +100,22 @@ async def test_no_candidates_raises_value_error(monkeypatch):
 async def test_blank_question_raises_value_error(candidates):
     with pytest.raises(ValueError, match="Lege vraag"):
         await answer_question("   ", None)
+
+
+async def test_tool_start_is_logged(monkeypatch, candidates, caplog):
+    # I2: no visible tool trail exists anywhere else for the Realtime voice
+    # path (answer_question drops tool_start/tool_output from the spoken
+    # answer) — this log line is the only server-side record of which tools
+    # a voice-triggered agent loop ran.
+    monkeypatch.setattr(ask_mod, "stream_agent_loop", _fake_loop([
+        _sse({"type": "tool_start", "tool": "web_search"}),
+        _sse({"delta": "Het is 18 graden."}),
+    ]))
+    with caplog.at_level(logging.INFO, logger="services.realtime.realtime_ask"):
+        out = await answer_question("Wat is het weer?", "ed")
+
+    assert out == "Het is 18 graden."
+    assert any(
+        "tool_start" in r.getMessage() and "owner=ed" in r.getMessage() and "tool=web_search" in r.getMessage()
+        for r in caplog.records
+    )

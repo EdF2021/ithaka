@@ -146,3 +146,17 @@ async def test_ask_route_500_generic_on_unexpected(monkeypatch):
         await endpoint(_Req({"question": "hoi"}))
     assert ei.value.status_code == 500
     assert "boom" not in str(ei.value.detail)
+
+
+def test_ask_route_is_exempt_from_hard_timeout():
+    # C1: the 45s _RequestTimeoutMiddleware pre-empts answer_question's own
+    # 60s ASK_TIMEOUT_S unless this route is exempt — the Dutch timeout
+    # message would otherwise never be reachable in production.
+    import re
+    src = open("app.py", encoding="utf-8").read()
+    # Non-greedy up to a ")" that starts its own line: several entries carry
+    # a trailing comment with a "(...)" aside (e.g. the /api/image line),
+    # so `\)` alone would stop at the first of those instead of the tuple's
+    # actual close.
+    block = re.search(r"_TIMEOUT_EXEMPT_PREFIXES = \((.*?)\n\)", src, re.S).group(1)
+    assert '"/api/realtime/ask"' in block
