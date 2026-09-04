@@ -50,3 +50,17 @@ opus-eindreview over de hele branch (1 C + 4 I, alle gefixt), scoped re-review. 
 - Echte-microfoon-opname (permissieprompt) op prod bevestigen: Start → praten → Stop → notulen.
 - Prod-STT staat op `whisper-1`; `gpt-transcribe` is beter voor Nederlands (kan in Settings).
 - Later: upload van bestaand audiobestand als tweede ingang op dezelfde pipeline; Word-export.
+
+## Avond-vervolg (na Ed's live-test)
+
+- **Live-test:** eerste run faalde met "Transcriptie mislukt (segment 1/1): endpoint returned
+  HTTP 404" — prod `stt_model` stond op `gpt-realtime-whisper` (bestaat alleen in Realtime-sessies).
+  Omgezet naar `gpt-transcribe`; daarna "doet het perfect".
+- **#178 (gemerged, live 19:42):** notulen openen in de notebook-stijl visual-report-pagina
+  (`GET /api/meetings/{id}/minutes` via `src/visual_report.py`); knop "Document" opent de bron.
+- **Realtime vs. notulen-model:** Ed wil `gpt-realtime-whisper` voor de Realtime-conversatie en
+  `gpt-4o-mini-transcribe` voor notulen, maar er was één STT-veld. Bevinding: de Realtime-sessie
+  stuurde helemaal geen `input_audio_transcription` mee (user-transcript-events vuurden nooit).
+  Fix: nieuwe globale setting `realtime_transcription_model` (Realtime-kaart, default
+  `gpt-realtime-whisper`, leeg = uit) → `audio.input.transcription` in de sessie-config; het
+  STT-veld blijft voor voice mode + notulen.

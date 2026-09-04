@@ -62,6 +62,12 @@ class RealtimeService:
             "realtime_max_minutes": saved.get("realtime_max_minutes", 10),
             "realtime_instructions": saved.get("realtime_instructions", ""),
             "realtime_tools_enabled": saved.get("realtime_tools_enabled", True),
+            # Input-transcription model for the session (see build_session_config);
+            # stt_language rides along as the transcription language hint.
+            "realtime_transcription_model": saved.get(
+                "realtime_transcription_model", "gpt-realtime-whisper"
+            ),
+            "stt_language": saved.get("stt_language", ""),
         }
 
     @property
@@ -99,6 +105,18 @@ class RealtimeService:
             "tools": [ASK_ITHAKA_TOOL] if settings.get("realtime_tools_enabled", True) else [],
             "max_output_tokens": "inf",
         }
+        # Realtime input transcription (user-transcript events in chat). Its
+        # model is deliberately NOT stt_model: gpt-realtime-whisper is only
+        # valid inside Realtime sessions, while /audio/transcriptions (voice
+        # mode, meeting minutes) wants gpt-transcribe/gpt-4o-mini-transcribe.
+        transcription_model = (settings.get("realtime_transcription_model") or "").strip()
+        if transcription_model:
+            transcription = {"model": transcription_model}
+            language = (settings.get("stt_language") or "").strip()
+            if language:
+                transcription["language"] = language
+            config["audio"]["input"]["transcription"] = transcription
+
         if config["tools"]:
             config["tool_choice"] = "auto"
         return config
@@ -162,6 +180,11 @@ class RealtimeService:
             "max_minutes": settings["realtime_max_minutes"],
             "model": session_config["model"],
             "calls_url": base_url + "/realtime/calls",
+            # The client_secrets mint does not apply audio.input.transcription
+            # to the session (verified live 2026-09-04: session.created echoes
+            # transcription: null), so the browser sends it as a session.update
+            # right after the data channel opens. None = transcription off.
+            "transcription": session_config["audio"]["input"].get("transcription"),
         }
 
 

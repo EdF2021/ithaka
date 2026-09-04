@@ -1833,6 +1833,10 @@
                 <input id="set-realtimeModelInput" type="text" placeholder="gpt-realtime-2.1-mini" style="flex:1;padding:5px;">
               </div>
               <div style="display:flex;align-items:center;gap:0.75rem;">
+                <label class="settings-label" title="Transcribes your own speech inside the Realtime session (shown in chat). Separate from the STT model used by voice mode and meeting minutes.">Transcription model</label>
+                <input id="set-realtimeTranscriptionModelInput" type="text" placeholder="gpt-realtime-whisper (empty = off)" style="flex:1;padding:5px;">
+              </div>
+              <div style="display:flex;align-items:center;gap:0.75rem;">
                 <label class="settings-label">Voice</label>
                 <select id="set-realtimeVoiceSelect" class="settings-select">
                   <option value="alloy">alloy</option>

@@ -1265,6 +1265,7 @@ async function initRealtimeSettings() {
   var provSel = el('set-realtimeProviderSelect');
   var toolsToggle = el('set-realtimeToolsToggle');
   var modelInput = el('set-realtimeModelInput');
+  var transcriptionInput = el('set-realtimeTranscriptionModelInput');
   var voiceSelect = el('set-realtimeVoiceSelect');
   var noiseSelect = el('set-realtimeNoiseSelect');
   var vadThreshold = el('set-realtimeVadThreshold');
@@ -1299,6 +1300,7 @@ async function initRealtimeSettings() {
     var settings = await settingsRes.json();
     if (settings.realtime_provider) provSel.value = settings.realtime_provider;
     if (settings.realtime_model) modelInput.value = settings.realtime_model;
+    if (transcriptionInput && settings.realtime_transcription_model != null) transcriptionInput.value = settings.realtime_transcription_model;
     if (settings.realtime_voice) voiceSelect.value = settings.realtime_voice;
     if (settings.realtime_noise_reduction) noiseSelect.value = settings.realtime_noise_reduction;
     vadThreshold.value = settings.realtime_vad_threshold != null ? settings.realtime_vad_threshold : 0.5;
@@ -1322,6 +1324,7 @@ async function initRealtimeSettings() {
           realtime_enabled: enabled,
           realtime_provider: provSel.value,
           realtime_model: modelInput.value.trim() || 'gpt-realtime-2.1-mini',
+          realtime_transcription_model: transcriptionInput ? transcriptionInput.value.trim() : 'gpt-realtime-whisper',
           realtime_voice: voiceSelect.value,
           realtime_noise_reduction: noiseSelect.value,
           realtime_vad_threshold: parseFloat(vadThreshold.value) || 0.5,

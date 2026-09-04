@@ -344,3 +344,23 @@ def test_response_done_keeps_tool_state_while_fetch_in_flight():
         """
     )
     assert values == ["tool", "listening"]
+
+
+
+def test_build_transcription_update_event():
+    values = _node_eval(
+        """
+        const { buildTranscriptionUpdateEvent } = await import('./static/js/realtimeVoice.js');
+        console.log(JSON.stringify({
+          on: buildTranscriptionUpdateEvent({ model: 'gpt-realtime-whisper', language: 'nl' }),
+          off: buildTranscriptionUpdateEvent(null),
+          empty: buildTranscriptionUpdateEvent({}),
+        }));
+        """
+    )
+    assert values["on"] == {
+        "type": "session.update",
+        "session": {"type": "realtime", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper", "language": "nl"}}}},
+    }
+    assert values["off"] is None
+    assert values["empty"] is None
