@@ -2488,7 +2488,7 @@ function initializeEventListeners() {
         rtIndicator.style.display = active ? '' : 'none';
         rtIndicator.classList.toggle('active', active);
         rtIndicator.title = active
-          ? (phase === 'speaking' ? 'Realtime gesprek — AI spreekt…' : phase === 'connecting' ? 'Realtime gesprek — verbinden…' : 'Realtime gesprek actief — klik om te stoppen')
+          ? (phase === 'speaking' ? 'Realtime gesprek — AI spreekt…' : phase === 'tool' ? 'Realtime gesprek — zoekt op via Ithaka…' : phase === 'connecting' ? 'Realtime gesprek — verbinden…' : 'Realtime gesprek actief — klik om te stoppen')
           : 'Realtime Gesprek';
       }
     });

@@ -59,7 +59,8 @@ een correctie een kleine diff is, geen herontwerp.
 2. **Tool-calling zit niet in fase 1.** De Realtime-sessie krijgt `tools: []`, zoals in Eds
    eigen config. De bestaande tool-infrastructuur (`tool_schemas.py`, `tool_execution.py`,
    `tool_policy.py`) is niet 1-op-1 herbruikbaar over het Realtime-datakanaal (ander protocol
-   dan HTTP-tool-execution) en is een aparte, latere fase.
+   dan HTTP-tool-execution). Fase 2 (`2026-09-04-realtime-voice-tools-design.md`) lost dit op
+   met één delegatie-tool `ask_ithaka` → `POST /api/realtime/ask` → agent-loop.
 3. **Sessie stopt hard na 10 minuten** als kostenbeheersing (audio-tokens zijn duur: $10–20 per
    1M). Zichtbare waarschuwing in de UI, geen silent cutoff.
 
@@ -204,7 +205,8 @@ oorspronkelijke tekst zat.
 
 ## Niet in scope (fase 1)
 
-- Tool-calling over het Realtime-datakanaal (aanname 2).
+- Tool-calling over het Realtime-datakanaal (aanname 2) — gebouwd in fase 2, zie
+  `2026-09-04-realtime-voice-tools-design.md`.
 - Vervangen/verwijderen van de bestaande STT/TTS-cascade of de podcast-audiopijplijn
   (`src/notebook_audio.py`) — die blijven ongewijzigd.
 - Server-side proxying van audio (bewust P2P browser↔OpenAI voor lage latency).

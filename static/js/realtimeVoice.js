@@ -35,6 +35,15 @@ export function classifyRealtimeEvent(event) {
       return { type: 'assistant_delta', delta: event.delta || '', responseId: event.response_id }
     case 'response.output_audio_transcript.done':
       return { type: 'assistant_done', text: event.transcript || '', responseId: event.response_id }
+    case 'response.function_call_arguments.done':
+      return {
+        type: 'function_call',
+        name: event.name || '',
+        callId: event.call_id || '',
+        arguments: typeof event.arguments === 'string' ? event.arguments : JSON.stringify(event.arguments || {}),
+      }
+    case 'response.created':
+      return { type: 'response_created', responseId: event.response && event.response.id }
     case 'response.done':
       return { type: 'response_done' }
     case 'error':
@@ -56,9 +65,24 @@ export function shouldCancelForBargeIn(state, action) {
   return state === 'speaking' && action.type === 'speech_started'
 }
 
+/**
+ * Events to send back over the data channel after a tool call finished.
+ * `output` must be a string for OpenAI; anything else is JSON-stringified.
+ * Pure — unit-tested in Node.
+ * @param {string} callId
+ * @param {string|object} output
+ */
+export function buildFunctionCallOutputEvents(callId, output) {
+  const text = typeof output === 'string' ? output : JSON.stringify(output)
+  return [
+    { type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: text } },
+    { type: 'response.create' },
+  ]
+}
+
 const RealtimeVoice = {
   _active: false,
-  _state: 'idle', // idle | connecting | listening | speaking | error
+  _state: 'idle', // idle | connecting | listening | speaking | tool | error
   _onStateChange: null,
   _pc: null,
   _dc: null,
@@ -66,6 +90,9 @@ const RealtimeVoice = {
   _audioEl: null,
   _assistantBuffer: '',
   _sessionTimer: null,
+  _toolChain: Promise.resolve(),
+  _responseActive: false,
+  _pendingResponseCreate: false,
 
   /**
    * @param {(state: {active: boolean, state: string}) => void} onStateChange
@@ -176,6 +203,9 @@ const RealtimeVoice = {
     this._active = false
     this._state = 'idle'
     this._assistantBuffer = ''
+    this._responseActive = false
+    this._pendingResponseCreate = false
+    this._toolChain = Promise.resolve()
     this._notify()
   },
 
@@ -204,11 +234,14 @@ const RealtimeVoice = {
 
     switch (action.type) {
       case 'speech_started':
-        this._state = 'listening'
+        if (this._state !== 'tool') this._state = 'listening'
         this._notify()
         break
       case 'speech_stopped':
         this._notify()
+        break
+      case 'response_created':
+        this._responseActive = true
         break
       case 'user_transcript':
         if (action.text.trim() && window.chatRenderer?.addMessage) window.chatRenderer.addMessage('user', action.text, null, null)
@@ -225,13 +258,78 @@ const RealtimeVoice = {
         break
       }
       case 'response_done':
-        this._state = 'listening'
+        // The function-call turn ends with its own response.done while the
+        // /api/realtime/ask fetch is still in flight — keep the 'tool' state
+        // until _handleFunctionCall finishes.
+        this._responseActive = false
+        if (this._pendingResponseCreate && this._dc && this._dc.readyState === 'open') {
+          this._dc.send(JSON.stringify({ type: 'response.create' }))
+          this._pendingResponseCreate = false
+        }
+        if (this._state !== 'tool') this._state = 'listening'
         this._notify()
+        break
+      case 'function_call':
+        this._toolChain = this._toolChain.then(() => this._handleFunctionCall(action)).catch((e) => { console.error('RealtimeVoice: tool call failed:', e) })
         break
       case 'error':
         console.error('RealtimeVoice: server error:', action.message)
         if (window.uiModule?.showError) window.uiModule.showError(action.message)
         break
+    }
+  },
+
+  /** @private — one call at a time (chained via _toolChain). */
+  async _handleFunctionCall(action) {
+    if (!this._active) return
+    const name = action.name || 'ask_ithaka' // exactly one tool is declared server-side (I3)
+    let output
+    if (name !== 'ask_ithaka') {
+      output = { error: 'Onbekende tool' }
+    } else {
+      let question = ''
+      try { question = String(JSON.parse(action.arguments || '{}').question || '') } catch (e) { question = '' }
+      if (!question.trim()) {
+        output = { error: 'Ongeldige argumenten' }
+      } else {
+        this._state = 'tool'
+        this._notify()
+        if (window.chatRenderer?.addMessage) window.chatRenderer.addMessage('assistant', 'Opgezocht via Ithaka: ' + question, null, null)
+        try {
+          const res = await fetch('/api/realtime/ask', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question, call_id: action.callId }),
+          })
+          if (!this._active) return
+          if (res.ok) {
+            const data = await res.json()
+            if (!this._active) return
+            output = { answer: data.answer || '' }
+          } else {
+            const err = await res.json().catch(() => ({}))
+            if (!this._active) return
+            const detail = err.detail && (typeof err.detail === 'string' ? err.detail : err.detail.message)
+            output = { error: detail || 'Het opzoeken is mislukt' }
+          }
+        } catch (e) {
+          output = { error: 'Het opzoeken is mislukt' }
+        }
+        if (!this._active) return
+        this._state = 'listening'
+        this._notify()
+      }
+    }
+    if (!this._dc || this._dc.readyState !== 'open') return
+    // Never fire response.create into a response the server already has
+    // active — OpenAI rejects that with conversation_already_has_active_response
+    // (I1). Defer it until the pending response.done clears _responseActive.
+    const events = buildFunctionCallOutputEvents(action.callId, output)
+    this._dc.send(JSON.stringify(events[0]))
+    if (this._responseActive) {
+      this._pendingResponseCreate = true
+    } else {
+      this._dc.send(JSON.stringify(events[1]))
     }
   },
 

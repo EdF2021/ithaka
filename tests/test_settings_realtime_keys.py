@@ -45,3 +45,9 @@ def test_get_setting_realtime_model_default(tmp_path, monkeypatch):
     assert get_setting("realtime_model") == "gpt-realtime-2.1-mini"
     assert get_setting("realtime_enabled") is False
     assert get_setting("realtime_provider") == "disabled"
+
+
+def test_realtime_tools_enabled_default_true_and_global():
+    from src.settings import DEFAULT_SETTINGS, _PER_USER_KEYS
+    assert DEFAULT_SETTINGS["realtime_tools_enabled"] is True
+    assert "realtime_tools_enabled" not in _PER_USER_KEYS

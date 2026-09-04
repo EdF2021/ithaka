@@ -14,6 +14,34 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Fase 2 — the single function tool declared in the Realtime session. The
+# preamble guidance ("Momentje, ik zoek het op.") lives here, not in
+# realtime_instructions, so existing custom instructions keep working.
+ASK_ITHAKA_TOOL = {
+    "type": "function",
+    "name": "ask_ithaka",
+    "description": (
+        "Stel een vraag aan Ithaka, de assistent met toegang tot internet-zoeken, "
+        "notities, agenda, e-mail, documenten en andere tools. Gebruik dit voor elke "
+        "vraag die actuele feiten, persoonlijke gegevens van de gebruiker of opzoekwerk "
+        "vereist — gok niet. Zeg vóór de aanroep één korte zin zoals 'Momentje, ik zoek "
+        "het op.' Vat het antwoord daarna kort samen in het Nederlands."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": (
+                    "De volledige, zelfstandig begrijpelijke vraag in het Nederlands, "
+                    "inclusief context uit het gesprek."
+                ),
+            }
+        },
+        "required": ["question"],
+    },
+}
+
 
 class RealtimeService:
     def _load_settings(self) -> dict:
@@ -30,6 +58,7 @@ class RealtimeService:
             "realtime_noise_reduction": saved.get("realtime_noise_reduction", "far_field"),
             "realtime_max_minutes": saved.get("realtime_max_minutes", 10),
             "realtime_instructions": saved.get("realtime_instructions", ""),
+            "realtime_tools_enabled": saved.get("realtime_tools_enabled", True),
         }
 
     @property
@@ -42,7 +71,7 @@ class RealtimeService:
     def build_session_config(self, settings: dict) -> dict:
         """Pure builder: settings dict -> OpenAI Realtime session config.
         No network I/O — kept separate from create_session() for testing."""
-        return {
+        config = {
             "type": "realtime",
             "model": settings["realtime_model"],
             "instructions": settings["realtime_instructions"],
@@ -64,9 +93,12 @@ class RealtimeService:
                 },
             },
             "output_modalities": ["audio"],
-            "tools": [],
+            "tools": [ASK_ITHAKA_TOOL] if settings.get("realtime_tools_enabled", True) else [],
             "max_output_tokens": "inf",
         }
+        if config["tools"]:
+            config["tool_choice"] = "auto"
+        return config
 
     def _resolve_endpoint(self, provider: str) -> tuple[str, Optional[str]]:
         if not provider.startswith("endpoint:"):

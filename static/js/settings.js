@@ -1263,6 +1263,7 @@ async function initSttSettings() {
 
 async function initRealtimeSettings() {
   var provSel = el('set-realtimeProviderSelect');
+  var toolsToggle = el('set-realtimeToolsToggle');
   var modelInput = el('set-realtimeModelInput');
   var voiceSelect = el('set-realtimeVoiceSelect');
   var noiseSelect = el('set-realtimeNoiseSelect');
@@ -1306,6 +1307,7 @@ async function initRealtimeSettings() {
     maxMinutes.value = settings.realtime_max_minutes != null ? settings.realtime_max_minutes : 10;
     if (settings.realtime_instructions) instructions.value = settings.realtime_instructions;
     if (enabledToggle) enabledToggle.checked = settings.realtime_enabled === true;
+    if (toolsToggle) toolsToggle.checked = settings.realtime_tools_enabled !== false;
   } catch (e) { console.warn('Failed to load Realtime settings', e); }
 
   syncDisabled();
@@ -1327,6 +1329,7 @@ async function initRealtimeSettings() {
           realtime_vad_silence_ms: parseInt(vadSilenceMs.value, 10) || 500,
           realtime_max_minutes: parseInt(maxMinutes.value, 10) || 10,
           realtime_instructions: instructions.value,
+          realtime_tools_enabled: toolsToggle ? toolsToggle.checked : true,
         }) });
       if (!res.ok) {
         var err = await res.json().catch(function() { return {}; });
@@ -1347,6 +1350,7 @@ async function initRealtimeSettings() {
   maxMinutes.addEventListener('change', saveRealtime);
   instructions.addEventListener('change', saveRealtime);
   if (enabledToggle) enabledToggle.addEventListener('change', function() { syncDisabled(); saveRealtime(); });
+  if (toolsToggle) toolsToggle.addEventListener('change', saveRealtime);
 }
 
 /* ═══════════════════════════════════════════
