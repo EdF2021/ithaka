@@ -42,6 +42,8 @@ export function classifyRealtimeEvent(event) {
         callId: event.call_id || '',
         arguments: typeof event.arguments === 'string' ? event.arguments : JSON.stringify(event.arguments || {}),
       }
+    case 'response.created':
+      return { type: 'response_created', responseId: event.response && event.response.id }
     case 'response.done':
       return { type: 'response_done' }
     case 'error':
@@ -89,6 +91,8 @@ const RealtimeVoice = {
   _assistantBuffer: '',
   _sessionTimer: null,
   _toolChain: Promise.resolve(),
+  _responseActive: false,
+  _pendingResponseCreate: false,
 
   /**
    * @param {(state: {active: boolean, state: string}) => void} onStateChange
@@ -199,6 +203,9 @@ const RealtimeVoice = {
     this._active = false
     this._state = 'idle'
     this._assistantBuffer = ''
+    this._responseActive = false
+    this._pendingResponseCreate = false
+    this._toolChain = Promise.resolve()
     this._notify()
   },
 
@@ -227,11 +234,14 @@ const RealtimeVoice = {
 
     switch (action.type) {
       case 'speech_started':
-        this._state = 'listening'
+        if (this._state !== 'tool') this._state = 'listening'
         this._notify()
         break
       case 'speech_stopped':
         this._notify()
+        break
+      case 'response_created':
+        this._responseActive = true
         break
       case 'user_transcript':
         if (action.text.trim() && window.chatRenderer?.addMessage) window.chatRenderer.addMessage('user', action.text, null, null)
@@ -251,6 +261,11 @@ const RealtimeVoice = {
         // The function-call turn ends with its own response.done while the
         // /api/realtime/ask fetch is still in flight — keep the 'tool' state
         // until _handleFunctionCall finishes.
+        this._responseActive = false
+        if (this._pendingResponseCreate && this._dc && this._dc.readyState === 'open') {
+          this._dc.send(JSON.stringify({ type: 'response.create' }))
+          this._pendingResponseCreate = false
+        }
         if (this._state !== 'tool') this._state = 'listening'
         this._notify()
         break
@@ -267,8 +282,9 @@ const RealtimeVoice = {
   /** @private — one call at a time (chained via _toolChain). */
   async _handleFunctionCall(action) {
     if (!this._active) return
+    const name = action.name || 'ask_ithaka' // exactly one tool is declared server-side (I3)
     let output
-    if (action.name !== 'ask_ithaka') {
+    if (name !== 'ask_ithaka') {
       output = { error: 'Onbekende tool' }
     } else {
       let question = ''
@@ -305,7 +321,16 @@ const RealtimeVoice = {
       }
     }
     if (!this._dc || this._dc.readyState !== 'open') return
-    for (const ev of buildFunctionCallOutputEvents(action.callId, output)) this._dc.send(JSON.stringify(ev))
+    // Never fire response.create into a response the server already has
+    // active — OpenAI rejects that with conversation_already_has_active_response
+    // (I1). Defer it until the pending response.done clears _responseActive.
+    const events = buildFunctionCallOutputEvents(action.callId, output)
+    this._dc.send(JSON.stringify(events[0]))
+    if (this._responseActive) {
+      this._pendingResponseCreate = true
+    } else {
+      this._dc.send(JSON.stringify(events[1]))
+    }
   },
 
   /** @private */
