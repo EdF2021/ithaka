@@ -97,6 +97,12 @@ _PASSIVE_PATTERNS = (
     # 3s by the v2 viewer page in src/notebook_infographic.py) — same
     # reasoning as the podcast/video pollers above.
     re.compile(r"^/api/notebooks/[^/]+/artifacts/[^/]+/illustrations$"),
+    # The meeting detail poller (GET /api/meetings/{id}, polled every 3s by
+    # static/js/meetings.js while a meeting is recording/processing) — same
+    # reasoning as the pollers above. /api/meetings (no id segment, the
+    # list route) and any write (POST .../chunks, .../finish) still can't
+    # match this shape, so they stay tracked.
+    re.compile(r"^/api/meetings/[^/]+$"),
 )
 
 
