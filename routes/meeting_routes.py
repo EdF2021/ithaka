@@ -16,15 +16,17 @@ Spec: docs/superpowers/specs/2026-09-04-meeting-recorder-design.md
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from core.database import Meeting
+from core.database import Document, Meeting
 from src.constants import MEETING_AUDIO_DIR
 from src.meeting_minutes import (
+    format_duration,
     get_job_for_meeting,
     resolve_meeting_audio_path,
     start_processing_job,
@@ -99,6 +101,16 @@ def _serialize(row: Meeting, job: dict | None) -> dict:
         data["total"] = job.get("total")
         data["depth"] = job.get("depth")
     return data
+
+
+_META_LINE_RE = re.compile(r"^\*\*Datum:\*\*.*$\n?", re.M)
+
+
+def _strip_meta_line(markdown: str) -> str:
+    """Remove the ``**Datum:** … · **Duur:** … · **Opname:** …`` line the
+    minutes job writes under the title; the visual-report hero shows the
+    same facts in its stats bar."""
+    return _META_LINE_RE.sub("", markdown or "", count=1)
 
 
 def setup_meeting_routes(get_current_user, SessionLocal) -> APIRouter:
@@ -312,6 +324,53 @@ def setup_meeting_routes(get_current_user, SessionLocal) -> APIRouter:
         return FileResponse(
             str(path), media_type="audio/webm", filename=f"{safe_title}.webm"
         )
+
+    # ---- GET /api/meetings/{id}/minutes ----
+    @router.get("/api/meetings/{meeting_id}/minutes")
+    async def get_meeting_minutes(request: Request, meeting_id: str):
+        """Render the minutes Document through the shared editorial
+        visual-report template (src/visual_report.py) — the same page the
+        notebook artifacts open with (hero, TOC, typography, print toolbar).
+        The Document row stays the source of truth in the Library; this is
+        a read-only view of its current content."""
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            row = _get_owned_meeting(db_session, meeting_id, user)
+            document = None
+            if row.document_id:
+                document = (
+                    db_session.query(Document)
+                    .filter(Document.id == row.document_id)
+                    .first()
+                )
+            if document is None or not (document.current_content or "").strip():
+                raise HTTPException(status_code=404, detail="Nog geen notulen")
+            title = row.title or document.title or "Notulen"
+            created = row.created_at.strftime("%d-%m-%Y") if row.created_at else ""
+            duration = format_duration(row.duration_seconds)
+            # The Document's own meta line (**Datum:** · **Duur:** · **Opname:**)
+            # duplicates the hero stats bar and would get the template's
+            # drop-cap as the first paragraph — drop it from the view only.
+            content = _strip_meta_line(document.current_content)
+        finally:
+            db_session.close()
+
+        from src.visual_report import generate_visual_report
+
+        html_content = generate_visual_report(
+            question=f"Notulen: {title}",
+            report_markdown=content,
+            sources=[],
+            # Fixed hero-bar vocabulary (see src/visual_report.py): only these
+            # keys render; the labels are the template's English ones.
+            stats={"Generated": created, "Duration": duration, "Type": "Vergadering"},
+            category=None,
+            session_id=None,
+            report_type_label="Notulen",
+            generated_by_label="Ithaka Meetings",
+        )
+        return HTMLResponse(content=html_content)
 
     # ---- DELETE /api/meetings/{meeting_id} ----
     @router.delete("/api/meetings/{meeting_id}")

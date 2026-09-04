@@ -626,3 +626,55 @@ def test_delete_cross_owner_is_404(ts):
 
     r = c_bob.delete(f"/api/meetings/{meeting_id}")
     assert r.status_code == 404
+
+
+# ---- GET /api/meetings/{id}/minutes (styled visual-report view) ----
+
+def _attach_document(ts, meeting_id, content="# Notulen: Weekly\n\n**Datum:** 01-01-2026  ·  **Duur:** 2 min  ·  **Opname:** Ithaka\n\n## Samenvatting\n\nKort overleg.\n"):
+    s = ts()
+    try:
+        doc_id = "doc-" + meeting_id
+        s.add(db.Document(id=doc_id, owner="ed", title="Notulen – Weekly", language="markdown",
+                          current_content=content, session_id=None))
+        row = s.query(db.Meeting).filter(db.Meeting.id == meeting_id).one()
+        row.document_id = doc_id
+        row.status = "done"
+        row.duration_seconds = 125
+        s.commit()
+        return doc_id
+    finally:
+        s.close()
+
+
+def test_minutes_view_renders_visual_report_html(ts):
+    c = _client(ts)
+    meeting_id = _create(c, title="Weekly").json()["id"]
+    _attach_document(ts, meeting_id)
+    r = c.get(f"/api/meetings/{meeting_id}/minutes")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    body = r.text
+    assert "Notulen: Weekly" in body
+    assert "Samenvatting" in body
+    assert "Kort overleg." in body
+    # the visual-report chrome carries the stats we pass (duration label)
+    assert "2 min" in body
+    assert "Ithaka Meetings" in body
+    # the Document's own meta line is dropped from the view (hero shows it)
+    assert "Opname:" not in body
+
+
+def test_minutes_view_without_document_is_404(ts):
+    c = _client(ts)
+    meeting_id = _create(c, title="Weekly").json()["id"]
+    r = c.get(f"/api/meetings/{meeting_id}/minutes")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "Nog geen notulen"
+
+
+def test_minutes_view_cross_owner_is_404(ts):
+    c = _client(ts)
+    meeting_id = _create(c, title="Weekly").json()["id"]
+    _attach_document(ts, meeting_id)
+    other = _client(ts, user="bob")
+    assert other.get(f"/api/meetings/{meeting_id}/minutes").status_code == 404

@@ -572,7 +572,15 @@ function _setRecordingUI(recording) {
 
 // ── Actions on a meeting row ─────────────────────────────────────────────
 
-async function _openMinutes(documentId) {
+function _openMinutes(meetingId) {
+  if (!meetingId) return;
+  // Styled read view: the same editorial visual-report page the notebook
+  // artifacts open with. Plain new-tab navigation (same origin, relative
+  // URL) — if it 404s the user sees a 404 page, the panel stays untouched.
+  window.open(`/api/meetings/${encodeURIComponent(meetingId)}/minutes`, '_blank', 'noopener');
+}
+
+async function _openMinutesDocument(documentId) {
   if (!documentId) return;
   try {
     let dm = window.documentModule;
@@ -583,7 +591,7 @@ async function _openMinutes(documentId) {
     if (!dm || !dm.loadDocument) throw new Error('Document module unavailable');
     await dm.loadDocument(documentId);
   } catch (e) {
-    _toastError(`Could not open minutes: ${e.message}`);
+    _toastError(`Could not open document: ${e.message}`);
   }
 }
 
@@ -651,7 +659,8 @@ function _renderList() {
   _meetings.forEach((m) => {
     const row = list.querySelector(`[data-meeting-id="${m.id}"]`);
     if (!row) return;
-    row.querySelector('.meeting-open-minutes-btn')?.addEventListener('click', () => _openMinutes(m.document_id));
+    row.querySelector('.meeting-open-minutes-btn')?.addEventListener('click', () => _openMinutes(m.id));
+    row.querySelector('.meeting-open-doc-btn')?.addEventListener('click', () => _openMinutesDocument(m.document_id));
     row.querySelector('.meeting-reprocess-btn')?.addEventListener('click', () => _reprocess(m.id));
     row.querySelector('.meeting-delete-btn')?.addEventListener('click', () => _deleteMeeting(m.id, m.title));
   });
@@ -668,6 +677,7 @@ export function renderMeetingRow(m, { recording = false } = {}) {
   const id = escapeHtml(m.id);
   const openMinutesBtn = m.document_id
     ? `<button type="button" class="memory-toolbar-btn meeting-open-minutes-btn">Open minutes</button>`
+      + `<button type="button" class="memory-toolbar-btn meeting-open-doc-btn" title="Open the Markdown source in the Library">Document</button>`
     : '';
   const audioBtn = `<a class="memory-toolbar-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="/api/meetings/${id}/audio" download>Audio</a>`;
   const reprocessBtn = canReprocess
