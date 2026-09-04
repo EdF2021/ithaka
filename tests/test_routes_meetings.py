@@ -13,6 +13,10 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("ITHAKA_DATA_DIR", "/tmp/ithaka-test-meeting-routes")
 
+import asyncio
+import threading
+import time
+
 import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
@@ -137,6 +141,71 @@ def test_chunks_in_order_grow_bytes_total_and_concatenate(ts, tmp_path):
     assert on_disk == b"AAAABBB"
 
 
+def test_chunk_toctou_lock_prevents_double_append(ts, tmp_path, monkeypatch):
+    # Fix-wave-2 item 3 (final-review.md [I]): a retried chunk (client
+    # fetch rejects, _pump retries the same seq while the original request
+    # is still parked mid-read) must not be appended twice. Simulate the
+    # race by parking the FIRST request inside read_upload_limited (holding
+    # the per-meeting lock) with a threading.Event, firing a second request
+    # for the same seq from another thread while the first is parked, then
+    # releasing — the lock must serialize them so exactly one gets 200 and
+    # one gets 409, and the file holds the chunk only once.
+    c = _client(ts)
+    meeting_id = _create(c).json()["id"]
+
+    parked = threading.Event()
+    release = threading.Event()
+    real_read = mr.read_upload_limited
+    call_count = {"n": 0}
+
+    async def _blocking_read(upload, limit, label="Upload"):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            parked.set()
+            await asyncio.get_event_loop().run_in_executor(None, release.wait)
+        return await real_read(upload, limit, label)
+
+    monkeypatch.setattr(mr, "read_upload_limited", _blocking_read)
+
+    results = {}
+
+    def _post_first():
+        results["first"] = c.post(
+            f"/api/meetings/{meeting_id}/chunks?seq=0",
+            files={"file": ("a.webm", b"AAAA", "audio/webm")},
+        )
+
+    def _post_second():
+        results["second"] = c.post(
+            f"/api/meetings/{meeting_id}/chunks?seq=0",
+            files={"file": ("b.webm", b"BBBB", "audio/webm")},
+        )
+
+    with c:
+        t1 = threading.Thread(target=_post_first)
+        t1.start()
+        assert parked.wait(timeout=5), "first request never parked inside read_upload_limited"
+
+        t2 = threading.Thread(target=_post_second)
+        t2.start()
+        # Give the second request a moment to actually reach and block on
+        # the per-meeting lock before releasing the first.
+        time.sleep(0.2)
+        release.set()
+
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+    statuses = sorted([results["first"].status_code, results["second"].status_code])
+    assert statuses == [200, 409]
+
+    detail = c.get(f"/api/meetings/{meeting_id}").json()
+    assert detail["bytes_total"] == 4  # exactly one 4-byte chunk, not 8
+
+    on_disk = (tmp_path / (meeting_id + ".webm")).read_bytes()
+    assert on_disk == b"AAAA"
+
+
 def test_chunk_seq_skip_is_409_with_expected(ts):
     c = _client(ts)
     meeting_id = _create(c).json()["id"]
@@ -185,6 +254,21 @@ def test_chunk_cross_owner_is_404(ts):
     )
     assert r.status_code == 404
     assert r.json()["detail"] == "Vergadering niet gevonden"
+
+
+def test_chunk_empty_body_is_400_leeg_audiofragment(ts):
+    # Fix-wave-2 item 8: read_upload_limited succeeding with zero bytes must
+    # be rejected with the route's own "Leeg audiofragment" detail (the
+    # empty-file case final-review.md flagged as implemented but untested).
+    c = _client(ts)
+    meeting_id = _create(c).json()["id"]
+
+    r = c.post(
+        f"/api/meetings/{meeting_id}/chunks?seq=0",
+        files={"file": ("c.webm", b"", "audio/webm")},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Leeg audiofragment"
 
 
 def test_chunk_after_finish_is_400(ts):
@@ -359,6 +443,31 @@ def test_detail_cross_owner_is_404(ts):
     assert r.status_code == 404
 
 
+def test_list_orders_newest_first(ts):
+    # Fix-wave-2 item 8: test_list_and_detail_shapes only ever asserted a
+    # single row, so order_by(created_at.desc()) was unverified. Set
+    # created_at explicitly (both rows are created in the same test process
+    # tick, so relying on wall-clock ordering alone would be flaky).
+    import datetime
+
+    c = _client(ts)
+    older_id = _create(c, title="Older").json()["id"]
+    newer_id = _create(c, title="Newer").json()["id"]
+
+    s = ts()
+    try:
+        older = s.query(db.Meeting).filter(db.Meeting.id == older_id).first()
+        newer = s.query(db.Meeting).filter(db.Meeting.id == newer_id).first()
+        older.created_at = datetime.datetime(2020, 1, 1)
+        newer.created_at = datetime.datetime(2020, 1, 2)
+        s.commit()
+    finally:
+        s.close()
+
+    listing = c.get("/api/meetings").json()["meetings"]
+    assert [m["id"] for m in listing] == [newer_id, older_id]
+
+
 def test_list_only_returns_own_meetings(ts):
     c_ed = _client(ts, user="ed")
     _create(c_ed, title="Ed's")
@@ -445,6 +554,19 @@ def test_audio_serve_no_file_yet_is_404(ts):
     c = _client(ts)
     meeting_id = _create(c).json()["id"]
     r = c.get(f"/api/meetings/{meeting_id}/audio")
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize("bad_id", ["../x", "..%2Fx", "x.webm"])
+def test_audio_serve_traversal_shaped_id_is_404(ts, bad_id):
+    # Fix-wave-2 item 8: a route-level contract test — resolve_meeting_audio_
+    # path's traversal-rejection is unit-tested directly in
+    # test_meeting_minutes_job.py, but the route itself must also 404 (never
+    # 500, never leak an arbitrary file) for a traversal-shaped meeting_id
+    # path segment, whether that comes from URL-normalization collapsing it
+    # into an unmatched route or from _get_owned_meeting finding no such row.
+    c = _client(ts)
+    r = c.get(f"/api/meetings/{bad_id}/audio")
     assert r.status_code == 404
 
 

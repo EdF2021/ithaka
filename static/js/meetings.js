@@ -232,7 +232,7 @@ export function createChunkUploader({ post, maxAttempts = 3, delays = [1000, 200
 let _open = false;
 let _meetings = [];
 let _pollTimer = null;
-const _polling = new Set(); // meeting ids currently polled
+const _polling = new Map(); // meeting id -> consecutive poll-failure count
 
 let _rec = null; // { id, mediaRecorder, stream, uploader, startedAt, timerHandle, autoStopHandle }
 
@@ -286,18 +286,50 @@ async function _refreshMeeting(id) {
 }
 
 function _startPolling(id) {
-  _polling.add(id);
+  if (!_polling.has(id)) _polling.set(id, 0);
   _ensurePollTimer();
+}
+
+const POLL_FAILURE_BUDGET = 5;
+const POLL_CONNECTION_LOST_ERROR = 'Verbinding met de server verbroken';
+
+/**
+ * Pure decision for whether polling of one meeting should continue after a
+ * single poll attempt. `ok` is whether that attempt reached the server
+ * (regardless of the meeting's status — terminal-status handling stays with
+ * the caller). A transient failure must NOT stop polling by itself: only
+ * after POLL_FAILURE_BUDGET consecutive failures does polling give up.
+ * Fix-wave-2 item 4 (final-review.md [I], meetings.js:277-305).
+ */
+export function nextPollDecision(prevFailures, ok) {
+  if (ok) return { continue: true, failures: 0 };
+  const failures = (prevFailures || 0) + 1;
+  return { continue: failures < POLL_FAILURE_BUDGET, failures };
 }
 
 function _ensurePollTimer() {
   if (_pollTimer) return;
   _pollTimer = setInterval(async () => {
     if (_polling.size === 0) return;
-    for (const id of Array.from(_polling)) {
+    for (const id of Array.from(_polling.keys())) {
+      const prevFailures = _polling.get(id) || 0;
       const m = await _refreshMeeting(id);
-      if (!m || m.status === 'done' || m.status === 'error') {
+      if (m && (m.status === 'done' || m.status === 'error')) {
         _polling.delete(id);
+        continue;
+      }
+      const decision = nextPollDecision(prevFailures, !!m);
+      if (!decision.continue) {
+        _polling.delete(id);
+        // Keep the last known row state, but surface that polling gave up
+        // rather than leaving the row frozen on a stale phase forever with
+        // no explanation (the "silent background process" pattern).
+        const idx = _meetings.findIndex((x) => x.id === id);
+        if (idx >= 0) {
+          _meetings[idx] = { ..._meetings[idx], status: 'error', error: POLL_CONNECTION_LOST_ERROR };
+        }
+      } else {
+        _polling.set(id, decision.failures);
       }
     }
     _renderList();
@@ -326,6 +358,20 @@ async function _startRecording() {
     return;
   }
 
+  // Request the microphone FIRST, before creating any server-side row.
+  // Fix-wave-2 item 5 (final-review.md [I], meetings.js:329-351): creating
+  // the row before the permission prompt left an invisible, permanently
+  // "recording" orphan row on every denial (and on a tab crash before the
+  // prompt resolved) — nothing ever cleans those up. Only POST once the
+  // stream is actually granted.
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (_e) {
+    _toastError('Microphone permission denied');
+    return;
+  }
+
   let meeting;
   try {
     meeting = await _fetchJSON('/api/meetings', {
@@ -338,15 +384,8 @@ async function _startRecording() {
       }),
     });
   } catch (e) {
+    stream.getTracks().forEach((t) => t.stop());
     _toastError(`Could not create meeting: ${e.message}`);
-    return;
-  }
-
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (_e) {
-    _toastError('Microphone permission denied');
     return;
   }
 
@@ -375,7 +414,21 @@ async function _startRecording() {
   }
 
   const startedAt = Date.now();
-  _rec = { id: meeting.id, mediaRecorder, stream, uploader, startedAt, timerHandle: null, autoStopHandle: null };
+  _rec = {
+    id: meeting.id,
+    mediaRecorder,
+    stream,
+    uploader,
+    startedAt,
+    timerHandle: null,
+    autoStopHandle: null,
+    // Kept so a minimized-then-restored panel (openPanel() re-running the
+    // form template from scratch) can re-populate what is being recorded —
+    // see the recordingUiState()/openPanel() restore path below.
+    title,
+    agenda: (agendaEl?.value || '').trim(),
+    keyTerms: (termsEl?.value || '').trim(),
+  };
 
   mediaRecorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0 && _rec) _rec.uploader.enqueue(e.data);
@@ -446,28 +499,61 @@ async function _finishRecording() {
       body: JSON.stringify({ duration_seconds: durationSeconds }),
     });
     _startPolling(id);
+    await _refreshMeeting(id);
   } catch (e) {
+    // A GET refetch here would show the server's truth, which for a finish
+    // failure (e.g. 400 "Geen audio ontvangen" on a zero-byte recording) is
+    // still status:"recording" — start_processing_job raises before ever
+    // writing status:"processing". Without this, the row stays on
+    // "Recording" forever with only a transient toast as explanation
+    // (fix-wave-2 item 6, observed in smoke). Update the row locally instead.
     _toastError(`Could not start processing: ${e.message}`);
+    const idx = _meetings.findIndex((x) => x.id === id);
+    if (idx >= 0) _meetings[idx] = rowAfterFinishFailure(_meetings[idx], e.message);
   }
-  await _refreshMeeting(id);
   _renderList();
 }
 
+/**
+ * Pure helper: the row shape after a POST .../finish failure — surfaces the
+ * server's detail as a visible error instead of leaving the row frozen on
+ * "Recording" with no explanation. Node-testable without a DOM.
+ */
+export function rowAfterFinishFailure(row, detail) {
+  return { ...row, status: 'error', error: detail };
+}
+
+/**
+ * Pure decision for how the record button / dot / inputs should look, given
+ * "is a recording currently in flight" (the module's `_rec`, or null).
+ * Node-testable without a DOM — see fix-wave-2 item 1 (restored panel must
+ * not show "Start recording" while `_rec` is still set).
+ */
+export function recordingUiState(rec) {
+  const recording = !!rec;
+  return {
+    label: recording ? 'Stop' : 'Start recording',
+    disabled: recording,
+    showDot: recording,
+  };
+}
+
 function _setRecordingUI(recording) {
+  const state = recordingUiState(recording ? (_rec || true) : null);
   const btn = document.getElementById('meeting-record-btn');
   const dot = document.getElementById('meeting-rec-dot');
   const timer = document.getElementById('meeting-timer');
   const status = document.getElementById('meeting-upload-status');
   if (btn) {
-    btn.textContent = recording ? 'Stop' : 'Start recording';
+    btn.textContent = state.label;
     btn.classList.toggle('danger', recording);
   }
-  if (dot) dot.style.display = recording ? 'inline-block' : 'none';
+  if (dot) dot.style.display = state.showDot ? 'inline-block' : 'none';
   if (timer && !recording) timer.textContent = '00:00';
   if (status && !recording) status.textContent = '';
   ['meeting-title', 'meeting-agenda', 'meeting-terms'].forEach((id) => {
     const el = document.getElementById(id);
-    if (el) el.disabled = recording;
+    if (el) el.disabled = state.disabled;
   });
 }
 
@@ -497,10 +583,12 @@ async function _reprocess(id) {
     });
     _startPolling(id);
     await _refreshMeeting(id);
-    _renderList();
   } catch (e) {
     _toastError(`Could not reprocess: ${e.message}`);
+    const idx = _meetings.findIndex((x) => x.id === id);
+    if (idx >= 0) _meetings[idx] = rowAfterFinishFailure(_meetings[idx], e.message);
   }
+  _renderList();
 }
 
 async function _deleteMeeting(id, title) {
@@ -601,6 +689,7 @@ function _ensureMeetingsChipRegistered() {
 
 function _forceClose() {
   _open = false;
+  document.body.classList.remove('meetings-view');
   // A full close (unlike minimize-to-chip) tears everything down — an
   // in-flight recording has nowhere to keep reporting progress to, so stop
   // it; onstop -> _finishRecording still runs (drain + POST /finish) even
@@ -616,6 +705,7 @@ function _forceClose() {
 export function openPanel() {
   if (_open) return;
   _open = true;
+  document.body.classList.add('meetings-view');
 
   const btn = document.getElementById('tool-meetings-btn');
   if (btn) btn.classList.add('active');
@@ -676,6 +766,26 @@ export function openPanel() {
     else _startRecording();
   });
 
+  // A recording started before this panel was minimized keeps running while
+  // minimized (see _forceClose()'s comment) — the chip's restoreFn calls
+  // openPanel() again, which just rebuilt the form from the literal
+  // template above (button "Start recording", dot hidden, 00:00 timer,
+  // enabled inputs). Re-apply the recording UI immediately and re-populate
+  // the inputs from what _rec remembers, or the restored panel would be
+  // internally contradictory (running timer, but "Start recording" visible)
+  // and a click would silently end the meeting. Fix-wave-2 item 1 (was [C]
+  // in final-review.md).
+  if (_rec) {
+    const titleEl = document.getElementById('meeting-title');
+    const agendaEl = document.getElementById('meeting-agenda');
+    const termsEl = document.getElementById('meeting-terms');
+    if (titleEl) titleEl.value = _rec.title || '';
+    if (agendaEl) agendaEl.value = _rec.agenda || '';
+    if (termsEl) termsEl.value = _rec.keyTerms || '';
+    _setRecordingUI(true);
+    _tickTimer();
+  }
+
   _renderList();
   _fetchMeetings().then(() => {
     _renderList();
@@ -686,6 +796,7 @@ export function openPanel() {
 export function closePanel(direction) {
   if (!_open) return;
   _open = false;
+  document.body.classList.remove('meetings-view');
   const minimize = direction === 'down';
   if (minimize) {
     _ensureMeetingsChipRegistered();

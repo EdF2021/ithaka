@@ -300,6 +300,11 @@ def format_duration(seconds: Optional[int]) -> str:
     if seconds is None:
         return "onbekend"
     total = int(seconds)
+    # Round up to at least "1 min" for any non-zero sub-minute duration —
+    # otherwise a 5s recording rendered "0 min" in the minutes header, which
+    # reads as a bug rather than a short meeting. 0/None stay unchanged.
+    if 0 < total < 60:
+        return "1 min"
     hours, rem = divmod(total, 3600)
     minutes = rem // 60
     if hours:

@@ -15,6 +15,7 @@ Spec: docs/superpowers/specs/2026-09-04-meeting-recorder-design.md
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -46,6 +47,25 @@ TEXT_MAX_CHARS = 20000
 # Ruling: this stays a plain module-level dict, not a DB column — see
 # task-4-brief.md.
 _next_seq: dict[str, int] = {}
+
+# Per-meeting lock guarding the seq-check -> read -> size-check -> append ->
+# counter-update sequence in upload_meeting_chunk. The client uploader is
+# strictly one-request-at-a-time, so the only way two requests for the same
+# meeting run concurrently is a dropped connection: the client's fetch
+# rejects and retries the same seq while the original request is still
+# parked inside `await read_upload_limited(...)`. Without the lock both
+# requests observe the same `expected` seq, both pass the check, and both
+# append — silently duplicating audio. Popped alongside `_next_seq` on
+# finish/delete so this dict cannot grow without bound either.
+_chunk_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock_for(meeting_id: str) -> asyncio.Lock:
+    lock = _chunk_locks.get(meeting_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _chunk_locks[meeting_id] = lock
+    return lock
 
 
 def _serialize(row: Meeting, job: dict | None) -> dict:
@@ -162,38 +182,44 @@ def setup_meeting_routes(get_current_user, SessionLocal) -> APIRouter:
         file: UploadFile = File(...),
     ):
         user = get_current_user(request)
-        db_session = SessionLocal()
-        try:
-            row = _get_owned_meeting(db_session, meeting_id, user)
-            if row.status != "recording":
-                raise HTTPException(status_code=400, detail="Opname is al afgesloten")
+        # Held across the whole seq-check -> read -> size-check -> append ->
+        # counter-update sequence so a retried chunk (client fetch rejects,
+        # _pump retries the same seq while the original request is still
+        # parked inside read_upload_limited) cannot be appended twice — see
+        # _chunk_locks above.
+        async with _lock_for(meeting_id):
+            db_session = SessionLocal()
+            try:
+                row = _get_owned_meeting(db_session, meeting_id, user)
+                if row.status != "recording":
+                    raise HTTPException(status_code=400, detail="Opname is al afgesloten")
 
-            expected = _next_seq.get(meeting_id, 0)
-            if seq != expected:
-                # Flat body {"detail": ..., "expected": n} per spec — NOT
-                # HTTPException(detail={...}), which FastAPI would wrap in
-                # an extra {"detail": {...}} layer.
-                return JSONResponse(
-                    status_code=409,
-                    content={"detail": "Onverwacht chunknummer", "expected": expected},
-                )
+                expected = _next_seq.get(meeting_id, 0)
+                if seq != expected:
+                    # Flat body {"detail": ..., "expected": n} per spec — NOT
+                    # HTTPException(detail={...}), which FastAPI would wrap in
+                    # an extra {"detail": {...}} layer.
+                    return JSONResponse(
+                        status_code=409,
+                        content={"detail": "Onverwacht chunknummer", "expected": expected},
+                    )
 
-            data = await read_upload_limited(file, MEETING_CHUNK_MAX_BYTES, "Audio chunk")
-            if not data:
-                raise HTTPException(status_code=400, detail="Leeg audiofragment")
-            if row.bytes_total + len(data) > MEETING_AUDIO_MAX_BYTES:
-                raise HTTPException(status_code=413, detail="Opname te groot")
+                data = await read_upload_limited(file, MEETING_CHUNK_MAX_BYTES, "Audio chunk")
+                if not data:
+                    raise HTTPException(status_code=400, detail="Leeg audiofragment")
+                if row.bytes_total + len(data) > MEETING_AUDIO_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Opname te groot")
 
-            path = Path(MEETING_AUDIO_DIR) / row.audio_path
-            with open(path, "ab") as fh:
-                fh.write(data)
+                path = Path(MEETING_AUDIO_DIR) / row.audio_path
+                with open(path, "ab") as fh:
+                    fh.write(data)
 
-            row.bytes_total += len(data)
-            _next_seq[meeting_id] = seq + 1
-            db_session.commit()
-            return {"seq": seq, "bytes_total": row.bytes_total}
-        finally:
-            db_session.close()
+                row.bytes_total += len(data)
+                _next_seq[meeting_id] = seq + 1
+                db_session.commit()
+                return {"seq": seq, "bytes_total": row.bytes_total}
+            finally:
+                db_session.close()
 
     # ---- POST /api/meetings/{meeting_id}/finish ----
     @router.post("/api/meetings/{meeting_id}/finish")
@@ -235,6 +261,7 @@ def setup_meeting_routes(get_current_user, SessionLocal) -> APIRouter:
                 raise HTTPException(status_code=400, detail=str(exc))
 
             _next_seq.pop(meeting_id, None)
+            _chunk_locks.pop(meeting_id, None)
             return {"job_id": job_id, "status": "processing"}
         finally:
             db_session.close()
@@ -302,6 +329,7 @@ def setup_meeting_routes(get_current_user, SessionLocal) -> APIRouter:
             db_session.delete(row)
             db_session.commit()
             _next_seq.pop(meeting_id, None)
+            _chunk_locks.pop(meeting_id, None)
             return {"ok": True}
         finally:
             db_session.close()

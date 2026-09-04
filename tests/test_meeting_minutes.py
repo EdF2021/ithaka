@@ -410,6 +410,16 @@ def test_format_duration():
     assert mm.format_duration(5000) == "1 u 23 min"
 
 
+def test_format_duration_rounds_up_sub_minute_durations():
+    # Fix-wave-2 item 7: 0 < seconds < 60 must round up to "1 min" rather
+    # than the misleading "0 min" a short recording used to render as.
+    assert mm.format_duration(5) == "1 min"
+    assert mm.format_duration(59) == "1 min"
+    # 0 and None are unchanged.
+    assert mm.format_duration(0) == "0 min"
+    assert mm.format_duration(None) == "onbekend"
+
+
 # ── split_audio ──
 
 

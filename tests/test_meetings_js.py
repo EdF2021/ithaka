@@ -355,6 +355,91 @@ def test_uploader_drain_with_nothing_enqueued_resolves_immediately():
     assert values == {"uploaded": 0, "failed": 0}
 
 
+# ── recordingUiState ────────────────────────────────────────────────────────
+
+def test_recording_ui_state_idle():
+    values = _node_eval(
+        """
+        const { recordingUiState } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify(recordingUiState(null)));
+        """
+    )
+    assert values == {"label": "Start recording", "disabled": False, "showDot": False}
+
+
+def test_recording_ui_state_recording():
+    # Fix-wave-2 item 1 (was [C] in final-review.md): a truthy `_rec` — as
+    # would still be set after minimizing a panel with a live recording —
+    # must render Stop + the red dot + disabled inputs, not "Start
+    # recording". This is the pure decision openPanel()'s restore path
+    # applies via _setRecordingUI(true) when `_rec` is set.
+    values = _node_eval(
+        """
+        const { recordingUiState } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify(recordingUiState({ id: 'm1', startedAt: 0 })));
+        """
+    )
+    assert values == {"label": "Stop", "disabled": True, "showDot": True}
+
+
+# ── nextPollDecision ─────────────────────────────────────────────────────────
+
+def test_next_poll_decision_success_resets_failures():
+    values = _node_eval(
+        """
+        const { nextPollDecision } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify(nextPollDecision(3, true)));
+        """
+    )
+    assert values == {"continue": True, "failures": 0}
+
+
+def test_next_poll_decision_continues_below_budget():
+    # Fix-wave-2 item 4: a single transient failure (and the next three)
+    # must not stop polling.
+    values = _node_eval(
+        """
+        const { nextPollDecision } = await import('./static/js/meetings.js');
+        const results = [0, 1, 2, 3].map((prev) => nextPollDecision(prev, false));
+        console.log(JSON.stringify(results));
+        """
+    )
+    assert values == [
+        {"continue": True, "failures": 1},
+        {"continue": True, "failures": 2},
+        {"continue": True, "failures": 3},
+        {"continue": True, "failures": 4},
+    ]
+
+
+def test_next_poll_decision_stops_at_five_consecutive_failures():
+    values = _node_eval(
+        """
+        const { nextPollDecision } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify(nextPollDecision(4, false)));
+        """
+    )
+    assert values == {"continue": False, "failures": 5}
+
+
+# ── rowAfterFinishFailure ────────────────────────────────────────────────────
+
+def test_row_after_finish_failure_sets_error_status():
+    # Fix-wave-2 item 6: a POST .../finish failure (e.g. 400 "Geen audio
+    # ontvangen" on a zero-byte recording) must not leave the row frozen on
+    # "Recording" with only a transient toast as explanation.
+    values = _node_eval(
+        """
+        const { rowAfterFinishFailure } = await import('./static/js/meetings.js');
+        const row = { id: 'm1', title: 't', status: 'recording', error: null };
+        console.log(JSON.stringify(rowAfterFinishFailure(row, 'Geen audio ontvangen')));
+        """
+    )
+    assert values == {
+        "id": "m1", "title": "t", "status": "error", "error": "Geen audio ontvangen",
+    }
+
+
 # ── mobileSheetStyle ─────────────────────────────────────────────────────
 
 def test_mobile_sheet_style_matches_notes_js_bottom_sheet():
