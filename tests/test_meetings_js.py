@@ -136,6 +136,31 @@ def test_status_label_error():
     assert values == "Error: STT niet geconfigureerd"
 
 
+def test_status_label_error_wins_regardless_of_status():
+    # Fix-wave-1, item 8: a non-empty m.error always wins over m.status — the
+    # backend GET already presents an interrupted row as status:"error", but
+    # a row that (for any reason) carries an error string under some other
+    # status must still surface it rather than the stale-phase heuristic that
+    # used to gate this (now removed).
+    values = _node_eval(
+        """
+        const { meetingStatusLabel } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify({
+          processingWithError: meetingStatusLabel({ status: 'processing', phase: 'transcribing', error: 'Verwerking geannuleerd' }),
+          doneWithError: meetingStatusLabel({ status: 'done', error: 'oeps' }),
+          errorNoMessage: meetingStatusLabel({ status: 'processing', error: '' }),
+          errorWhitespaceOnly: meetingStatusLabel({ status: 'processing', error: '   ' }),
+        }));
+        """
+    )
+    assert values == {
+        "processingWithError": "Error: Verwerking geannuleerd",
+        "doneWithError": "Error: oeps",
+        "errorNoMessage": "Processing",
+        "errorWhitespaceOnly": "Processing",
+    }
+
+
 # ── createChunkUploader ─────────────────────────────────────────────────────
 
 def test_uploader_sends_chunks_sequentially_in_order():
@@ -328,6 +353,84 @@ def test_uploader_drain_with_nothing_enqueued_resolves_immediately():
         """
     )
     assert values == {"uploaded": 0, "failed": 0}
+
+
+# ── mobileSheetStyle ─────────────────────────────────────────────────────
+
+def test_mobile_sheet_style_matches_notes_js_bottom_sheet():
+    # Fix-wave-1, item 7: copied verbatim from notes.js's openPanel mobile
+    # bottom-sheet block (~lines 1198-1207) so the meetings panel gets the
+    # same full-screen slide-up treatment on <=768px instead of falling back
+    # to the centered-card default (which overflows on a phone viewport).
+    values = _node_eval(
+        """
+        const { mobileSheetStyle } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify(mobileSheetStyle()));
+        """
+    )
+    assert values == {
+        "position": "fixed",
+        "inset": "0",
+        "width": "100%",
+        "maxWidth": "100%",
+        "zIndex": "170",
+        "borderRadius": "14px 14px 0 0",
+        "animation": "sheet-enter 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) both",
+        "transformOrigin": "bottom center",
+    }
+
+
+# ── escapeHtml / renderMeetingRow ───────────────────────────────────────────
+
+def test_escape_html_escapes_all_five_special_chars():
+    values = _node_eval(
+        """
+        const { escapeHtml } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify(escapeHtml(`<a href="x">'&'</a>`)));
+        """
+    )
+    assert values == "&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;"
+
+
+def test_render_meeting_row_escapes_id_in_data_attribute_and_href():
+    # Fix-wave-1, item 9: every interpolated server value in the row template
+    # (id included, not just title/date/status) must go through escapeHtml.
+    values = _node_eval(
+        """
+        const { renderMeetingRow } = await import('./static/js/meetings.js');
+        const html = renderMeetingRow({
+          id: '"><img src=x onerror=alert(1)>',
+          title: 'Team overleg',
+          status: 'done',
+          created_at: null,
+        });
+        console.log(JSON.stringify(html));
+        """
+    )
+    assert "<img src=x onerror=alert(1)>" not in values
+    assert "&quot;&gt;&lt;img src=x onerror=alert(1)&gt;" in values
+
+
+def test_render_meeting_row_reprocess_visible_for_error_and_done_only():
+    values = _node_eval(
+        """
+        const { renderMeetingRow } = await import('./static/js/meetings.js');
+        console.log(JSON.stringify({
+          error: renderMeetingRow({ id: '1', title: 't', status: 'error', error: 'boom' }).includes('meeting-reprocess-btn'),
+          done: renderMeetingRow({ id: '2', title: 't', status: 'done' }).includes('meeting-reprocess-btn'),
+          processing: renderMeetingRow({ id: '3', title: 't', status: 'processing', phase: 'writing' }).includes('meeting-reprocess-btn'),
+          recording: renderMeetingRow({ id: '4', title: 't', status: 'recording' }).includes('meeting-reprocess-btn'),
+          doneWhileRecording: renderMeetingRow({ id: '5', title: 't', status: 'done' }, { recording: true }).includes('meeting-reprocess-btn'),
+        }));
+        """
+    )
+    assert values == {
+        "error": True,
+        "done": True,
+        "processing": False,
+        "recording": False,
+        "doneWhileRecording": False,
+    }
 
 
 # ── MEETING_MAX_MS export ───────────────────────────────────────────────────

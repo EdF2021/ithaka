@@ -60,9 +60,17 @@ const _PHASE_LABELS = {
   saving: () => 'Saving',
 };
 
-/** Human-readable status label for a meeting row, per its status/phase. */
+/**
+ * Human-readable status label for a meeting row, per its status/phase.
+ *
+ * A non-empty `m.error` always wins, regardless of `m.status` — the backend
+ * GET already presents an interrupted row as `status:"error"` with a Dutch
+ * message, but this keeps the label correct even if a row ever carries an
+ * error string alongside some other status.
+ */
 export function meetingStatusLabel(m) {
   if (!m) return '';
+  if (typeof m.error === 'string' && m.error.trim()) return `Error: ${m.error}`;
   switch (m.status) {
     case 'recording':
       return 'Recording';
@@ -77,6 +85,25 @@ export function meetingStatusLabel(m) {
     default:
       return m.status || '';
   }
+}
+
+/**
+ * Inline style block applied to the meetings pane on mobile (<=768px) to
+ * turn it into a full-screen bottom sheet — copied verbatim from notes.js's
+ * openPanel (static/js/notes.js, ~lines 1198-1207) so the two panels behave
+ * identically on a phone viewport.
+ */
+export function mobileSheetStyle() {
+  return {
+    position: 'fixed',
+    inset: '0',
+    width: '100%',
+    maxWidth: '100%',
+    zIndex: '170',
+    borderRadius: '14px 14px 0 0',
+    animation: 'sheet-enter 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) both',
+    transformOrigin: 'bottom center',
+  };
 }
 
 /**
@@ -247,22 +274,9 @@ async function _fetchMeetings() {
   }
 }
 
-// Consecutive polls where a `processing` row reported no live phase — the
-// spec's restart case ("rij processing zonder job"): the in-memory job is
-// gone but the row never transitions to done/error on its own. Two polls
-// (~6s) is enough margin to not flag a job that just hasn't reported its
-// first phase yet, while still surfacing Reprocess for a genuinely stuck row.
-const _stalePhaseStreak = new Map();
-const STALE_PHASE_THRESHOLD = 2;
-
 async function _refreshMeeting(id) {
   try {
     const m = await _fetchJSON(`/api/meetings/${id}`);
-    if (m.status === 'processing' && !m.phase) {
-      _stalePhaseStreak.set(id, (_stalePhaseStreak.get(id) || 0) + 1);
-    } else {
-      _stalePhaseStreak.delete(id);
-    }
     const idx = _meetings.findIndex((x) => x.id === id);
     if (idx >= 0) _meetings[idx] = m; else _meetings.unshift(m);
     return m;
@@ -497,7 +511,6 @@ async function _deleteMeeting(id, title) {
   const idx = _meetings.findIndex((m) => m.id === id);
   if (idx >= 0) _meetings.splice(idx, 1);
   _polling.delete(id);
-  _stalePhaseStreak.delete(id);
   _renderList();
   try {
     await _fetchJSON(`/api/meetings/${id}`, { method: 'DELETE' });
@@ -511,7 +524,7 @@ async function _deleteMeeting(id, title) {
 
 // ── Rendering ────────────────────────────────────────────────────────────
 
-function _escapeHtml(s) {
+export function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
@@ -533,7 +546,7 @@ function _renderList() {
     list.innerHTML = '<div style="opacity:0.5;padding:12px 4px;font-size:12px;">No meetings yet</div>';
     return;
   }
-  list.innerHTML = _meetings.map((m) => _renderRow(m)).join('');
+  list.innerHTML = _meetings.map((m) => renderMeetingRow(m, { recording: !!_rec })).join('');
   _meetings.forEach((m) => {
     const row = list.querySelector(`[data-meeting-id="${m.id}"]`);
     if (!row) return;
@@ -543,26 +556,28 @@ function _renderList() {
   });
 }
 
-function _renderRow(m) {
-  const statusLabel = _escapeHtml(meetingStatusLabel(m));
-  // Also offer Reprocess on a stale `processing` row with no live phase — the
-  // spec's restart case: a server restart drops the in-memory job while the
-  // row stays `processing` forever with no other recovery path.
-  const staleProcessing = m.status === 'processing' && (_stalePhaseStreak.get(m.id) || 0) >= STALE_PHASE_THRESHOLD;
-  const canReprocess = (m.status === 'error' || m.status === 'done' || staleProcessing) && !_rec;
+/**
+ * Pure row-HTML builder (node-testable without a DOM). `recording` stands in
+ * for "a recording is currently in flight" (module state `!!_rec` in the
+ * browser) — Reprocess is suppressed while one is active.
+ */
+export function renderMeetingRow(m, { recording = false } = {}) {
+  const statusLabel = escapeHtml(meetingStatusLabel(m));
+  const canReprocess = (m.status === 'error' || m.status === 'done') && !recording;
+  const id = escapeHtml(m.id);
   const openMinutesBtn = m.document_id
     ? `<button type="button" class="memory-toolbar-btn meeting-open-minutes-btn">Open minutes</button>`
     : '';
-  const audioBtn = `<a class="memory-toolbar-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="/api/meetings/${m.id}/audio" download>Audio</a>`;
+  const audioBtn = `<a class="memory-toolbar-btn" style="text-decoration:none;display:inline-flex;align-items:center;" href="/api/meetings/${id}/audio" download>Audio</a>`;
   const reprocessBtn = canReprocess
     ? `<button type="button" class="memory-toolbar-btn meeting-reprocess-btn">Reprocess</button>`
     : '';
   const deleteBtn = `<button type="button" class="memory-toolbar-btn danger meeting-delete-btn">Delete</button>`;
   return `
-    <div class="meeting-row" data-meeting-id="${m.id}" style="padding:10px 4px;border-bottom:1px solid var(--border);">
+    <div class="meeting-row" data-meeting-id="${id}" style="padding:10px 4px;border-bottom:1px solid var(--border);">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">
-        <strong style="font-size:13px;">${_escapeHtml(m.title)}</strong>
-        <span style="font-size:11px;opacity:0.6;white-space:nowrap;">${_escapeHtml(_formatDate(m.created_at))}</span>
+        <strong style="font-size:13px;">${escapeHtml(m.title)}</strong>
+        <span style="font-size:11px;opacity:0.6;white-space:nowrap;">${escapeHtml(_formatDate(m.created_at))}</span>
       </div>
       <div style="font-size:11px;opacity:0.7;margin:2px 0 6px;">${statusLabel}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">${openMinutesBtn}${audioBtn}${reprocessBtn}${deleteBtn}</div>
@@ -629,6 +644,14 @@ export function openPanel() {
       <div id="meeting-list"></div>
     </div>
   `;
+
+  // On mobile open as a full-screen bottom sheet (slide up), not the
+  // desktop side panel — mirrors notes.js's openPanel. Without this the
+  // pane fell back to the centered-card default (min(880px,92vw) wide),
+  // which overflows/squeezes badly on a phone viewport.
+  if (window.innerWidth <= 768) {
+    Object.assign(pane.style, mobileSheetStyle());
+  }
 
   const backdrop = document.createElement('div');
   backdrop.className = 'notes-pane-backdrop';

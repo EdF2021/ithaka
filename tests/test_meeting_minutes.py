@@ -168,6 +168,46 @@ async def test_condense_empty_returns_empty_without_calls():
     assert call.calls == []
 
 
+async def test_condense_non_shrinking_work_raises_runtime_error():
+    # A `call` that always returns something longer than what it was given
+    # means `work` (carry + tail) never shrinks between recursion steps —
+    # without the guard this recurses until Python's stack blows up instead
+    # of failing fast with a clear Dutch error.
+    class _GrowingCall:
+        def __init__(self):
+            self.calls = 0
+
+        async def __call__(self, messages):
+            self.calls += 1
+            total_in = sum(len(m.get("content", "")) for m in messages)
+            # Always longer than everything it was just given, so the next
+            # carry is at least as long as the head it replaced.
+            return "y" * (total_in * 2)
+
+    call = _GrowingCall()
+    text = "x" * 20000
+
+    with pytest.raises(RuntimeError, match="Condensatie convergeert niet"):
+        await mm.condense_transcript(text, call)
+
+    # Bounded: must raise well before any pathological unbounded recursion.
+    assert call.calls <= 60
+
+
+async def test_condense_normal_shrinking_case_unaffected():
+    # Existing recursion behaviour (test_condense_long_recurses_with_carry)
+    # must stay green: the guard must not fire on a text that does shrink.
+    call = _SequentialCall()
+    text = "a" * 15000
+    depths = []
+
+    result = await mm.condense_transcript(text, call, on_depth=depths.append)
+
+    assert depths == [0, 1, 2]
+    assert len(call.calls) == 3
+    assert result == "S3"
+
+
 # ── correct_transcript ──
 
 
@@ -189,6 +229,50 @@ async def test_correct_transcript_returns_stripped_reply_on_success():
     system = call.calls[0][0]["content"]
     assert mm.CORRECT_SYSTEM in system
     assert DUTCH_OUTPUT_RULE in system
+
+
+# ── minutes_system_prompt / minutes_user_message ──
+
+
+def test_minutes_system_prompt_contains_policy_and_dutch_rule():
+    prompt = mm.minutes_system_prompt()
+
+    assert mm.MINUTES_SYSTEM in prompt
+    assert DUTCH_OUTPUT_RULE in prompt
+    assert UNTRUSTED_CONTEXT_POLICY in prompt
+
+
+def test_minutes_user_message_shape_and_fields():
+    msg = mm.minutes_user_message(
+        condensed="dit is de condensed tekst",
+        title="Sprint review",
+        agenda=None,
+        date_str="04-09-2026",
+        duration_str="45 min",
+    )
+
+    assert msg["role"] == "user"
+    content = msg["content"]
+    assert "Titel: Sprint review" in content
+    assert "Datum: 04-09-2026" in content
+    assert "Duur: 45 min" in content
+    assert "Bron:" in content
+    assert "dit is de condensed tekst" in content
+    assert "Agenda:" not in content
+
+
+def test_minutes_user_message_includes_agenda_when_given():
+    msg = mm.minutes_user_message(
+        condensed="condensed",
+        title="Sprint review",
+        agenda="1. Punt een\n2. Punt twee",
+        date_str="04-09-2026",
+        duration_str="45 min",
+    )
+
+    content = msg["content"]
+    assert "Agenda:" in content
+    assert "1. Punt een\n2. Punt twee" in content
 
 
 # ── validate_minutes ──
@@ -332,9 +416,11 @@ def test_format_duration():
 def test_split_audio_builds_ffmpeg_cmd_and_returns_sorted(tmp_path, monkeypatch):
     monkeypatch.setattr(mm.shutil, "which", lambda name: "/usr/bin/ffmpeg")
     calls = []
+    kwargs_seen = []
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        kwargs_seen.append(kwargs)
         workdir = Path(cmd[-1]).parent
         (workdir / "seg_001.ogg").write_bytes(b"a")
         (workdir / "seg_000.ogg").write_bytes(b"a")
@@ -349,11 +435,29 @@ def test_split_audio_builds_ffmpeg_cmd_and_returns_sorted(tmp_path, monkeypatch)
 
     assert [s.name for s in segs] == ["seg_000.ogg", "seg_001.ogg"]
     assert len(calls) == 1
-    cmd = calls[0]
-    assert cmd[0] == "/usr/bin/ffmpeg"
-    assert cmd[cmd.index("-i") + 1] == str(src)
-    assert cmd[cmd.index("-segment_time") + 1] == "600"
-    assert cmd[-1] == str(workdir / "seg_%03d.ogg")
+    assert calls[0] == [
+        "/usr/bin/ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(src),
+        "-vn",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "32k",
+        "-f",
+        "segment",
+        "-segment_time",
+        "600",
+        "-reset_timestamps",
+        "1",
+        str(workdir / "seg_%03d.ogg"),
+    ]
+    assert kwargs_seen == [{"capture_output": True, "text": True, "timeout": 900}]
 
 
 def test_split_audio_raises_on_nonzero(tmp_path, monkeypatch):

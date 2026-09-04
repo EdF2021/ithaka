@@ -167,13 +167,25 @@ async def condense_transcript(
     depth: int = 0,
     carry: str = "",
     on_depth: Optional[Callable[[int], Any]] = None,
+    _prev_len: Optional[int] = None,
 ) -> str:
-    """Ed's head/tail recursion: condense in growing chunks, carrying the previous partial forward."""
+    """Ed's head/tail recursion: condense in growing chunks, carrying the previous partial forward.
+
+    Recursion guard: a misbehaving `call` (e.g. one that echoes back more
+    text than it was given) would otherwise recurse until the interpreter's
+    stack blows up on a 40-minute meeting. `depth > 50` is a hard ceiling;
+    `_prev_len` — the previous step's `len(work)`, threaded through as a
+    keyword-only so callers never pass it directly — catches non-convergence
+    earlier: if `work` doesn't shrink between two consecutive steps, further
+    recursion can only make things worse.
+    """
     work = (
         (carry.strip() + "\n\n" + text.strip()).strip() if carry else text.strip()
     )
     if not work:
         return ""
+    if depth > 50 or (_prev_len is not None and len(work) >= _prev_len):
+        raise RuntimeError("Condensatie convergeert niet")
     if on_depth:
         on_depth(depth)
     split = condense_split_for_depth(depth)
@@ -182,7 +194,8 @@ async def condense_transcript(
     head, tail = work[:split], work[split:]
     partial = (await call(_messages(CONDENSE_PART_SYSTEM, head))).strip()
     return await condense_transcript(
-        tail, call, depth=depth + 1, carry=partial, on_depth=on_depth
+        tail, call, depth=depth + 1, carry=partial, on_depth=on_depth,
+        _prev_len=len(work),
     )
 
 
@@ -587,7 +600,7 @@ async def _transcribe_segments(segs: list[Path], entry: dict, stt, key_terms: Op
 
     async def _one(i: int, seg: Path):
         async with sem:
-            data = seg.read_bytes()
+            data = await asyncio.to_thread(seg.read_bytes)
             text = await asyncio.to_thread(
                 stt.transcribe, data, prompt=prompt, timeout=600, filename=seg.name
             )
@@ -738,6 +751,24 @@ async def _process_job(
 # gated by `max_age_seconds` so a job that is still running is never touched.
 # --------------------------------------------------------------------------
 
+_MEETINGJOB_DIR_RE = re.compile(r"^\.meetingjob-(.+)$")
+
+
+def _meeting_id_has_running_job(meeting_id: str) -> bool:
+    """True if some entry in `_active_jobs` is a running job for this meeting.
+
+    Guards the janitor against removing a `.meetingjob-<meeting_id>` workdir
+    out from under a job that is genuinely still running but happens to have
+    gone `max_age_seconds` without touching a file in it (e.g. stuck mid-LLM
+    call during the condensing phase) — mtime alone can't distinguish that
+    from an abandoned directory left by a hard process kill.
+    """
+    return any(
+        entry.get("status") == "running" and entry.get("meeting_id") == meeting_id
+        for entry in _active_jobs.values()
+    )
+
+
 def cleanup_orphaned_meeting_audio(db_session_factory, *, max_age_seconds: int = 3600) -> tuple[int, int]:
     directory = Path(MEETING_AUDIO_DIR)
     if not directory.is_dir():
@@ -799,6 +830,11 @@ def cleanup_orphaned_meeting_audio(db_session_factory, *, max_age_seconds: int =
         freed += size
 
     for path in dir_candidates:
+        match = _MEETINGJOB_DIR_RE.match(path.name)
+        if match and _meeting_id_has_running_job(match.group(1)):
+            # A live job owns this workdir regardless of its age — never
+            # race its own `finally: shutil.rmtree(workdir, ...)` cleanup.
+            continue
         try:
             dir_size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
         except OSError:
