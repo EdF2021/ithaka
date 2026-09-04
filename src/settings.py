@@ -76,6 +76,9 @@ DEFAULT_SETTINGS = {
     "realtime_vad_silence_ms": 500,
     "realtime_noise_reduction": "far_field",
     "realtime_max_minutes": 10,
+    # Fase 2: one delegation tool (ask_ithaka) in the Realtime session. See
+    # docs/superpowers/specs/2026-09-04-realtime-voice-tools-design.md.
+    "realtime_tools_enabled": True,
     "realtime_instructions": (
         'You are a realtime voice AI. Personality: warm, witty, quick-talking; '
         'conversationally human but never claim to be human or to take physical '

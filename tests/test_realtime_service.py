@@ -52,6 +52,7 @@ def _settings(**overrides):
         "realtime_noise_reduction": "far_field",
         "realtime_max_minutes": 10,
         "realtime_instructions": "Antwoord in het Nederlands.",
+        "realtime_tools_enabled": True,
     }
     base.update(overrides)
     return base
@@ -59,7 +60,7 @@ def _settings(**overrides):
 
 def test_build_session_config_shape():
     service = RealtimeService()
-    cfg = service.build_session_config(_settings())
+    cfg = service.build_session_config(_settings(realtime_tools_enabled=False))
 
     assert cfg["type"] == "realtime"
     assert cfg["model"] == "gpt-realtime-2.1-mini"
@@ -206,3 +207,20 @@ def test_create_session_raises_on_network_failure(monkeypatch):
 
     with pytest.raises(ValueError, match="Kon geen verbinding maken"):
         service.create_session()
+
+
+def test_build_session_config_declares_ask_ithaka_tool():
+    from services.realtime.realtime_service import ASK_ITHAKA_TOOL
+    cfg = RealtimeService().build_session_config(_settings(realtime_tools_enabled=True))
+    assert cfg["tools"] == [ASK_ITHAKA_TOOL]
+    assert cfg["tool_choice"] == "auto"
+    assert ASK_ITHAKA_TOOL["type"] == "function"
+    assert ASK_ITHAKA_TOOL["name"] == "ask_ithaka"
+    assert ASK_ITHAKA_TOOL["parameters"]["required"] == ["question"]
+    assert "Momentje" in ASK_ITHAKA_TOOL["description"]
+
+
+def test_build_session_config_without_tools_when_disabled():
+    cfg = RealtimeService().build_session_config(_settings(realtime_tools_enabled=False))
+    assert cfg["tools"] == []
+    assert "tool_choice" not in cfg
