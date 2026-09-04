@@ -149,6 +149,7 @@ def test_create_session_mints_client_secret_and_never_leaks_api_key(monkeypatch)
         "max_minutes": 10,
         "model": "gpt-realtime-2.1-mini",
         "calls_url": "https://api.openai.com/v1/realtime/calls",
+        "transcription": None,
     }
     assert "sk-super-secret" not in str(result)
     assert captured["url"] == "https://api.openai.com/v1/realtime/client_secrets"
@@ -244,3 +245,18 @@ def test_build_session_config_no_transcription_when_empty():
     service = RealtimeService()
     cfg = service.build_session_config(_settings(realtime_transcription_model="  "))
     assert "transcription" not in cfg["audio"]["input"]
+
+
+def test_create_session_returns_transcription_config(monkeypatch):
+    service = RealtimeService()
+    service._load_settings = lambda: _settings(
+        realtime_transcription_model="gpt-realtime-whisper", stt_language="nl")
+    _wire_fake_db(monkeypatch, ep=_FakeEp(api_key="sk-x"))
+
+    class _Resp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"value": "ek_x", "expires_at": 1}
+    monkeypatch.setattr("services.realtime.realtime_service.httpx.post", lambda *a, **k: _Resp())
+    result = service.create_session()
+    assert result["transcription"] == {"model": "gpt-realtime-whisper", "language": "nl"}

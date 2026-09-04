@@ -72,6 +72,20 @@ export function shouldCancelForBargeIn(state, action) {
  * @param {string} callId
  * @param {string|object} output
  */
+/**
+ * session.update event that switches on input transcription, or null when
+ * the server returned no transcription config (setting empty = off). Sent
+ * once when the data channel opens: the client_secrets mint ignores
+ * audio.input.transcription, session.update does apply it (verified live).
+ */
+export function buildTranscriptionUpdateEvent(transcription) {
+  if (!transcription || !transcription.model) return null
+  return {
+    type: 'session.update',
+    session: { type: 'realtime', audio: { input: { transcription } } },
+  }
+}
+
 export function buildFunctionCallOutputEvents(callId, output) {
   const text = typeof output === 'string' ? output : JSON.stringify(output)
   return [
@@ -114,7 +128,7 @@ const RealtimeVoice = {
         const detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message)
         throw new Error(detail || 'Kon geen Realtime-sessie starten')
       }
-      const { client_secret, max_minutes, calls_url } = await sessRes.json()
+      const { client_secret, max_minutes, calls_url, transcription } = await sessRes.json()
 
       // Re-check after every await below: a concurrent deactivate() (the
       // user re-toggling, or toggling while a mic-permission prompt is
@@ -144,6 +158,10 @@ const RealtimeVoice = {
       const dc = pc.createDataChannel('oai-events')
       this._dc = dc
       dc.onmessage = (e) => this._onDataChannelMessage(e.data)
+      dc.onopen = () => {
+        const update = buildTranscriptionUpdateEvent(transcription)
+        if (update && this._dc === dc) { try { dc.send(JSON.stringify(update)) } catch (e) { /* ignore */ } }
+      }
 
       // Ruling (plan Task 4): detect a mid-session drop and fall back to a
       // visible error instead of silently looking "connected" while dead.

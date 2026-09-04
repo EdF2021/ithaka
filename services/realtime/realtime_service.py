@@ -174,6 +174,11 @@ class RealtimeService:
             "max_minutes": settings["realtime_max_minutes"],
             "model": session_config["model"],
             "calls_url": base_url + "/realtime/calls",
+            # The client_secrets mint does not apply audio.input.transcription
+            # to the session (verified live 2026-09-04: session.created echoes
+            # transcription: null), so the browser sends it as a session.update
+            # right after the data channel opens. None = transcription off.
+            "transcription": session_config["audio"]["input"].get("transcription"),
         }
 
 
