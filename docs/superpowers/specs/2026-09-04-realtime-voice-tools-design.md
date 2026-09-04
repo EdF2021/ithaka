@@ -182,5 +182,8 @@ async def answer_question(question: str, owner: str | None) -> str
   alleen het preamble-patroon is gedocumenteerd).
 - Persistente opslag van het Realtime-transcript (fase-1-restpunt, ongewijzigd).
 - Tool-approval/plan-mode in de Realtime-flow: `answer_question` draait met de standaard
-  tool-policy van de agent-loop; interactieve goedkeuringen zijn in een spraakgesprek niet
-  zinvol en worden door de loop zelf als "niet goedgekeurd" afgehandeld.
+  tool-policy van de agent-loop; er is géén generieke goedkeuringspoort (alleen
+  `agent_email_confirm`/`auto_approve_skills`), dus voor een admin-eigenaar kunnen ook
+  shell/python/write_file via spraak draaien. Bewuste keuze voor fase 2: de server logt elke
+  tool-aanroep (`realtime_ask`-logger, tool-naam per `tool_start`-event); een zichtbare
+  tool-trail in het transcript en/of een aparte Realtime-tool-policy is een follow-up.
