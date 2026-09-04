@@ -308,14 +308,22 @@ class STTService:
                 return None
         return self._whisper_model
 
-    def _transcribe_local(self, audio_bytes: bytes, language: str = "") -> Optional[str]:
+    def _transcribe_local(
+        self,
+        audio_bytes: bytes,
+        language: str = "",
+        *,
+        prompt: Optional[str] = None,
+        filename: str = "audio.webm",
+    ) -> Optional[str]:
         model = self._get_whisper()
         if not model:
             return None
         tmp_path = None
         try:
             # Write to temp file (faster-whisper needs a file path or file-like)
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            suffix = Path(filename).suffix or ".webm"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
@@ -325,6 +333,8 @@ class STTService:
             kwargs = {"vad_filter": True}
             if language:
                 kwargs["language"] = language
+            if prompt:
+                kwargs["initial_prompt"] = prompt
 
             segments, info = model.transcribe(tmp_path, **kwargs)
             raw = " ".join(seg.text.strip() for seg in segments)
@@ -343,7 +353,17 @@ class STTService:
 
     # ── API endpoint ──
 
-    def _transcribe_api(self, audio_bytes: bytes, endpoint_id: str, model: str, language: str = "") -> Optional[str]:
+    def _transcribe_api(
+        self,
+        audio_bytes: bytes,
+        endpoint_id: str,
+        model: str,
+        language: str = "",
+        *,
+        prompt: Optional[str] = None,
+        timeout: float = 60.0,
+        filename: str = "audio.webm",
+    ) -> Optional[str]:
         from src.database import SessionLocal, ModelEndpoint
 
         db = SessionLocal()
@@ -363,13 +383,25 @@ class STTService:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        files = {"file": ("audio.webm", io.BytesIO(audio_bytes), "audio/webm")}
+        suffix = Path(filename).suffix.lower()
+        if suffix == ".ogg":
+            mime = "audio/ogg"
+        elif suffix == ".mp3":
+            mime = "audio/mpeg"
+        elif suffix == ".wav":
+            mime = "audio/wav"
+        else:
+            mime = "audio/webm"
+
+        files = {"file": (filename, io.BytesIO(audio_bytes), mime)}
         data = {"model": model or "whisper-1"}
         if language:
             data["language"] = language
+        if prompt:
+            data["prompt"] = prompt
 
         try:
-            r = httpx.post(url, headers=headers, files=files, data=data, timeout=60)
+            r = httpx.post(url, headers=headers, files=files, data=data, timeout=timeout)
             r.raise_for_status()
             result = r.json()
             raw = result.get("text", "")
@@ -389,7 +421,14 @@ class STTService:
 
     # ── Public interface ──
 
-    def transcribe(self, audio_bytes: bytes) -> Optional[str]:
+    def transcribe(
+        self,
+        audio_bytes: bytes,
+        *,
+        prompt: Optional[str] = None,
+        timeout: float = 60.0,
+        filename: str = "audio.webm",
+    ) -> Optional[str]:
         self.last_error = None
         settings = self._load_settings()
         if settings.get("stt_enabled") is False:
@@ -406,10 +445,13 @@ class STTService:
             return ""
 
         if provider == "local":
-            return self._transcribe_local(audio_bytes, language)
+            return self._transcribe_local(audio_bytes, language, prompt=prompt, filename=filename)
         elif provider.startswith("endpoint:"):
             endpoint_id = provider.split(":", 1)[1]
-            return self._transcribe_api(audio_bytes, endpoint_id, model, language)
+            return self._transcribe_api(
+                audio_bytes, endpoint_id, model, language,
+                prompt=prompt, timeout=timeout, filename=filename,
+            )
         else:
             logger.error(f"Unknown STT provider: {provider}")
             return None
