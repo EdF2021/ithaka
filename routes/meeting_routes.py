@@ -16,6 +16,7 @@ Spec: docs/superpowers/specs/2026-09-04-meeting-recorder-design.md
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from pathlib import Path
 
@@ -100,6 +101,16 @@ def _serialize(row: Meeting, job: dict | None) -> dict:
         data["total"] = job.get("total")
         data["depth"] = job.get("depth")
     return data
+
+
+_META_LINE_RE = re.compile(r"^\*\*Datum:\*\*.*$\n?", re.M)
+
+
+def _strip_meta_line(markdown: str) -> str:
+    """Remove the ``**Datum:** … · **Duur:** … · **Opname:** …`` line the
+    minutes job writes under the title; the visual-report hero shows the
+    same facts in its stats bar."""
+    return _META_LINE_RE.sub("", markdown or "", count=1)
 
 
 def setup_meeting_routes(get_current_user, SessionLocal) -> APIRouter:
@@ -338,7 +349,10 @@ def setup_meeting_routes(get_current_user, SessionLocal) -> APIRouter:
             title = row.title or document.title or "Notulen"
             created = row.created_at.strftime("%d-%m-%Y") if row.created_at else ""
             duration = format_duration(row.duration_seconds)
-            content = document.current_content
+            # The Document's own meta line (**Datum:** · **Duur:** · **Opname:**)
+            # duplicates the hero stats bar and would get the template's
+            # drop-cap as the first paragraph — drop it from the view only.
+            content = _strip_meta_line(document.current_content)
         finally:
             db_session.close()
 

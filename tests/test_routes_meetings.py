@@ -630,7 +630,7 @@ def test_delete_cross_owner_is_404(ts):
 
 # ---- GET /api/meetings/{id}/minutes (styled visual-report view) ----
 
-def _attach_document(ts, meeting_id, content="# Notulen: Weekly\n\n## Samenvatting\n\nKort overleg.\n"):
+def _attach_document(ts, meeting_id, content="# Notulen: Weekly\n\n**Datum:** 01-01-2026  ·  **Duur:** 2 min  ·  **Opname:** Ithaka\n\n## Samenvatting\n\nKort overleg.\n"):
     s = ts()
     try:
         doc_id = "doc-" + meeting_id
@@ -660,6 +660,8 @@ def test_minutes_view_renders_visual_report_html(ts):
     # the visual-report chrome carries the stats we pass (duration label)
     assert "2 min" in body
     assert "Ithaka Meetings" in body
+    # the Document's own meta line is dropped from the view (hero shows it)
+    assert "Opname:" not in body
 
 
 def test_minutes_view_without_document_is_404(ts):
