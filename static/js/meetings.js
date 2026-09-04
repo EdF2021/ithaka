@@ -741,6 +741,12 @@ export function openPanel() {
   // which overflows/squeezes badly on a phone viewport.
   if (window.innerWidth <= 768) {
     Object.assign(pane.style, mobileSheetStyle());
+    // The global mobile rule hides every .modal-minimize-btn (!important)
+    // because sheets are meant to be swiped down. This panel has no swipe
+    // gesture, so the minimize button is its only way off the screen on a
+    // phone — keep it visible there.
+    const mb = pane.querySelector('#meetings-minimize-btn');
+    if (mb) mb.style.setProperty('display', 'inline-flex', 'important');
   }
 
   const backdrop = document.createElement('div');
