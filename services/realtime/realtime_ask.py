@@ -14,6 +14,9 @@ import asyncio
 import json
 import logging
 import re
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
 
 from src.agent_loop import stream_agent_loop
 from src.task_endpoint import resolve_task_candidates
@@ -24,14 +27,25 @@ logger = logging.getLogger(__name__)
 ASK_TIMEOUT_S = 60.0
 ASK_MAX_ROUNDS = 6
 ASK_MAX_CHARS = 1500
+# One persistent, ordinary chat session per owner backs every voice ask:
+# create_document refuses without a session ("No session context"), and a
+# pending send_email approval (agent_email_confirm) is only reachable from
+# a chat session. Named so the user can find it in the sidebar.
+VOICE_SESSION_NAME = "Realtime gesprek"
+VOICE_SESSION_FOLDER = "Realtime"
 
 ASK_SYSTEM_PROMPT = (
-    "Je bent Ithaka en beantwoordt een vraag die via een gesproken gesprek binnenkomt. "
-    "Het antwoord wordt voorgelezen: antwoord in het Nederlands, beknopt (maximaal "
-    "ongeveer 80 woorden), als platte lopende tekst zonder markdown, opsommingstekens, "
-    "koppen of links. Gebruik je tools (zoeken, notities, agenda, e-mail, documenten) "
-    "wanneer de vraag actuele of persoonlijke informatie vereist, en vat het resultaat "
-    "samen in plaats van het te citeren. Geef geen denkstappen, alleen het antwoord."
+    "Je bent Ithaka en handelt een vraag of opdracht af die via een gesproken gesprek "
+    "binnenkomt. Het antwoord wordt voorgelezen: antwoord in het Nederlands, beknopt "
+    "(maximaal ongeveer 80 woorden), als platte lopende tekst zonder markdown, "
+    "opsommingstekens, koppen of links. Gebruik je tools (zoeken, notities, agenda, "
+    "e-mail, documenten) wanneer de vraag actuele of persoonlijke informatie vereist, en "
+    "vat het resultaat samen in plaats van het te citeren. Vraagt de gebruiker een actie "
+    "(e-mail versturen, document maken, afspraak plannen, notitie of taak toevoegen), voer "
+    "die dan uit met de bijbehorende tool — schrijf zelf een passende tekst als die "
+    "ontbreekt, vraag niet om bevestiging — en bevestig kort wat je gedaan hebt. Staat een "
+    "e-mail na het versturen klaar ter goedkeuring (pending), zeg dan dat die in de chat "
+    f"'{VOICE_SESSION_NAME}' wacht op akkoord. Geef geen denkstappen, alleen het antwoord."
 )
 
 _WS = re.compile(r"\s+")
@@ -67,6 +81,62 @@ async def _select_tools(question: str) -> set[str]:
     return tools
 
 
+def _voice_session_id(owner, endpoint_url: str, model: str) -> Optional[str]:
+    """Find or create the owner's persistent "Realtime gesprek" chat session.
+
+    Returns None (and logs) if the database is unavailable — the ask then
+    still runs, only document creation and email approval degrade.
+    """
+    from core.database import Session as DbSession
+    from src.database import SessionLocal
+
+    db = None
+    try:
+        db = SessionLocal()
+        existing = (
+            db.query(DbSession)
+            .filter(DbSession.owner == owner, DbSession.name == VOICE_SESSION_NAME)
+            .order_by(DbSession.created_at.desc())
+            .first()
+        )
+        if existing:
+            return existing.id
+        session_id = str(uuid.uuid4())
+        mgr = _session_manager()
+        if mgr is not None:
+            # The manager inserts the DB row AND primes its in-memory cache,
+            # so the chat sidebar shows the session immediately.
+            mgr.ensure_task_session(session_id, VOICE_SESSION_NAME, endpoint_url, model, owner=owner)
+        else:
+            now = datetime.now(timezone.utc)
+            db.add(DbSession(
+                id=session_id,
+                name=VOICE_SESSION_NAME,
+                endpoint_url=endpoint_url,
+                model=model,
+                owner=owner,
+                folder=VOICE_SESSION_FOLDER,
+                created_at=now,
+                updated_at=now,
+            ))
+            db.commit()
+        return session_id
+    except Exception as e:
+        logger.warning("ask_ithaka: could not resolve voice session for %s: %s", owner, e)
+        return None
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _session_manager():
+    try:
+        from src.ai_interaction import get_session_manager
+        return get_session_manager()
+    except Exception:
+        return None
+
+
 async def _collect(question: str, owner, candidates) -> str:
     url, model, headers = candidates[0]
     fallbacks = list(candidates[1:])
@@ -75,13 +145,14 @@ async def _collect(question: str, owner, candidates) -> str:
         {"role": "user", "content": question},
     ]
     relevant_tools = await _select_tools(question)
+    session_id = await asyncio.to_thread(_voice_session_id, owner, url, model)
     parts: list[str] = []
     async for event_str in stream_agent_loop(
         endpoint_url=url,
         model=model,
         messages=messages,
         headers=headers,
-        session_id=None,
+        session_id=session_id,
         owner=owner,
         max_rounds=ASK_MAX_ROUNDS,
         fallbacks=fallbacks,

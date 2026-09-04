@@ -21,11 +21,14 @@ ASK_ITHAKA_TOOL = {
     "type": "function",
     "name": "ask_ithaka",
     "description": (
-        "Stel een vraag aan Ithaka, de assistent met toegang tot internet-zoeken, "
-        "notities, agenda, e-mail, documenten en andere tools. Gebruik dit voor elke "
-        "vraag die actuele feiten, persoonlijke gegevens van de gebruiker of opzoekwerk "
-        "vereist — gok niet. Zeg vóór de aanroep één korte zin zoals 'Momentje, ik zoek "
-        "het op.' Vat het antwoord daarna kort samen in het Nederlands."
+        "Geef een vraag of opdracht door aan Ithaka, de assistent die zelf kan handelen: "
+        "internet zoeken, e-mail lezen en versturen, documenten aanmaken, agenda-afspraken "
+        "plannen, notities en taken beheren, afbeeldingen genereren. Gebruik dit voor elke "
+        "vraag die actuele feiten, persoonlijke gegevens of opzoekwerk vereist én voor elke "
+        "actie die de gebruiker vraagt — zeg nooit dat je iets niet kunt, geef het door. "
+        "Geef de opdracht letterlijk en volledig door, inclusief ontvanger, onderwerp, "
+        "inhoud, datum en tijd. Zeg vóór de aanroep één korte zin zoals 'Momentje, ik "
+        "regel het.' Vat het resultaat daarna kort samen in het Nederlands."
     ),
     "parameters": {
         "type": "object",
