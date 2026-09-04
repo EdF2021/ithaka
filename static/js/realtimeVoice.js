@@ -248,11 +248,14 @@ const RealtimeVoice = {
         break
       }
       case 'response_done':
-        this._state = 'listening'
+        // The function-call turn ends with its own response.done while the
+        // /api/realtime/ask fetch is still in flight — keep the 'tool' state
+        // until _handleFunctionCall finishes.
+        if (this._state !== 'tool') this._state = 'listening'
         this._notify()
         break
       case 'function_call':
-        this._toolChain = this._toolChain.then(() => this._handleFunctionCall(action)).catch(() => {})
+        this._toolChain = this._toolChain.then(() => this._handleFunctionCall(action)).catch((e) => { console.error('RealtimeVoice: tool call failed:', e) })
         break
       case 'error':
         console.error('RealtimeVoice: server error:', action.message)
@@ -285,9 +288,11 @@ const RealtimeVoice = {
           if (!this._active) return
           if (res.ok) {
             const data = await res.json()
+            if (!this._active) return
             output = { answer: data.answer || '' }
           } else {
             const err = await res.json().catch(() => ({}))
+            if (!this._active) return
             const detail = err.detail && (typeof err.detail === 'string' ? err.detail : err.detail.message)
             output = { error: detail || 'Het opzoeken is mislukt' }
           }

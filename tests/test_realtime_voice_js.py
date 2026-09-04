@@ -143,3 +143,23 @@ def test_build_function_call_output_events_stringifies_non_string():
         """
     )
     assert values == '{"error":"x"}'
+
+
+def test_response_done_keeps_tool_state_while_fetch_in_flight():
+    # OpenAI ends the function-call turn with response.done while the
+    # /api/realtime/ask fetch is still running — the indicator must stay on
+    # 'tool' until _handleFunctionCall finishes (task-4 review finding).
+    values = _node_eval(
+        """
+        const mod = await import('./static/js/realtimeVoice.js');
+        const rt = mod.default;
+        rt._active = true; rt._state = 'tool';
+        rt._dc = { readyState: 'open', send() {} };
+        rt._onDataChannelMessage(JSON.stringify({ type: 'response.done' }));
+        const kept = rt._state;
+        rt._state = 'speaking';
+        rt._onDataChannelMessage(JSON.stringify({ type: 'response.done' }));
+        console.log(JSON.stringify([kept, rt._state]));
+        """
+    )
+    assert values == ["tool", "listening"]
