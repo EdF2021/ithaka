@@ -17,6 +17,7 @@ import re
 
 from src.agent_loop import stream_agent_loop
 from src.task_endpoint import resolve_task_candidates
+from src.tool_index import ASSISTANT_ALWAYS_AVAILABLE, get_tool_index
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,36 @@ ASK_SYSTEM_PROMPT = (
 
 _WS = re.compile(r"\s+")
 
+# Tools every voice question can reach regardless of what RAG retrieves:
+# the assistant's always-available set (email, calendar, notes, tasks,
+# documents, web_search, memory, ...) plus web_fetch for follow-up reads.
+ASK_BASE_TOOLS = frozenset(ASSISTANT_ALWAYS_AVAILABLE) | {"web_search", "web_fetch"}
+_TOOL_SELECT_TIMEOUT_S = 2.5
+
+
+async def _select_tools(question: str) -> set[str]:
+    """Compose the relevant-tools set for one voice question.
+
+    Passing an explicit, non-empty set matters: a one-turn Dutch question
+    trips the agent loop's English-only "low-signal" classifier, and with
+    no caller-provided tools the loop takes its direct-reply path — no
+    tools at all (observed on prod 2026-09-04: every ask_ithaka call
+    answered in ~1 s without web_search/email/calendar). Same pattern as
+    src/task_scheduler.py's compose_task_relevant_tools.
+    """
+    tools = set(ASK_BASE_TOOLS)
+    try:
+        tool_idx = await asyncio.wait_for(asyncio.to_thread(get_tool_index), _TOOL_SELECT_TIMEOUT_S)
+        if tool_idx:
+            retrieved = await asyncio.wait_for(
+                asyncio.to_thread(tool_idx.get_tools_for_query, question, 8),
+                _TOOL_SELECT_TIMEOUT_S,
+            )
+            tools |= set(retrieved or ())
+    except Exception as e:  # index cold / unavailable — base set still covers the common asks
+        logger.info("ask_ithaka tool RAG unavailable (%s); using base tool set", e)
+    return tools
+
 
 async def _collect(question: str, owner, candidates) -> str:
     url, model, headers = candidates[0]
@@ -43,6 +74,7 @@ async def _collect(question: str, owner, candidates) -> str:
         {"role": "system", "content": ASK_SYSTEM_PROMPT},
         {"role": "user", "content": question},
     ]
+    relevant_tools = await _select_tools(question)
     parts: list[str] = []
     async for event_str in stream_agent_loop(
         endpoint_url=url,
@@ -53,6 +85,7 @@ async def _collect(question: str, owner, candidates) -> str:
         owner=owner,
         max_rounds=ASK_MAX_ROUNDS,
         fallbacks=fallbacks,
+        relevant_tools=relevant_tools,
     ):
         if not event_str.startswith("data: ") or event_str.startswith("data: [DONE]"):
             continue
