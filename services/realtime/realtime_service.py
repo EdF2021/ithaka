@@ -62,6 +62,12 @@ class RealtimeService:
             "realtime_max_minutes": saved.get("realtime_max_minutes", 10),
             "realtime_instructions": saved.get("realtime_instructions", ""),
             "realtime_tools_enabled": saved.get("realtime_tools_enabled", True),
+            # Input-transcription model for the session (see build_session_config);
+            # stt_language rides along as the transcription language hint.
+            "realtime_transcription_model": saved.get(
+                "realtime_transcription_model", "gpt-realtime-whisper"
+            ),
+            "stt_language": saved.get("stt_language", ""),
         }
 
     @property

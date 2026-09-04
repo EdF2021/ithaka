@@ -260,3 +260,13 @@ def test_create_session_returns_transcription_config(monkeypatch):
     monkeypatch.setattr("services.realtime.realtime_service.httpx.post", lambda *a, **k: _Resp())
     result = service.create_session()
     assert result["transcription"] == {"model": "gpt-realtime-whisper", "language": "nl"}
+
+
+def test_load_settings_includes_transcription_model_and_language(monkeypatch):
+    import src.settings as settings_mod
+    monkeypatch.setattr(settings_mod, "load_settings", lambda: {"stt_language": "nl"})
+    loaded = RealtimeService()._load_settings()
+    assert loaded["realtime_transcription_model"] == "gpt-realtime-whisper"
+    assert loaded["stt_language"] == "nl"
+    monkeypatch.setattr(settings_mod, "load_settings", lambda: {"realtime_transcription_model": ""})
+    assert RealtimeService()._load_settings()["realtime_transcription_model"] == ""
