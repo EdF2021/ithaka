@@ -27,7 +27,7 @@ import uuid
 from core.database import Document, Notebook, NotebookArtifact, NotebookSource
 from src.event_bus import fire_event
 from src.notebook_flashcards import validate_flashcards_markdown
-from src.notebook_infographic import validate_infographic_markdown
+from src.notebook_infographic import extract_infographic
 from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_mindmap import validate_mindmap_markdown
 from src.notebook_slides import extract_slide_deck
@@ -181,18 +181,38 @@ mindmap
       Detail drie
 ```""",
 
-    "infographic": """Maak een infographic: een compacte, visueel scanbare pagina met de kern van de bronnen in cijfers en korte feiten.
+    "infographic": """Maak een infographic: één landscape-compositie met thematische kolommen, genummerde stappen, icoon-kaarten, een centraal hero-element, een vergelijkingsblok en kerncijfers. De tekst blijft in HTML; illustraties worden apart gegenereerd op basis van jouw prompts.
 
-Structuur, exact in deze volgorde en met exact deze koppen (de renderer parst op deze structuur):
-- "# " met een pakkende titel in het Nederlands.
-- "## Key numbers": 3 tot 5 bullets, elk exact in de vorm "- **<getal, percentage of korte metric>** — <label van maximaal 8 woorden>". Zijn er geen cijfers in de bronnen, gebruik dan een telwoord of kort feit als "getal" (bijvoorbeeld "3 panelen" of "geen vermeld") - verzin nooit een cijfer dat niet in de bronnen staat.
-- Daarna 3 tot 4 gewone secties, elk "## <sectiekop>" met 2 tot 4 korte bullet-feiten.
-- Afsluitend één blockquote-regel "> " met één kernboodschap in één zin.
+Lever exact één codefence met taalaanduiding "json" en daarin één JSON-object, niets anders. Schema:
 
-Regels:
-- Elk "key number" en elk bullet-feit moet herleidbaar zijn tot de bronnen; geen verzonnen cijfers of aannames.
-- Houd bullets kort en concreet - geen volledige alinea's.
-- Gebruik uitsluitend de koppen "## Key numbers" en de overige sectiekoppen; geen extra kopniveaus (geen "###").""",
+{
+  "title": "titel in het Nederlands (max 80 tekens)",
+  "subtitle": "ondertitel (optioneel, max 120 tekens)",
+  "takeaway": "één zin met de kernboodschap (max 240 tekens)",
+  "blocks": [
+    {"id": "slug", "type": "column", "heading": "kop", "subheading": "korte toelichting",
+     "illustration_prompt": "optioneel", "children": [ ...2 tot 3 sub-blokken van type steps, icon_card of key_numbers... ]},
+    {"id": "slug", "type": "steps", "heading": "kop", "items": [{"label": "kort", "text": "max 120 tekens"}]},
+    {"id": "slug", "type": "icon_card", "heading": "kop", "icon": "chat", "text": "1 tot 2 zinnen, max 200 tekens"},
+    {"id": "slug", "type": "hero", "heading": "kop", "illustration_prompt": "...", "text": "max 240 tekens"},
+    {"id": "slug", "type": "comparison", "heading": "kop", "rows": [{"label": "kort", "value": "letterlijke bronwaarde", "ratio": 0.6}]},
+    {"id": "slug", "type": "key_numbers", "heading": "kop", "items": [{"number": "42%", "label": "max 8 woorden"}]}
+  ]
+}
+
+Regels voor de structuur:
+- 5 tot 8 blokken op het hoogste niveau; precies één "hero".
+- Maximaal TWEE "column"-blokken (links en rechts van de hero); een derde thema wordt geen column maar losse blokken (steps, icon_card of key_numbers) op het hoogste niveau. Elke column heeft 2 tot 3 children; children mogen zelf geen column of hero zijn.
+- "steps" heeft 2 tot 5 stappen; "comparison" 2 tot 4 rijen; "key_numbers" 3 tot 5 items.
+- "id" is een unieke slug (a-z, 0-9, - of _); "heading" maximaal 60 tekens.
+- "icon" is optioneel; de waarde moet exact één van deze sleutels zijn: sources, audio, video, chat, graph, bars, target, warning, gear, people, doc, search, spark. Laat weg als geen sleutel past.
+- "illustration_prompt" is optioneel, in het Engels, maximaal 200 tekens: beschrijf een eenvoudige scène of metafoor zonder merknamen of personen en vraag nooit om tekst in beeld (geen text, label, caption, words, letters). Geef er maximaal 5, in elk geval bij de hero.
+
+Regels voor de inhoud:
+- Elk cijfer, elke stap en elke vergelijkingswaarde moet herleidbaar zijn tot de bronnen; verzin niets.
+- "ratio" alleen als de bronnen een vergelijkbare grootheid geven; anders het comparison-blok weglaten. "value" is de letterlijke bronwaarde (bijvoorbeeld "300 bronnen").
+- Zijn er geen cijfers in de bronnen, gebruik dan een telwoord of kort feit als "number" (bijvoorbeeld "3 panelen").
+- Alle tekstvelden in het Nederlands, behalve "illustration_prompt". Geen markdown of HTML binnen de JSON-strings.""",
 
     "flashcards": """Maak 10 tot 15 flashcards waarmee iemand de kernbegrippen uit de bronnen kan oefenen.
 
@@ -281,7 +301,7 @@ _KIND_VALIDATORS = {
     # then surfaced as raw markdown (infographic fallback card, one-card
     # flashcard deck, unrendered mindmap) — 2026-08-20..23 production
     # regressions with format-ignoring models.
-    "infographic": validate_infographic_markdown,
+    "infographic": extract_infographic,
     "flashcards": validate_flashcards_markdown,
     "mindmap": validate_mindmap_markdown,
 }

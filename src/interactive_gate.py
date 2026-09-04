@@ -92,6 +92,11 @@ _PASSIVE_PATTERNS = (
     # polled every 5s by static/js/chat.js while a generate_video job runs) —
     # same shape and reasoning as the two patterns above.
     re.compile(r"^/api/video/jobs/[^/]+$"),
+    # The infographic-illustrations poller (GET
+    # /api/notebooks/{id}/artifacts/{artifact_id}/illustrations, polled every
+    # 3s by the v2 viewer page in src/notebook_infographic.py) — same
+    # reasoning as the podcast/video pollers above.
+    re.compile(r"^/api/notebooks/[^/]+/artifacts/[^/]+/illustrations$"),
 )
 
 

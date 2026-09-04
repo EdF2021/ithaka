@@ -1773,6 +1773,13 @@ function _closeArtifactViewer() {
 // that still renders all 6 visibly; splitting it into two slots would need
 // every call site to know which section it's reporting for, for no real
 // benefit since these errors are rare and never fire concurrently.
+// Tooltips for the generic artifact tiles — the only place a tile says more
+// than its label. Infographic v2 (2026-09-03) generates AI illustrations
+// per block when image generation is enabled in Settings.
+const _KIND_TITLES = {
+  infographic: 'Infographic met AI-illustraties (als beeldgeneratie aan staat)',
+};
+
 function _studioPanelSkeleton() {
   return `
     <div class="nbws-studio-section nbws-studio-generate">
@@ -1785,7 +1792,7 @@ function _studioPanelSkeleton() {
         <button type="button" class="nbws-tile notebook-report-open-btn nbws-tile--report" id="nbws-report-btn"
                 data-kind="report"><span class="nbws-tile-icon">${_KIND_ICONS.report}</span><span class="nbws-tile-label">Rapporten</span></button>
         ${ARTIFACT_KINDS.map(kind => `<button type="button" class="nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}"
-                data-kind="${_esc(kind)}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
+                data-kind="${_esc(kind)}" title="${_esc(_KIND_TITLES[kind] || KIND_LABELS[kind])}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
       </div>
       <div class="nbws-mindmap-focus-wrap" id="nbws-mindmap-focus-wrap">
         <input type="text" id="nbws-mindmap-focus" class="nbws-mindmap-focus-input"

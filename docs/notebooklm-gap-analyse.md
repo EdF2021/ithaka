@@ -15,6 +15,10 @@
 > `docs/superpowers/specs/2026-08-22-notebooks-fase4-design.md`; sessielog:
 > `docs/sessions/2026-08-22-notebooks-fase4.md`. De "Niet doen"-regel hieronder over video
 > gold voor Veo-klasse generatie en is daarmee nog steeds van kracht.
+>
+> **Status 2026-09-03: infographic v2 (JSON-schema + AI-illustraties per blok) geïmplementeerd.**
+> Ontwerp: `docs/superpowers/specs/2026-09-03-notebooks-infographic-v2-design.md`; plan:
+> `docs/superpowers/plans/2026-09-03-notebooks-infographic-v2.md`.
 
 ## Samenvatting
 
