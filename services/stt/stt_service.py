@@ -191,7 +191,31 @@ async def probe_endpoint(endpoint_id: str, model: str, timeout: float = 10.0) ->
     except httpx.HTTPError as exc:
         return False, f"could not reach endpoint: {exc}"
 
-    if resp.status_code in (404, 405):
+    if resp.status_code == 404:
+        # OpenAI returns 404 with a JSON error body both when the route is
+        # genuinely missing AND when the route exists but the model name is
+        # wrong (e.g. {"error": {"code": "model_not_found", ...}}) — verified
+        # live 2026-09-03 against api.openai.com with stt_model=gpt-realtime-
+        # whisper. Conflating the two misled a maintainer into thinking a
+        # working endpoint had no transcription route.
+        try:
+            body = resp.json()
+            error = (body or {}).get("error") or {}
+            code = str(error.get("code") or "")
+            message = str(error.get("message") or "")
+            if code == "model_not_found" or "model" in message.lower():
+                return False, (
+                    f"model '{model}' not found on this endpoint (HTTP 404) — "
+                    "check the STT model name (OpenAI: gpt-transcribe, "
+                    "gpt-4o-mini-transcribe, whisper-1)"
+                )
+        except Exception:
+            pass
+        return False, (
+            f"endpoint returned {resp.status_code} — no /audio/transcriptions route "
+            "(not a transcription-capable API)"
+        )
+    if resp.status_code == 405:
         return False, (
             f"endpoint returned {resp.status_code} — no /audio/transcriptions route "
             "(not a transcription-capable API)"
