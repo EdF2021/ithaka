@@ -99,6 +99,18 @@ class RealtimeService:
             "tools": [ASK_ITHAKA_TOOL] if settings.get("realtime_tools_enabled", True) else [],
             "max_output_tokens": "inf",
         }
+        # Realtime input transcription (user-transcript events in chat). Its
+        # model is deliberately NOT stt_model: gpt-realtime-whisper is only
+        # valid inside Realtime sessions, while /audio/transcriptions (voice
+        # mode, meeting minutes) wants gpt-transcribe/gpt-4o-mini-transcribe.
+        transcription_model = (settings.get("realtime_transcription_model") or "").strip()
+        if transcription_model:
+            transcription = {"model": transcription_model}
+            language = (settings.get("stt_language") or "").strip()
+            if language:
+                transcription["language"] = language
+            config["audio"]["input"]["transcription"] = transcription
+
         if config["tools"]:
             config["tool_choice"] = "auto"
         return config

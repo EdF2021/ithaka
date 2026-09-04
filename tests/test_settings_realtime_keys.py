@@ -33,6 +33,7 @@ def test_realtime_keys_are_global_not_per_user():
         "realtime_enabled", "realtime_provider", "realtime_model", "realtime_voice",
         "realtime_vad_threshold", "realtime_vad_prefix_ms", "realtime_vad_silence_ms",
         "realtime_noise_reduction", "realtime_max_minutes", "realtime_instructions",
+        "realtime_transcription_model",
     ):
         assert key not in _PER_USER_KEYS
 
@@ -51,3 +52,7 @@ def test_realtime_tools_enabled_default_true_and_global():
     from src.settings import DEFAULT_SETTINGS, _PER_USER_KEYS
     assert DEFAULT_SETTINGS["realtime_tools_enabled"] is True
     assert "realtime_tools_enabled" not in _PER_USER_KEYS
+
+
+def test_realtime_transcription_model_default_is_realtime_whisper():
+    assert DEFAULT_SETTINGS["realtime_transcription_model"] == "gpt-realtime-whisper"

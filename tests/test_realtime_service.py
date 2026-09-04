@@ -224,3 +224,23 @@ def test_build_session_config_without_tools_when_disabled():
     cfg = RealtimeService().build_session_config(_settings(realtime_tools_enabled=False))
     assert cfg["tools"] == []
     assert "tool_choice" not in cfg
+
+
+def test_build_session_config_adds_input_transcription_when_model_set():
+    service = RealtimeService()
+    cfg = service.build_session_config(
+        _settings(realtime_transcription_model="gpt-realtime-whisper", stt_language="nl")
+    )
+    assert cfg["audio"]["input"]["transcription"] == {"model": "gpt-realtime-whisper", "language": "nl"}
+
+
+def test_build_session_config_transcription_model_without_language():
+    service = RealtimeService()
+    cfg = service.build_session_config(_settings(realtime_transcription_model="gpt-4o-mini-transcribe"))
+    assert cfg["audio"]["input"]["transcription"] == {"model": "gpt-4o-mini-transcribe"}
+
+
+def test_build_session_config_no_transcription_when_empty():
+    service = RealtimeService()
+    cfg = service.build_session_config(_settings(realtime_transcription_model="  "))
+    assert "transcription" not in cfg["audio"]["input"]

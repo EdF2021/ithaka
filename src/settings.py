@@ -70,6 +70,13 @@ DEFAULT_SETTINGS = {
     "realtime_enabled": False,
     "realtime_provider": "disabled",
     "realtime_model": "gpt-realtime-2.1-mini",
+    # Model for the Realtime session's own input transcription
+    # (audio.input.transcription.model): the model that turns YOUR speech
+    # into the user-transcript shown in chat. Independent of stt_model
+    # (cascade voice mode + meeting minutes) — the two want different
+    # models: gpt-realtime-whisper only exists for Realtime sessions.
+    # Empty string = no transcription events.
+    "realtime_transcription_model": "gpt-realtime-whisper",
     "realtime_voice": "ash",
     "realtime_vad_threshold": 0.5,
     "realtime_vad_prefix_ms": 300,
