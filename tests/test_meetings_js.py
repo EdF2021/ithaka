@@ -543,3 +543,20 @@ def test_module_imports_cleanly_in_node():
     )
     assert result.returncode == 0, result.stderr
     assert "ok" in result.stdout
+
+
+def test_render_row_has_open_minutes_and_document_buttons():
+    values = _node_eval(
+        """
+        const { renderMeetingRow } = await import('./static/js/meetings.js');
+        const withDoc = renderMeetingRow({ id: 'm1', title: 't', status: 'done', document_id: 'd1' });
+        const withoutDoc = renderMeetingRow({ id: 'm2', title: 't', status: 'error', error: 'x' });
+        console.log(JSON.stringify({
+          minutes: withDoc.includes('meeting-open-minutes-btn'),
+          doc: withDoc.includes('meeting-open-doc-btn'),
+          noMinutes: withoutDoc.includes('meeting-open-minutes-btn'),
+          noDoc: withoutDoc.includes('meeting-open-doc-btn'),
+        }));
+        """
+    )
+    assert values == {"minutes": True, "doc": True, "noMinutes": False, "noDoc": False}
