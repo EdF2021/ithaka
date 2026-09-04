@@ -75,6 +75,57 @@ async def test_probe_fails_on_404_no_transcription_route(monkeypatch):
     assert "not a transcription-capable" in reason
 
 
+async def test_probe_404_model_not_found_reports_model(monkeypatch):
+    # OpenAI returns 404 with a JSON error body when the route exists but the
+    # model name is wrong (verified live 2026-09-03 against api.openai.com
+    # with stt_model=gpt-realtime-whisper) — must not be conflated with "no
+    # /audio/transcriptions route".
+    TestSessionLocal = _mem_db(monkeypatch)
+    _add_endpoint(TestSessionLocal)
+
+    resp = MagicMock()
+    resp.status_code = 404
+    resp.json = MagicMock(
+        return_value={
+            "error": {
+                "message": "The model `gpt-realtime-whisper` does not exist or you do not have access to it.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "model_not_found",
+            }
+        }
+    )
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    client.post = AsyncMock(return_value=resp)
+
+    with patch("httpx.AsyncClient", return_value=client):
+        ok, reason = await probe_endpoint("ep1", "gpt-realtime-whisper")
+
+    assert ok is False
+    assert "model 'gpt-realtime-whisper' not found" in reason
+
+
+async def test_probe_404_without_model_error_keeps_route_message(monkeypatch):
+    TestSessionLocal = _mem_db(monkeypatch)
+    _add_endpoint(TestSessionLocal, base_url="https://generativelanguage.googleapis.com/v1beta/openai")
+
+    resp = MagicMock()
+    resp.status_code = 404
+    resp.json = MagicMock(side_effect=ValueError("not JSON"))
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    client.post = AsyncMock(return_value=resp)
+
+    with patch("httpx.AsyncClient", return_value=client):
+        ok, reason = await probe_endpoint("ep1", "whisper-1")
+
+    assert ok is False
+    assert "not a transcription-capable" in reason
+
+
 async def test_probe_fails_on_401_mentions_api_key(monkeypatch):
     TestSessionLocal = _mem_db(monkeypatch)
     _add_endpoint(TestSessionLocal)
