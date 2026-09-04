@@ -280,7 +280,15 @@ async function _refreshMeeting(id) {
     const idx = _meetings.findIndex((x) => x.id === id);
     if (idx >= 0) _meetings[idx] = m; else _meetings.unshift(m);
     return m;
-  } catch (_e) {
+  } catch (e) {
+    // A 404 means the row is gone (deleted elsewhere): nothing to poll
+    // for — drop it instead of burning the failure budget on it.
+    if (/^HTTP 404\b/.test(e.message) || /niet gevonden/i.test(e.message)) {
+      _meetings = _meetings.filter((x) => x.id !== id);
+      _polling.delete(id);
+      _renderList();
+      return { status: 'gone' };
+    }
     return null;
   }
 }
@@ -314,7 +322,7 @@ function _ensurePollTimer() {
     for (const id of Array.from(_polling.keys())) {
       const prevFailures = _polling.get(id) || 0;
       const m = await _refreshMeeting(id);
-      if (m && (m.status === 'done' || m.status === 'error')) {
+      if (m && (m.status === 'done' || m.status === 'error' || m.status === 'gone')) {
         _polling.delete(id);
         continue;
       }
@@ -372,6 +380,19 @@ async function _startRecording() {
     return;
   }
 
+  // Construct the recorder BEFORE the row-creating POST as well: a browser
+  // that grants the mic but rejects the mimeType (iOS Safari) would
+  // otherwise leave the same orphan "recording" row (re-review of fix
+  // wave 2).
+  let mediaRecorder;
+  try {
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+  } catch (e) {
+    _toastError(`Could not start recording: ${e.message}`);
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+
   let meeting;
   try {
     meeting = await _fetchJSON('/api/meetings', {
@@ -404,14 +425,6 @@ async function _startRecording() {
     onStatus: (status) => _onUploadStatus(status),
   });
 
-  let mediaRecorder;
-  try {
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-  } catch (e) {
-    _toastError(`Could not start recording: ${e.message}`);
-    stream.getTracks().forEach((t) => t.stop());
-    return;
-  }
 
   const startedAt = Date.now();
   _rec = {
