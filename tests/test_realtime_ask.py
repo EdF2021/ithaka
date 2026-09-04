@@ -119,3 +119,39 @@ async def test_tool_start_is_logged(monkeypatch, candidates, caplog):
         "tool_start" in r.getMessage() and "owner=ed" in r.getMessage() and "tool=web_search" in r.getMessage()
         for r in caplog.records
     )
+
+
+async def test_passes_explicit_relevant_tools_so_loop_never_takes_direct_path(monkeypatch, candidates):
+    # Prod 2026-09-04: a one-turn Dutch question is "low-signal" for the
+    # English-only classifier; without caller-provided tools the loop replies
+    # directly and ask_ithaka never reaches web_search/email/calendar.
+    captured = {}
+    monkeypatch.setattr(ask_mod, "stream_agent_loop", _fake_loop([_sse({"delta": "ok"})], capture=captured))
+
+    class _Idx:
+        def get_tools_for_query(self, query, k=8):
+            assert query == "Stuur een mail naar Jan"
+            return {"send_email", "resolve_contact", "manage_memory"}
+
+    monkeypatch.setattr(ask_mod, "get_tool_index", lambda: _Idx())
+
+    await answer_question("Stuur een mail naar Jan", "ed")
+
+    tools = captured["relevant_tools"]
+    assert tools, "relevant_tools must be non-empty to bypass the direct low-signal path"
+    assert ask_mod.ASK_BASE_TOOLS <= tools
+    assert {"send_email", "resolve_contact", "web_search", "web_fetch", "manage_calendar", "create_document"} <= tools
+
+
+async def test_tool_index_failure_falls_back_to_base_tools(monkeypatch, candidates):
+    captured = {}
+    monkeypatch.setattr(ask_mod, "stream_agent_loop", _fake_loop([_sse({"delta": "ok"})], capture=captured))
+
+    def _boom():
+        raise RuntimeError("chroma down")
+
+    monkeypatch.setattr(ask_mod, "get_tool_index", _boom)
+
+    await answer_question("Wat is het weer?", None)
+
+    assert captured["relevant_tools"] == set(ask_mod.ASK_BASE_TOOLS)
