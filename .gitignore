@@ -41,7 +41,11 @@ services/data/
 
 # IDE / Editor
 .aider*
-.claude/
+# .claude/ holds local state (worktrees, settings.local.json) — ignored — except the
+# checked-in skills/rules that CLAUDE.md points at.
+.claude/*
+!.claude/skills/
+!.claude/rules/
 .vscode/
 .idea/
 *.swp
