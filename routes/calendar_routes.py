@@ -1490,8 +1490,8 @@ def setup_calendar_routes() -> APIRouter:
         Uses the "utility" endpoint (small / fast model) to keep latency low.
         """
         owner = _require_user(request)
-        from src.endpoint_resolver import resolve_endpoint
-        from src.llm_core import llm_call_async
+        from src.endpoint_resolver import resolve_endpoint, resolve_utility_fallback_candidates
+        from src.llm_core import llm_call_async_with_fallback
         from src.text_helpers import strip_think
         import json as _json
         import re as _re
@@ -1547,14 +1547,17 @@ def setup_calendar_routes() -> APIRouter:
               "For all-day events use \"YYYY-MM-DD\" (no time) for both fields."
         )
 
+        # Chain the configured utility fallbacks behind the primary pick so a
+        # down endpoint doesn't hard-fail the parse (see #183 part B).
+        candidates = [(url, model, headers)]
+        candidates.extend(resolve_utility_fallback_candidates(owner=owner or None) or [])
         try:
-            raw = await llm_call_async(
-                url=url, model=model,
+            raw = await llm_call_async_with_fallback(
+                candidates,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": text},
                 ],
-                headers=headers,
                 temperature=0.0,
                 max_tokens=512,
                 timeout=20,
