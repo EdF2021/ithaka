@@ -1,0 +1,72 @@
+# Sessielog 2026-09-05 — per-user-settings-bypass (#181/#182) en llm_call_async-trace (#183)
+
+Vervolg op `2026-09-04-realtime-tools-fase2-en-restpunten.md`. Nachtelijk vervolg van de
+graphify-traces (ModelEndpoint, get_setting, llm_call_async) uit de vorige sessie; Ed's regie:
+"fan out subagents met goedkopere modellen, regie centraal, verificatie zichtbaar vóór merge".
+
+## 1. #182 — per-user prefs op 10 `get_setting()`-sites (issue #181), live
+
+`src/settings.py` heeft twee lagen: `get_setting(key)` (globaal) en `get_user_setting(key, owner)`
+(per-user override voor `_PER_USER_KEYS`). Tien call sites (17 keys: image/video/vision) lazen
+via de globale laag en negeerden de gebruikerskeuze uit Settings. Sonnet-fixer zette alle sites om
+(overal was de owner al in scope). **Review-vondst:** `routes/chat_routes.py:1146` hield
+`get_setting("disabled_tools")` over nadat de lokale import naar `get_user_setting` was versmald →
+NameError op elk chatbericht; `py_compile` ziet dat niet. Gefixt + `symtable`-guard in
+`tests/test_per_user_settings_bypass.py` (bewezen: faalt zonder fix). 243 passed, routes-lane
+588 passed (3 pre-existing unix-socket-sandboxfails), CI 15 groen. Merge via de hook na Ed's
+"Merge" (classifier blokkeerde twee keer; derde poging ging door), deploy `up -d --no-build`,
+`/login` 200 na 22 s, startup complete.
+
+Ed's lokale `dev` liep achter: `git pull --rebase` liet de twee docs-commits terecht vallen (spec
++ plan infographic v2 stonden al op origin), stash gedropt.
+
+## 2. Graphify-update
+
+Incrementele update (16 gewijzigde code-bestanden, AST-only, geen Gemini) via de manifest-route
++ `graphify . --cluster-only` (re-extract 31 bestanden, $0.03) en `graphify cluster-only` voor
+labels: 23.711 nodes / 52.847 edges / 1.028 communities, health OK (vorige run: 4.061 dangling).
+Kanttekening: de CLI trekt `static/lib`-vendor-JS mee, dus de god-nodes zijn xlsx/canvas-ruis;
+de scratchpad-scripts sluiten dat wél uit — volgende run weer via de scripts.
+
+## 3. Stale handoff: infographic v2 was al klaar
+
+De SessionStart-handoff van 3 sept ("infographic v2 = next") bleek verouderd: PR #161 (`c969ada`)
+had alle 8 plan-taken via SDD afgerond, real-image-smoke op :7001 gedaan (4 sept), gemerged en
+gedeployed. Memory `project_ithaka_notebooks` bijgewerkt zodat dit niet nog eens gepland wordt.
+Alleen de deferred minors bleven over → #183 deel C.
+
+## 4. #183 — drie parallelle sonnet-fixers in eigen worktrees
+
+| PR | Deel | Inhoud | Verificatie |
+|----|------|--------|-------------|
+| #184 | A | `src/builtin_actions.py`: 3 scheduled actions kregen `workload="background"` (wachtten al op quiet, gingen als foreground de `_local_model_slot`-gate in); 4e vermoede site gebruikt `task_llm_call_async` (al background) | AST-guard + recorder-test, 14 passed |
+| #185 | C | dode `try_fallback_endpoint` (90 regels + test) weg; `is_infographic_v2` verankerd op `blocks`+`title` in de fence-body (legacy-poster met ```json-voorbeeld bleef anders op de v2-foutkaart); `NoReturn`; upper-bound-rejection-tests; timeout-test illustratiejob | 131 passed |
+| #187 | B | utility-LLM-calls in calendar/skills(4)/history/session/task(2)/teacher_escalation op `resolve_utility_fallback_candidates(owner)` + `llm_call_async_with_fallback`; `_call_teacher` en teacher-rewrite bewust ongemoeid (gepind teacher-model wordt in audit-record gestempeld); `chat_routes:620` buiten scope | sonnet-review (productie teruggedraaid met behoud tests → 10/12 falen); ronde 1: retry-loop `_eval_skill_run` stopt bij keten-brede uitval (worst-case één pass) + 400 i.p.v. 500 in `compact_session`; ronde 2: CI-only fout door route-accumulatie in module-level router `session_routes` → test ruimt eigen routes op; CI 6032 passed |
+
+Alle drie gemerged na Ed's "merge", image van `2562318` gebouwd, deploy, `/login` 200 na 34 s,
+startup complete, nieuwe code in container geverifieerd.
+
+**Zijvondst → issue #186:** `src/teacher_escalation.py:236` importeert `_TEACHER_SYSTEM_PROMPT`
+uit `src.ai_interaction`, dat die niet (meer) heeft (leeft in
+`src/agent_tools/model_interaction_tools.py`) → elke echte teacher-escalatie faalt met
+ImportError; tests patchen het weg. Geverifieerd met `hasattr` → False.
+
+## Lessen
+
+- **Lokale import versmallen = NameError-risico** dat `py_compile` niet ziet; de `symtable`-guard
+  in `tests/test_per_user_settings_bypass.py` is herbruikbaar voor elke getter-swap.
+- **Agent-worktrees** (`isolation: worktree`) hebben geen `.venv`; fixers gebruikten
+  `/home/eddef/projects/ithaka/.venv/bin/python`. Branches zijn gedeelde refs: pushen/PR'en kan
+  vanuit de eigen worktree; opruimen met `git worktree remove --force` + `git branch -D`.
+- **`.git/config.lock` als character device** in de sandbox is een mount-artefact (`/dev/null`);
+  buiten de sandbox bestaat het bestand niet.
+- **Merge-classifier:** ook een letterlijk "Merge" van Ed werd twee keer geblokkeerd; niet
+  omzeilen, opnieuw proberen na een nieuwe bevestiging werkte. `gh pr merge --delete-branch`
+  faalt op de lokale branch-delete als een worktree hem vasthoudt — de merge zelf is dan wél door.
+
+## Open
+
+- #186 teacher-ImportError (klein, sonnet-geschikt).
+- graphify: vendor-JS-uitsluiting in de CLI-route (`.graphifyignore` of scripts).
+- Ed: echte-mic-test Realtime op prod; `graphify install --platform claude` (skill 0.9.10 vs
+  package 0.9.53).
