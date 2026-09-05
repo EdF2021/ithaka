@@ -479,9 +479,25 @@ async def test_session_compact_owner_reaches_candidates_and_falls_back(monkeypat
         replace_messages=lambda sid, history: True,
     )
 
-    router = sroutes.setup_session_routes(session_manager, {})
+    # routes/session_routes.py's `router` is a MODULE-LEVEL object:
+    # setup_session_routes() re-decorates onto the SAME shared router on every
+    # call rather than building a fresh one, so router.routes accumulates one
+    # "/compact" entry per test (in this file, in other test files, in any
+    # order) — each bound to whatever session_manager that call passed. A
+    # naive "first path match wins" search picks up a STALE closure from a
+    # completely different test's session_manager depending on run order,
+    # which is exactly what broke in CI (issue #183 fix round 2). Mirror the
+    # established pattern in tests/test_api_token_scope_gate.py's
+    # `_session_endpoint`: snapshot the route count before this call, take
+    # only the routes THIS call just appended, then truncate them back off
+    # again so later test files don't inherit a route bound to a
+    # SimpleNamespace this test tears down.
+    before = len(sroutes.router.routes)
+    sroutes.setup_session_routes(session_manager, {})
+    added = list(sroutes.router.routes[before:])
+    del sroutes.router.routes[before:]
     compact = None
-    for route in router.routes:
+    for route in added:
         path = getattr(route, "path", "")
         if path.endswith("/compact") and "POST" in getattr(route, "methods", set()):
             compact = route.endpoint
