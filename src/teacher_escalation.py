@@ -231,9 +231,18 @@ portable across users / hosts.
 
 async def _call_teacher(teacher_model_spec: str, prompt: str,
                         owner: Optional[str] = None) -> Optional[str]:
-    """Call the configured teacher endpoint with the escalation prompt."""
+    """Call the configured teacher endpoint with the escalation prompt.
+
+    Deliberately NOT put on the utility fallback chain (#183 part B): this
+    resolves the specific configured teacher model, and callers stamp the
+    saved skill / audit record with that exact `teacher_model` spec
+    regardless of which model actually answered. Silently substituting a
+    utility fallback here would misattribute the rewrite to a teacher model
+    that never ran it.
+    """
     from src.llm_core import llm_call_async
-    from src.ai_interaction import _resolve_model, _TEACHER_SYSTEM_PROMPT
+    from src.ai_interaction import _resolve_model
+    from src.agent_tools.model_interaction_tools import _TEACHER_SYSTEM_PROMPT
     try:
         url, model, headers = await asyncio.to_thread(_resolve_model, teacher_model_spec, owner=owner)
     except Exception as e:
@@ -394,8 +403,8 @@ async def evaluate_turn_llm(
     owner: Optional[str] = None,
 ) -> Tuple[str, Optional[str]]:
     """Use a fast LLM (resolved via utility endpoint) to evaluate a turn."""
-    from src.endpoint_resolver import resolve_endpoint
-    from src.llm_core import llm_call_async
+    from src.endpoint_resolver import resolve_endpoint, resolve_utility_fallback_candidates
+    from src.llm_core import llm_call_async_with_fallback
 
     # Resolve utility model (falls back to default model, then student_endpoint_url)
     url, model, headers = resolve_endpoint(
@@ -413,11 +422,14 @@ async def evaluate_turn_llm(
         agent_reply=agent_reply or "(no agent reply)",
     )
 
+    # Chain the configured utility fallbacks behind the primary pick so a
+    # down endpoint doesn't hard-fail this advisory check (see #183 part B).
+    candidates = [(url, model, headers)]
+    candidates.extend(resolve_utility_fallback_candidates(owner=owner) or [])
     try:
-        response = await llm_call_async(
-            url, model,
+        response = await llm_call_async_with_fallback(
+            candidates,
             [{"role": "user", "content": prompt}],
-            headers=headers,
             timeout=20,
         )
         if response:

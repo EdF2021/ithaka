@@ -328,6 +328,49 @@ def test_video_tile_and_job_flow_registered_client_side():
     assert "video: '<svg" in icons
 
 
+def test_report_tile_and_modal_registered_client_side():
+    # KIND_LABELS.report is a deliberate, already-reviewed distinction: the
+    # tile shows the Dutch literal "Rapporten", but KIND_LABELS.report
+    # itself must stay English 'Report' since it also feeds the
+    # Files-list/viewer kind pills (see the comment above KIND_LABELS).
+    labels = _between(_WS, "const KIND_LABELS = {", "\n};")
+    assert "report: 'Report'," in labels
+    assert "report: 'Rapporten'," not in labels
+    icons = _between(_WS, "const _KIND_ICONS = {", "\n};")
+    assert "report: '<svg" in icons
+    skeleton = _between(_WS, "function _studioPanelSkeleton", "\n}\n")
+    assert 'class="nbws-tile notebook-report-open-btn nbws-tile--report"' in skeleton
+    # The tile's own label is a hardcoded Dutch literal, mirroring the
+    # podcast tile's literal "Audio" label — not ${_esc(KIND_LABELS.report)}.
+    assert '<span class="nbws-tile-label">Rapporten</span>' in skeleton
+    assert '${_esc(KIND_LABELS.report)}' not in skeleton
+    # Defect Task 6's own review round already caught once: the report
+    # modal's Escape-key listener and DOM node must be torn down on
+    # workspace close.
+    assert "registerCloseHook(_closeReportModal);" in _WS
+    # Row-click dispatch must NOT special-case 'report' the way
+    # 'podcast'/'video' are special-cased — it falls through to the same
+    # _openArtifactReport(row) path every other plain-text kind uses.
+    handler = _between(
+        _WS,
+        "row.addEventListener('click', (e) => {",
+        "\n  });\n  box.querySelectorAll('.notebook-artifact-del')",
+    )
+    assert "kind === 'report'" not in handler
+
+
+def test_report_modal_z_index_clears_workspace_root_on_mobile():
+    # #115: #nbrp-modal is a plain .modal (base z-index 250, not routed
+    # through modalManager.js), so opening it from the Studio tab left it
+    # behind #nbws-root's z-index: 10005 — invisible on mobile, where the
+    # active tab panel is opaque and fills the viewport (desktop hid this by
+    # luck via #nbws-root's transparent middle column). Same fix/value as
+    # the .doc-editor-pane precedent right above this rule in style.css.
+    assert "body.notebook-workspace-open #nbrp-modal { z-index: 10010; }" in _CSS
+    root_z = _between(_CSS, "#nbws-root {\n  display: none;", "\n}")
+    assert "z-index: 10005;" in root_z
+
+
 def test_slide_deck_kind_registered_client_side_as_first_tile():
     kinds = _between(_WS, "const ARTIFACT_KINDS = [", "];")
     assert kinds.split("[", 1)[-1].strip().startswith("'slide_deck'")
@@ -401,3 +444,214 @@ def test_podcast_phase_text_surfaces_a_script_retry():
     body = _between(_WS, "function _podcastPhaseText", "\n}\n")
     assert "script_attempt > 1" in body
     assert "attempt" in body.lower()
+
+
+def test_mindmap_node_click_submits_before_closing_workspace():
+    """Regression for #112: closeNotebookWorkspace() must run AFTER the
+    submit dispatch, not before. chat.js's handleChatSubmit source_ids gate
+    reads isNotebookWorkspaceOpen() synchronously, before any await, while
+    handling the submit event — if the workspace is closed first, that gate
+    always reads "closed" and source_ids silently drops for this entry point
+    regardless of the user's checked sources. This assertion fails on the
+    old (broken) ordering. (The separate issue-#22 fail-closed guard, which
+    sits past an await elsewhere in handleChatSubmit, is covered by its own
+    snapshot-based fix — see the search_hint/#22 tests below.)"""
+    fn = _between(_WS, "function _handleMindmapNodeClick", "\n}\n")
+    assert "form.dispatchEvent(new Event('submit'" in fn
+    assert "closeNotebookWorkspace();" in fn
+    submit_idx = fn.index("form.dispatchEvent(new Event('submit'")
+    close_idx = fn.index("closeNotebookWorkspace();")
+    assert submit_idx < close_idx
+
+
+# ── #112 voorstel B: search_hint one-shot channel ────────────────────────────
+
+def test_search_hint_mechanism_exists_and_is_one_shot():
+    """getSearchHintForChat() must both return and clear the pending hint in
+    the same call — a stale hint must never leak into a later, unrelated
+    chat turn."""
+    assert "export function getSearchHintForChat" in _WS
+    fn = _between(_WS, "export function getSearchHintForChat", "\n}\n")
+    assert "_pendingSearchHint = null" in fn
+    # It must actually return the previously-set value, not just null it out.
+    assert "return hint" in fn or "return _pendingSearchHint" in fn
+
+
+def test_search_hint_exported_on_notebook_workspace_object():
+    """Consumed via window.notebookWorkspace.getSearchHintForChat() from
+    chat.js, same publication pattern as getSourceIdsForChat()."""
+    obj = _between(_WS, "const notebookWorkspace = {", "\n};")
+    assert "getSourceIdsForChat" in obj
+    assert "getSearchHintForChat" in obj
+
+
+def test_mindmap_node_click_sets_pending_search_hint_before_submit():
+    """The bare node label must be stashed as the pending hint before the
+    submit dispatch, so chat.js's synchronous gate can read it in the same
+    call stack (mirrors the submit-before-close ordering requirement)."""
+    fn = _between(_WS, "function _handleMindmapNodeClick", "\n}\n")
+    assert "_pendingSearchHint = label;" in fn
+    hint_idx = fn.index("_pendingSearchHint = label;")
+    submit_idx = fn.index("form.dispatchEvent(new Event('submit'")
+    assert hint_idx < submit_idx
+
+
+def test_chat_js_forwards_search_hint_when_workspace_open():
+    """chat.js must read the one-shot hint via getSearchHintForChat() and
+    append it to the request payload as search_hint, the same field name and
+    FormData shape as source_ids."""
+    assert "getSearchHintForChat" in _CHAT_JS
+    assert "search_hint" in _CHAT_JS
+    assert "fd.append('search_hint'" in _CHAT_JS
+
+
+def test_search_hint_consumed_unconditionally_before_early_return_paths():
+    """Regression (#112 fix-round review finding 1): getSearchHintForChat()
+    must be called exactly once, as the very first thing in handleChatSubmit
+    — before ANY early-return branch (compare mode, the isStreaming
+    cancel/stop path, the _sendInFlight race guard, ...).
+
+    Before this fix the hint was only consumed at the workspace-open gate
+    much further down. A mindmap-node click while a previous answer is
+    still streaming hits the isStreaming branch, which treats the click as
+    "cancel the stream" and returns before ever reaching that gate — the
+    hint stayed set in notebookWorkspace.js's module state and would
+    resurface as search_hint on a LATER, unrelated message once the
+    workspace was reopened (getSourceIdsForChat()'s sibling contract is a
+    live read with no such state to leak; getSearchHintForChat() is a
+    one-shot channel, so only reading it late — not the mechanism itself —
+    was the bug)."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    # Count the actual call expression, not prose mentions of the name in
+    # comments (this test's own docstring companion comment in chat.js says
+    # "getSearchHintForChat()" without the receiver).
+    assert fn.count("window.notebookWorkspace.getSearchHintForChat()") == 1
+    hint_read_idx = fn.index("window.notebookWorkspace.getSearchHintForChat()")
+    compare_return_idx = fn.index(
+        "if (window.compareModule && window.compareModule.isActive())"
+    )
+    streaming_idx = fn.index("if (isStreaming) {")
+    send_in_flight_idx = fn.index("if (_sendInFlight) return;")
+    assert hint_read_idx < compare_return_idx
+    assert hint_read_idx < streaming_idx
+    assert hint_read_idx < send_in_flight_idx
+
+
+# ── #112 issue-#22 fail-closed guard: snapshot instead of live re-read ──────
+
+def test_chat_js_snapshots_workspace_open_state_before_await():
+    """The #22 fail-closed guard (further down, past an await in the
+    hasPendingChat() branch) must reuse a synchronous, pre-await snapshot of
+    isNotebookWorkspaceOpen() rather than re-reading it live after the await
+    — a caller like _handleMindmapNodeClick may legitimately close the
+    workspace while that await is pending, which would otherwise make the
+    guard silently see "closed" and skip its check."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    assert "_nbwsWorkspaceOpenAtSubmit" in fn
+    snapshot_idx = fn.index("_nbwsWorkspaceOpenAtSubmit = ")
+    # #112: materializePendingSession() now takes an optional pre-captured
+    # notebook-id snapshot argument, so match the call regardless of args.
+    await_idx = fn.index("await sessionModule.materializePendingSession(")
+    assert snapshot_idx < await_idx
+    # The guard itself must consume the snapshot, not a live call, after the await.
+    guard_region = fn[await_idx:]
+    guard_if = _between(
+        guard_region,
+        "if (_nbwsWorkspaceOpenAtSubmit &&",
+        "getLastMaterializedNotebookId())) {",
+    )
+    assert "isNotebookWorkspaceOpen" not in guard_if
+
+
+def test_chat_js_snapshots_notebook_id_before_await():
+    """#112 root cause: the #22/#132 guard snapshot (_nbwsWorkspaceOpenAtSubmit,
+    tested above) covered whether the workspace was open, not the notebook id
+    itself — window.notebookWorkspace.getCurrentNotebookId() must also be
+    read at the same synchronous, pre-await instant, immediately next to that
+    snapshot, and threaded into materializePendingSession() rather than left
+    for that function to read live after any future await could sneak in
+    between dispatch (_handleMindmapNodeClick) and the materialize call."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    assert "_nbwsNotebookIdAtSubmit" in fn
+    assert "getCurrentNotebookId" in fn
+
+    workspace_snapshot_idx = fn.index("_nbwsWorkspaceOpenAtSubmit = ")
+    notebook_id_snapshot_idx = fn.index("_nbwsNotebookIdAtSubmit = ")
+    await_idx = fn.index("await sessionModule.materializePendingSession(")
+
+    # Read right next to (and after) the workspace-open snapshot, but still
+    # strictly before the materialize await.
+    assert workspace_snapshot_idx < notebook_id_snapshot_idx < await_idx
+
+    # The materialize call must actually forward the snapshot, not silently
+    # drop it and let materializePendingSession() fall back to its own live
+    # read (which would reintroduce exactly the after-await gap this fixes).
+    assert "materializePendingSession(_nbwsNotebookIdAtSubmit)" in fn
+
+
+def test_chat_js_every_materialize_call_in_submit_forwards_snapshot():
+    """#112 smoke finding (2026-09-02): handleChatSubmit has two more
+    materializePendingSession() calls on its no-current-session fallback paths
+    (pending re-check and /api/default-chat auto-create). A bare call there
+    falls back to a live isNotebookWorkspaceOpen() read, which the mindmap
+    node-click entry point has already flipped to "closed" by then, so the
+    auto-created session silently lost its notebook binding (observed: session
+    created without notebook_id, answer ungrounded). Every call in the submit
+    handler must forward the pre-await snapshot."""
+    fn = _between(_CHAT_JS, "export async function handleChatSubmit", "\n  }\n")
+    assert "sessionModule.materializePendingSession()" not in fn
+    calls = fn.count("await sessionModule.materializePendingSession(")
+    assert calls >= 3
+    assert fn.count("materializePendingSession(_nbwsNotebookIdAtSubmit)") == calls
+
+
+# ── Podcast customize modal ("Audio-overzicht aanpassen") ───────────────────
+# NotebookLM-style second screen after clicking the Audio tile: format cards,
+# length toggle, focus textarea, source count from the existing checkbox
+# selection, then "Nu genereren". Source-text assertions like the rest of
+# this file (no JS DOM runner in this repo).
+
+def test_audio_tile_opens_the_customize_modal_instead_of_generating():
+    assert "function _openPodcastModal" in _WS
+    assert "nbpc-modal" in _WS
+    assert "Audio-overzicht aanpassen" in _WS
+    # The tile's click handler goes through the modal, never straight to POST.
+    assert "addEventListener('click', _openPodcastModal)" in _WS
+
+
+def test_podcast_modal_offers_four_formats_and_two_lengths():
+    for key in ("deep", "overview", "critique", "debate"):
+        assert f"key: '{key}'" in _WS, key
+    for key in ("short", "standard"):
+        assert f"'{key}'" in _WS, key
+    for label in ("Gedetailleerd", "Overzicht", "Kritiek", "Debat", "Kort", "Standaard"):
+        assert label in _WS, label
+
+
+def test_podcast_modal_posts_json_options_with_the_source_selection():
+    # The POST body carries the four option keys; source_ids reuses the same
+    # selection contract the chat uses (null = all sources).
+    assert "getSourceIdsForChat()" in _WS
+    for key in ("format:", "length:", "focus:", "source_ids:"):
+        assert key in _WS, key
+    assert "nbpc-focus" in _WS
+    assert "maxlength=\"500\"" in _WS
+
+
+def test_podcast_modal_reuses_report_modal_styling():
+    # No parallel component: the cards/grid/textarea are the report modal's
+    # classes; only the selected-state and the length toggle are new CSS.
+    assert "nbrp-card nbpc-format-card" in _WS
+    assert ".nbrp-card.is-selected" in _CSS
+    assert ".nbpc-toggle" in _CSS
+    # Cards must grow with their text (a global button height otherwise
+    # clips the four format descriptions at min-height).
+    card = _between(_CSS, ".nbrp-card {", "\n}")
+    assert "height: auto;" in card
+
+
+def test_podcast_modal_z_index_clears_workspace_root_on_mobile():
+    # Same #115 trap as the report modal: a plain .modal appended to <body>
+    # sits at z 250 behind #nbws-root's 10005, so on mobile (opaque Studio
+    # tab) the sheet is invisible without this lift.
+    assert "body.notebook-workspace-open #nbpc-modal { z-index: 10010; }" in _CSS

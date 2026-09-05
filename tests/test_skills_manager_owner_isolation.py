@@ -185,7 +185,7 @@ def test_read_skill_md_and_references_are_owner_scoped(tmp_path):
     Called without an owner it must match only ownerless skills."""
     skills_root = tmp_path / "skills"
     skills_root.mkdir(parents=True, exist_ok=True)
-    alice_path = _write_skill_md(
+    _write_skill_md(
         skills_root, category="alice-cat", name="login-flow",
         owner="alice", description="alice secret",
     )

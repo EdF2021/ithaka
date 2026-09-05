@@ -771,46 +771,66 @@ async function initTeacherModel() {
 }
 
 /* ── Image Generation ── */
+// `image_model` is a single admin setting read both by this card and by
+// do_generate_image() (src/ai_interaction.py) for chat image generation, so
+// selectable options here must cover both: inpaint-capable models (for the
+// built-in inpaint tool) and OpenAI's image API models (do_generate_image
+// auto-detects gpt-image-1.5 > gpt-image-1 > dall-e-3). See issue #153.
+function _buildImageModelOptions(allModelIds, currentValue) {
+  const isInpaintModel = (mid) => {
+    const lower = String(mid || '').toLowerCase();
+    return lower.includes('inpaint')
+      || lower.includes('3.5-medium')
+      || lower.includes('3-5-medium')
+      || lower.includes('sd-3.5-med');
+  };
+  const isOpenAiImageModel = (mid) => {
+    const lower = String(mid || '').toLowerCase();
+    return lower.includes('gpt-image') || lower.includes('dall-e') || lower.includes('dalle');
+  };
+  const detected = (allModelIds || []).filter(mid => isInpaintModel(mid) || isOpenAiImageModel(mid));
+  const options = sortModelIds(detected).map(mid => ({ value: mid, label: mid }));
+  // Hardcoded inpaint fallbacks shown as "(not detected)" so users know what
+  // to download/serve to enable inpaint here.
+  ['stable-diffusion-3.5-medium', 'stable-diffusion-inpainting'].forEach(mid => {
+    if (!detected.includes(mid)) options.push({ value: mid, label: mid + ' (not detected)' });
+  });
+  // The currently saved value must always be selectable, even if it isn't in
+  // the model cache at all, so the setting never appears blank (#153).
+  if (currentValue && !options.some(o => o.value === currentValue)) {
+    options.push({ value: currentValue, label: currentValue });
+  }
+  return options;
+}
+
 async function initImageSettings() {
   const modelSel = el('set-imgModelSelect');
   const qualSel = el('set-imgQualitySelect');
   const msg = el('set-imgSettingsMsg');
   const enabledToggle = el('set-imgEnabledToggle');
   const configWrap = modelSel ? modelSel.closest('div[style*="flex-direction"]') : null;
-  try {
-    const modelsRes = await fetch('/api/models', { credentials: 'same-origin' });
-    const modelsData = await modelsRes.json();
-    // Inpaint-compat allowlist — image gen here is scoped to inpainting only,
-    // so DALL-E / GPT-Image-1 (no inpaint API) are excluded. Currently:
-    //   - any model with 'inpaint' in the id
-    //   - Stable Diffusion 3.5 Medium (inpaint via diffusers pipeline)
-    const _isInpaintModel = (mid) => {
-      const lower = String(mid || '').toLowerCase();
-      return lower.includes('inpaint')
-        || lower.includes('3.5-medium')
-        || lower.includes('3-5-medium')
-        || lower.includes('sd-3.5-med');
-    };
-    const imageModels = [];
-    (modelsData.items || []).forEach(item => {
-      (item.models || []).forEach(mid => {
-        if (_isInpaintModel(mid)) imageModels.push(mid);
-      });
-    });
-    sortModelIds(imageModels).forEach(mid => { const opt = document.createElement('option'); opt.value = mid; opt.textContent = mid; modelSel.appendChild(opt); });
-    // Hardcoded fallbacks shown as "(not detected)" so users know what to
-    // download/serve to enable inpaint here.
-    ['stable-diffusion-3.5-medium', 'stable-diffusion-inpainting'].forEach(mid => {
-      if (!imageModels.includes(mid)) { const opt = document.createElement('option'); opt.value = mid; opt.textContent = mid + ' (not detected)'; modelSel.appendChild(opt); }
-    });
-  } catch (e) { console.warn('Failed to load models for image settings', e); }
+  let currentValue = '';
   try {
     const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
     const settings = await settingsRes.json();
-    if (settings.image_model) modelSel.value = settings.image_model;
+    currentValue = settings.image_model || '';
     if (settings.image_quality) qualSel.value = settings.image_quality;
     if (enabledToggle) enabledToggle.checked = settings.image_gen_enabled === true;
   } catch (e) { console.warn('Failed to load settings', e); }
+  try {
+    const modelsRes = await fetch('/api/models', { credentials: 'same-origin' });
+    const modelsData = await modelsRes.json();
+    const allModelIds = [];
+    (modelsData.items || []).forEach(item => { (item.models || []).forEach(mid => allModelIds.push(mid)); });
+    _buildImageModelOptions(allModelIds, currentValue).forEach(({ value, label }) => {
+      const opt = document.createElement('option'); opt.value = value; opt.textContent = label; modelSel.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn('Failed to load models for image settings', e);
+    // Still make the saved value selectable even if the model cache fetch failed.
+    if (currentValue) { const opt = document.createElement('option'); opt.value = currentValue; opt.textContent = currentValue; modelSel.appendChild(opt); }
+  }
+  if (currentValue) modelSel.value = currentValue;
 
   function syncImgDisabled() {
     var off = enabledToggle && !enabledToggle.checked;
@@ -830,6 +850,81 @@ async function initImageSettings() {
   modelSel.addEventListener('change', saveSettings);
   qualSel.addEventListener('change', saveSettings);
   if (enabledToggle) enabledToggle.addEventListener('change', function() { syncImgDisabled(); saveSettings(); });
+}
+
+/* ── Video generation (Veo) ── */
+// Price-per-second table mirrors src/video_gen.py's VEO_PRICE_PER_SECOND_720P
+// / 1080p tiers (docs/superpowers/plans/2026-09-02-image-video-autoroute.md).
+const VIDEO_PRICE_PER_SECOND = {
+  '720p': { 'veo-3.1-generate-preview': 0.40, 'veo-3.1-fast-generate-preview': 0.10, 'veo-3.1-lite-generate-preview': 0.05 },
+  '1080p': { 'veo-3.1-generate-preview': 0.40, 'veo-3.1-fast-generate-preview': 0.12, 'veo-3.1-lite-generate-preview': 0.08 },
+};
+
+async function initVideoSettings() {
+  const enabledToggle = el('set-videoEnabledToggle');
+  const modelSel = el('set-videoModelSelect');
+  const resSel = el('set-videoResolutionSelect');
+  const aspectSel = el('set-videoAspectSelect');
+  const durSel = el('set-videoDurationSelect');
+  const costLine = el('set-videoCostLine');
+  const msg = el('set-videoSettingsMsg');
+  const configWrap = modelSel ? modelSel.closest('div[style*="flex-direction"]') : null;
+
+  try {
+    const settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    const settings = await settingsRes.json();
+    if (settings.video_model) modelSel.value = settings.video_model;
+    if (settings.video_resolution) resSel.value = settings.video_resolution;
+    if (settings.video_aspect_ratio) aspectSel.value = settings.video_aspect_ratio;
+    if (settings.video_duration_seconds != null) durSel.value = String(settings.video_duration_seconds);
+    if (enabledToggle) enabledToggle.checked = settings.video_gen_enabled === true;
+  } catch (e) { console.warn('Failed to load video settings', e); }
+
+  function syncVideoDisabled() {
+    var off = enabledToggle && !enabledToggle.checked;
+    var card = enabledToggle ? enabledToggle.closest('.admin-card') : null;
+    if (card) card.style.opacity = off ? '0.45' : '';
+    if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
+  }
+
+  function updateCostLine() {
+    if (!costLine) return;
+    var table = VIDEO_PRICE_PER_SECOND[resSel.value] || VIDEO_PRICE_PER_SECOND['720p'];
+    var perSecond = table[modelSel.value];
+    if (perSecond == null) { costLine.textContent = ''; return; }
+    var duration = parseInt(durSel.value, 10) || 0;
+    var cost = perSecond * duration;
+    costLine.textContent = 'Estimated cost per clip: $' + cost.toFixed(2);
+  }
+
+  syncVideoDisabled();
+  updateCostLine();
+
+  async function saveSettings() {
+    try {
+      var res = await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_gen_enabled: enabledToggle ? enabledToggle.checked : false,
+          video_model: modelSel.value,
+          video_resolution: resSel.value,
+          video_aspect_ratio: aspectSel.value,
+          video_duration_seconds: parseInt(durSel.value, 10) || 8,
+        }) });
+      if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        var detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message);
+        throw new Error(detail || 'Save failed');
+      }
+      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = ''; }, 2000);
+    } catch (e) { msg.textContent = e.message || 'Failed to save'; msg.style.color = 'var(--red)'; }
+  }
+
+  modelSel.addEventListener('change', function() { updateCostLine(); saveSettings(); });
+  resSel.addEventListener('change', function() { updateCostLine(); saveSettings(); });
+  aspectSel.addEventListener('change', saveSettings);
+  durSel.addEventListener('change', function() { updateCostLine(); saveSettings(); });
+  if (enabledToggle) enabledToggle.addEventListener('change', function() { syncVideoDisabled(); saveSettings(); });
 }
 
 /* ── Vision ── */
@@ -1138,16 +1233,25 @@ async function initSttSettings() {
   updateVisibility();
 
   async function saveSTT() {
+    var enabled = sttEnabledToggle ? sttEnabledToggle.checked : false;
+    // Picking an API endpoint triggers a server-side probe (routes/auth_routes.py
+    // POST /api/auth/settings) that can take a few seconds — show something
+    // other than a frozen field while it runs.
+    sttMsg.textContent = 'Checking...'; sttMsg.style.color = 'var(--fg)';
     try {
-      var enabled = sttEnabledToggle ? sttEnabledToggle.checked : false;
-      await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+      var res = await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stt_enabled: enabled, stt_provider: provSel.value, stt_model: getModel() || 'base', stt_language: langInput.value.trim() }) });
+      if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        var detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message);
+        throw new Error(detail || 'Save failed');
+      }
       sttMsg.textContent = 'Saved'; sttMsg.style.color = 'var(--fg)'; setTimeout(() => { sttMsg.textContent = ''; }, 2000);
       // Notify voiceRecorder of effective provider and update send button icon
       if (window.voiceRecorderModule) window.voiceRecorderModule._sttProvider = effectiveProvider();
       if (window._updateSendBtnIcon) window._updateSendBtnIcon();
-    } catch (e) { sttMsg.textContent = 'Failed to save'; sttMsg.style.color = 'var(--red)'; }
+    } catch (e) { sttMsg.textContent = e.message || 'Failed to save'; sttMsg.style.color = 'var(--red)'; }
   }
 
   provSel.addEventListener('change', function() { updateVisibility(); saveSTT(); });
@@ -1155,6 +1259,101 @@ async function initSttSettings() {
   modelInput.addEventListener('change', saveSTT);
   langInput.addEventListener('change', saveSTT);
   if (sttEnabledToggle) sttEnabledToggle.addEventListener('change', function() { syncSttDisabled(); saveSTT(); });
+}
+
+async function initRealtimeSettings() {
+  var provSel = el('set-realtimeProviderSelect');
+  var toolsToggle = el('set-realtimeToolsToggle');
+  var modelInput = el('set-realtimeModelInput');
+  var transcriptionInput = el('set-realtimeTranscriptionModelInput');
+  var voiceSelect = el('set-realtimeVoiceSelect');
+  var noiseSelect = el('set-realtimeNoiseSelect');
+  var vadThreshold = el('set-realtimeVadThreshold');
+  var vadPrefixMs = el('set-realtimeVadPrefixMs');
+  var vadSilenceMs = el('set-realtimeVadSilenceMs');
+  var maxMinutes = el('set-realtimeMaxMinutes');
+  var instructions = el('set-realtimeInstructions');
+  var enabledToggle = el('set-realtimeEnabledToggle');
+  var configWrap = el('set-realtimeConfigWrap');
+  var msg = el('set-realtimeSettingsMsg');
+  if (!provSel) return;
+
+  function syncDisabled() {
+    var off = enabledToggle && !enabledToggle.checked;
+    var card = enabledToggle ? enabledToggle.closest('.admin-card') : null;
+    if (card) card.style.opacity = off ? '0.45' : '';
+    if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
+  }
+
+  // Add API endpoints that might support the Realtime API
+  try {
+    var epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin' });
+    var endpoints = await epRes.json();
+    endpoints.forEach(function(ep) {
+      if (!ep.is_enabled) return;
+      var opt = document.createElement('option'); opt.value = 'endpoint:' + ep.id; opt.textContent = ep.name + ' (API)'; provSel.appendChild(opt);
+    });
+  } catch (e) { console.warn('Failed to load endpoints for Realtime', e); }
+
+  try {
+    var settingsRes = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var settings = await settingsRes.json();
+    if (settings.realtime_provider) provSel.value = settings.realtime_provider;
+    if (settings.realtime_model) modelInput.value = settings.realtime_model;
+    if (transcriptionInput && settings.realtime_transcription_model != null) transcriptionInput.value = settings.realtime_transcription_model;
+    if (settings.realtime_voice) voiceSelect.value = settings.realtime_voice;
+    if (settings.realtime_noise_reduction) noiseSelect.value = settings.realtime_noise_reduction;
+    vadThreshold.value = settings.realtime_vad_threshold != null ? settings.realtime_vad_threshold : 0.5;
+    vadPrefixMs.value = settings.realtime_vad_prefix_ms != null ? settings.realtime_vad_prefix_ms : 300;
+    vadSilenceMs.value = settings.realtime_vad_silence_ms != null ? settings.realtime_vad_silence_ms : 500;
+    maxMinutes.value = settings.realtime_max_minutes != null ? settings.realtime_max_minutes : 10;
+    if (settings.realtime_instructions) instructions.value = settings.realtime_instructions;
+    if (enabledToggle) enabledToggle.checked = settings.realtime_enabled === true;
+    if (toolsToggle) toolsToggle.checked = settings.realtime_tools_enabled !== false;
+  } catch (e) { console.warn('Failed to load Realtime settings', e); }
+
+  syncDisabled();
+
+  async function saveRealtime() {
+    var enabled = enabledToggle ? enabledToggle.checked : false;
+    msg.textContent = 'Saving...'; msg.style.color = 'var(--fg)';
+    try {
+      var res = await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          realtime_enabled: enabled,
+          realtime_provider: provSel.value,
+          realtime_model: modelInput.value.trim() || 'gpt-realtime-2.1-mini',
+          realtime_transcription_model: transcriptionInput ? transcriptionInput.value.trim() : 'gpt-realtime-whisper',
+          realtime_voice: voiceSelect.value,
+          realtime_noise_reduction: noiseSelect.value,
+          realtime_vad_threshold: parseFloat(vadThreshold.value) || 0.5,
+          realtime_vad_prefix_ms: parseInt(vadPrefixMs.value, 10) || 300,
+          realtime_vad_silence_ms: parseInt(vadSilenceMs.value, 10) || 500,
+          realtime_max_minutes: parseInt(maxMinutes.value, 10) || 10,
+          realtime_instructions: instructions.value,
+          realtime_tools_enabled: toolsToggle ? toolsToggle.checked : true,
+        }) });
+      if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        var detail = typeof err.detail === 'string' ? err.detail : (err.detail && err.detail.message);
+        throw new Error(detail || 'Save failed');
+      }
+      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = ''; }, 2000);
+    } catch (e) { msg.textContent = e.message || 'Failed to save'; msg.style.color = 'var(--red)'; }
+  }
+
+  provSel.addEventListener('change', saveRealtime);
+  modelInput.addEventListener('change', saveRealtime);
+  voiceSelect.addEventListener('change', saveRealtime);
+  noiseSelect.addEventListener('change', saveRealtime);
+  vadThreshold.addEventListener('change', saveRealtime);
+  vadPrefixMs.addEventListener('change', saveRealtime);
+  vadSilenceMs.addEventListener('change', saveRealtime);
+  maxMinutes.addEventListener('change', saveRealtime);
+  instructions.addEventListener('change', saveRealtime);
+  if (enabledToggle) enabledToggle.addEventListener('change', function() { syncDisabled(); saveRealtime(); });
+  if (toolsToggle) toolsToggle.addEventListener('change', saveRealtime);
 }
 
 /* ═══════════════════════════════════════════
@@ -2456,9 +2655,11 @@ function initAll() {
   initTeacherModel();
   initUtilityModel();
   initImageSettings();
+  initVideoSettings();
   initVisionSettings();
   initTtsSettings();
   initSttSettings();
+  initRealtimeSettings();
   initSearchSettings();
   initResearchSettings();
   initResearchSearchSettings();

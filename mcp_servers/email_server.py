@@ -843,7 +843,6 @@ def _search_emails(query, folders=None, max_results=20, account=None):
     cache = _get_cached_summaries()
     out = []
     conn = _imap_connect(account)
-    touched = []
     try:
         for folder in folders:
             try:
@@ -1525,7 +1524,6 @@ async def _ai_draft_reply_to_email(uid, folder="INBOX", reply_all=False, account
     subject = read_result.get("subject") or ""
     reply_subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
     original_body = read_result.get("body") or ""
-    message_id = read_result.get("message_id") or ""
 
     if not original_body.strip():
         return {"error": "No email body available for AI reply"}

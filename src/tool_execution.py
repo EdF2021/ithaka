@@ -30,7 +30,7 @@ from src.tool_security import (
 )
 from src.tool_policy import ToolPolicy
 from src.constants import MAX_OUTPUT_CHARS, MAX_READ_CHARS, MAX_DIFF_LINES, DATA_DIR
-from src.tool_utils import _truncate, get_mcp_manager
+from src.tool_utils import _truncate
 
 # Persistent working directory for agent subprocesses.
 # Resolves to <repo_root>/data, which is the bind-mounted volume in Docker
@@ -936,6 +936,15 @@ async def _execute_tool_block_impl(
     elif tool == "vault_unlock":
         desc = "vault_unlock"
         result = await do_vault_unlock(content, owner=owner)
+    elif tool == "generate_video":
+        # Registry-dispatched (agent_tools.video_tools); owner threaded
+        # explicitly (like manage_endpoints/manage_documents below) — the
+        # generic dynamic_handlers fallback further down does not forward
+        # owner, and video_gen.start_video_job(prompt, owner, ...) needs a
+        # real owner for job ownership/ GET /api/video/jobs/{id} access checks.
+        desc = "generate_video"
+        result = await _direct_fallback(tool, content, owner=owner) \
+            or {"error": "generate_video: execution failed", "exit_code": 1}
     elif tool in BUILTIN_EMAIL_TOOLS:
         # Bare email tool name from fenced-block models (e.g. Ollama) — route to MCP email server.
         # Non-admin owners never reach here: BUILTIN_EMAIL_TOOLS ⊆ NON_ADMIN_BLOCKED_TOOLS,

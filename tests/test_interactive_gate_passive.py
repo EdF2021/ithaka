@@ -77,3 +77,35 @@ def test_video_job_start_post_is_still_tracked():
 def test_similar_but_longer_video_path_is_still_tracked():
     path = "/api/notebooks/nb-123/video/job-456/extra"
     assert should_track_interactive_request(path, "GET") is True
+
+
+def test_infographic_illustrations_status_poll_get_is_not_tracked():
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/illustrations", "GET") is False
+
+
+def test_infographic_illustrations_post_and_sibling_paths_are_still_tracked():
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/illustrations", "POST") is True
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/report", "GET") is True
+    assert should_track_interactive_request(
+        "/api/notebooks/nb-123/artifacts/art-456/illustrations/extra", "GET") is True
+
+
+# ── meeting-recorder detail poll gets the same passive treatment ──────────
+
+def test_meeting_detail_get_is_not_tracked():
+    assert should_track_interactive_request("/api/meetings/abc", "GET") is False
+
+
+def test_meeting_detail_post_is_still_tracked():
+    assert should_track_interactive_request("/api/meetings/abc", "POST") is True
+
+
+def test_meeting_list_get_is_still_tracked():
+    assert should_track_interactive_request("/api/meetings", "GET") is True
+
+
+def test_meeting_chunks_post_is_still_tracked():
+    assert should_track_interactive_request("/api/meetings/abc/chunks", "POST") is True

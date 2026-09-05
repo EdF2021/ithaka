@@ -48,7 +48,7 @@ _FULL_MD = """# Course Facts at a Glance
 def test_infographic_kind_registered_with_dutch_label():
     assert "infographic" in ARTIFACT_KINDS
     assert ARTIFACT_KINDS["infographic"]["label"] == "Infographic"
-    assert "Key numbers" in ARTIFACT_KINDS["infographic"]["prompt"]
+    assert '"blocks"' in ARTIFACT_KINDS["infographic"]["prompt"]
 
 
 def test_infographic_in_english_kind_labels():
@@ -463,5 +463,5 @@ def test_validate_rejects_h3_headings():
 
 def test_infographic_registered_in_kind_validators():
     from src.notebook_artifacts import _KIND_VALIDATORS
-    from src.notebook_infographic import validate_infographic_markdown
-    assert _KIND_VALIDATORS.get("infographic") is validate_infographic_markdown
+    from src.notebook_infographic import extract_infographic
+    assert _KIND_VALIDATORS.get("infographic") is extract_infographic

@@ -154,6 +154,7 @@ async def action_consolidate_memory(owner: str, **kwargs) -> Tuple[str, bool]:
                     temperature=0.0,
                     max_tokens=4096,
                     timeout=120,
+                    workload="background",
                 )
                 from src.text_helpers import strip_think
 
@@ -986,6 +987,7 @@ async def action_classify_events(owner: str, **kwargs) -> Tuple[str, bool]:
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0.1, max_tokens=16384,
                         timeout=180,
+                        workload="background",
                     )
                     from src.text_helpers import strip_think as _st
                     raw = _st(raw or "", prose=False, prompt_echo=False)
@@ -1264,6 +1266,7 @@ async def action_learn_sender_signatures(owner: str, **kwargs) -> Tuple[str, boo
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.0, max_tokens=600,
                     timeout=60,
+                    workload="background",
                 )
                 from src.text_helpers import strip_think as _st
                 sig = _st(raw or "", prose=False, prompt_echo=False).strip()
@@ -1861,7 +1864,6 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
         if not accounts:
             raise TaskNoop("no email accounts configured")
 
-        urgency_prompt = settings.get("urgent_email_prompt", "")
         per_uid_scores = {}   # key = "<acc_id>:<uid>" → {"score": 0-3, "reason": "..."}
         all_unread_keys = set()
         saved_classifications = 0

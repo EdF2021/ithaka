@@ -21,11 +21,13 @@ import sessionModule from './js/sessions.js';
 import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
 import voiceMode from './js/voiceMode.js';
+import realtimeVoice from './js/realtimeVoice.js';
 import censorModule from './js/censor.js';
 import galleryModule from './js/gallery.js';
 import tasksModule from './js/tasks.js?v=20260630tasksactivity';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
+import meetingsModule from './js/meetings.js';
 import adminModule from './js/admin.js';
 import settingsModule from './js/settings.js';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
@@ -53,8 +55,10 @@ const API_BASE = window.location.origin;
 window.themeModule = themeModule;
 window.sessionModule = sessionModule;
 window.uiModule = uiModule;
+window.chatRenderer = chatRenderer;
 window.adminModule = adminModule;
 window.voiceMode = voiceMode;
+window.realtimeVoice = realtimeVoice;
 window.cookbookModule = cookbookModule;
 
 function _isMobileChatInput() {
@@ -172,6 +176,7 @@ function initRailHoverLabels() {
     'rail-email': 'Email',
     'rail-gallery': 'Gallery',
     'rail-archive': 'Library',
+    'rail-meetings': 'Meetings',
     'rail-memory': 'Brain',
     'rail-notebooks': 'Notebooks',
     'rail-notes': 'Notes',
@@ -1139,6 +1144,16 @@ function initializeEventListeners() {
     toolNotesBtn.addEventListener('click', () => {
       if (notesModule) {
         notesModule.togglePanel();
+      }
+    });
+  }
+
+  // Meetings tool button
+  const toolMeetingsBtn = el('tool-meetings-btn');
+  if (toolMeetingsBtn) {
+    toolMeetingsBtn.addEventListener('click', () => {
+      if (meetingsModule) {
+        meetingsModule.togglePanel();
       }
     });
   }
@@ -2422,6 +2437,9 @@ function initializeEventListeners() {
 
     voiceMode.init(function vmStateChange(state) {
       const { active, armed, busy } = state;
+      // Mutually exclusive with Realtime voice mode — both grab the mic
+      // and auto-play TTS, so activating one must deactivate the other.
+      if (active && realtimeVoice.isActive) realtimeVoice.deactivate();
       vmBtn.classList.toggle('active', active);
       updatePlusDot();
       if (vmIndicator) {
@@ -2462,6 +2480,38 @@ function initializeEventListeners() {
     if (vmIndicator) {
       vmIndicator.addEventListener('click', () => {
         voiceMode.deactivate();
+      });
+    }
+  })();
+
+  (function initRealtimeVoiceToggle() {
+    const rtBtn = document.getElementById('overflow-realtime-btn');
+    const rtIndicator = document.getElementById('realtime-indicator-btn');
+    if (!rtBtn) return;
+
+    realtimeVoice.init(function rtStateChange(state) {
+      const { active, state: phase } = state;
+      // Mutually exclusive with the hands-free Voice Mode toggle — see
+      // vmStateChange above.
+      if (active && voiceMode.isActive) voiceMode.deactivate();
+      rtBtn.classList.toggle('active', active);
+      updatePlusDot();
+      if (rtIndicator) {
+        rtIndicator.style.display = active ? '' : 'none';
+        rtIndicator.classList.toggle('active', active);
+        rtIndicator.title = active
+          ? (phase === 'speaking' ? 'Realtime gesprek — AI spreekt…' : phase === 'tool' ? 'Realtime gesprek — zoekt op via Ithaka…' : phase === 'connecting' ? 'Realtime gesprek — verbinden…' : 'Realtime gesprek actief — klik om te stoppen')
+          : 'Realtime Gesprek';
+      }
+    });
+
+    rtBtn.addEventListener('click', () => {
+      realtimeVoice.toggle();
+    });
+
+    if (rtIndicator) {
+      rtIndicator.addEventListener('click', () => {
+        realtimeVoice.deactivate();
       });
     }
   })();
@@ -3778,6 +3828,7 @@ function startIthakaApp() {
     'rail-research':  'tool-research-btn',
     'rail-cookbook':   'tool-cookbook-btn',
     'rail-archive':   'tool-library-btn',
+    'rail-meetings':  'tool-meetings-btn',
     'rail-gallery':   'tool-gallery-btn',
     'rail-tasks':     'tool-tasks-btn',
     'rail-calendar':  'tool-calendar-btn',
@@ -3909,7 +3960,13 @@ function startIthakaApp() {
       return;
     }
 
-    return originalSubmit.call(chatModule, e);
+    // handleChatSubmit is async — without a .catch here any exception it
+    // throws (or a rejection it doesn't itself swallow) becomes an
+    // "Uncaught (in promise)" instead of a handled/reported error (#135).
+    return originalSubmit.call(chatModule, e).catch(err => {
+      console.error('chat submit failed', err);
+      try { uiModule.showError && uiModule.showError('Send failed: ' + (err?.message || err)); } catch (_) {}
+    });
   }
 
   chatForm.onsubmit = handleSubmit;

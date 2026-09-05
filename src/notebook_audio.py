@@ -60,12 +60,17 @@ from core.database import (
     Notebook,
     NotebookArtifact,
     SessionLocal,
+    NotebookSource,
 )
 from src.constants import NOTEBOOK_AUDIO_DIR
 from src.event_bus import fire_event
 from src.notebook_artifacts import _strip_think_blocks, gather_source_text
 from src.notebook_language import DUTCH_OUTPUT_RULE
-from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
+from src.prompt_security import (
+    UNTRUSTED_CONTEXT_POLICY,
+    _escape_guard_markers,
+    untrusted_context_message,
+)
 from src.settings import load_settings
 from src.task_endpoint import task_llm_call_async
 
@@ -92,7 +97,66 @@ _FALLBACK_VOICES = ("alloy", "onyx")
 # sources is still spoken in Dutch.
 # --------------------------------------------------------------------------
 
-PODCAST_PROMPT = f"""Je schrijft het script voor een podcastaflevering van twee hosts die samen een vaste set bronnen bespreken.
+# The four formats mirror NotebookLM's "Audio-overzicht aanpassen" choices;
+# only the role/angle block differs, every hard rule is shared.
+PODCAST_FORMATS: dict[str, dict[str, str]] = {
+    "deep": {
+        "label": "Gedetailleerd",
+        "roles": (
+            "- S1 is de gastheer die het gesprek leidt en vragen stelt; S2 is de "
+            "deskundige die uitlegt en verdiept.\n"
+            "- Pak de onderwerpen in de bronnen levendig uit en koppel ze aan elkaar."
+        ),
+    },
+    "overview": {
+        "label": "Overzicht",
+        "roles": (
+            "- S1 is de gastheer die het gesprek leidt en vragen stelt; S2 is de "
+            "deskundige die kort en helder antwoordt.\n"
+            "- Richt je op de kernideeën: wat moet de luisteraar minimaal weten om "
+            "de bronnen te begrijpen? Laat details en zijpaden weg."
+        ),
+    },
+    "critique": {
+        "label": "Kritiek",
+        "roles": (
+            "- S1 is de gastheer die de bronnen introduceert; S2 is een ervaren "
+            "reviewer die de bronnen als expert beoordeelt.\n"
+            "- S2 geeft constructieve feedback: sterke punten, zwakke plekken, "
+            "ontbrekende onderbouwing en concrete suggesties om het materiaal te "
+            "verbeteren. Blijf respectvol en onderbouw elk punt vanuit de bronnen."
+        ),
+    },
+    "debate": {
+        "label": "Debat",
+        "roles": (
+            "- S1 en S2 zijn gelijkwaardige hosts die elk een ander perspectief "
+            "innemen; S1 opent en bewaakt de rode draad.\n"
+            "- Voer een doordacht debat: zet tegengestelde perspectieven uit de "
+            "bronnen tegenover elkaar, laat beide hosts elkaars argumenten serieus "
+            "nemen en benoem waar ze elkaar uiteindelijk vinden of blijven verschillen."
+        ),
+    },
+}
+
+PODCAST_LENGTHS: dict[str, dict[str, str]] = {
+    "short": {"label": "kort", "turns": "8 tot 14 beurten"},
+    "standard": {"label": "standaard", "turns": "20 tot 40 beurten"},
+}
+
+PODCAST_FOCUS_MAX_CHARS = 500
+
+
+def build_podcast_prompt(fmt: str = "deep", length: str = "standard") -> str:
+    """System prompt for the script call. Written in Dutch (the project
+    language) and, per DUTCH_OUTPUT_RULE, always spoken in Dutch regardless
+    of the sources' language: a podcast over English sources is still spoken
+    in Dutch. `fmt` picks the hosts' roles/angle, `length` the turn budget;
+    the user's optional focus text is NOT part of this prompt (see
+    podcast_focus_text — it rides in the user role)."""
+    roles = PODCAST_FORMATS[fmt]["roles"]
+    turns = PODCAST_LENGTHS[length]["turns"]
+    return f"""Je schrijft het script voor een podcastaflevering van twee hosts die samen een vaste set bronnen bespreken.
 
 Harde regels:
 - {DUTCH_OUTPUT_RULE}
@@ -101,17 +165,77 @@ Harde regels:
 
 Formaat, exact te volgen:
 - Elke regel begint met "S1: " of "S2: ", gevolgd door wat die host zegt.
-- S1 is de gastheer die het gesprek leidt en vragen stelt; S2 is de deskundige die uitlegt en verdiept.
+{roles}
 - Geen inleidende zin, geen afsluitende opmerking, geen kopjes, geen regieaanwijzingen tussen haakjes en geen namen voor de dubbele punt.
 - Geen markdown-opmaak: geen sterretjes, geen opsommingstekens, geen codefences, geen emoji.
 
 Inhoud en lengte:
-- Schrijf 20 tot 40 beurten in totaal, afwisselend tussen S1 en S2.
+- Schrijf {turns} in totaal, afwisselend tussen S1 en S2.
 - Houd elke beurt onder de 400 woorden en varieer de lengte: korte reacties tussen de langere uitleg.
 - De eerste beurt introduceert het onderwerp en waarom het de moeite waard is.
 - Bouw daarna op van de hoofdlijn naar de details, en benoem waar de bronnen elkaar aanvullen of tegenspreken.
 - De laatste beurt vat samen wat de luisteraar heeft gehoord en sluit de aflevering af.
 - Het is gesproken tekst: volledige zinnen, geen opsommingen, geen verwijzingen naar "hierboven" of "dit document"."""
+
+
+# Default prompt (deep / standard) — kept as a module constant for the
+# existing callers and tests that read it.
+PODCAST_PROMPT = build_podcast_prompt()
+
+
+def podcast_focus_text(focus: str) -> str:
+    """User-typed focus, appended to the *user* message (never the system
+    prompt), guard-marker-escaped exactly like the report's layout
+    instruction. Empty focus -> empty string."""
+    focus = (focus or "").strip()
+    if not focus:
+        return ""
+    return (
+        f"\n\nFocus van de gebruiker voor deze aflevering: {_escape_guard_markers(focus)} "
+        f"Richt het gesprek hierop waar de bronnen dat toelaten."
+    )
+
+
+def normalize_podcast_options(options) -> dict:
+    """Validate the customize-modal payload; raise ValueError (route -> 400).
+
+    Returns {"format", "length", "focus", "source_ids"} with defaults for
+    missing keys. `source_ids` is None (all sources) or a non-empty list of
+    document-id strings; membership in the notebook is checked by
+    start_podcast_job, which has the session."""
+    options = options or {}
+    if not isinstance(options, dict):
+        raise ValueError("Ongeldige podcast-opties")
+    fmt = options.get("format") or "deep"
+    if fmt not in PODCAST_FORMATS:
+        raise ValueError("Onbekende indeling")
+    length = options.get("length") or "standard"
+    if length not in PODCAST_LENGTHS:
+        raise ValueError("Onbekende lengte")
+    focus = options.get("focus") or ""
+    if not isinstance(focus, str):
+        raise ValueError("Ongeldige focus")
+    focus = focus.strip()
+    if len(focus) > PODCAST_FOCUS_MAX_CHARS:
+        raise ValueError(f"Focus is langer dan {PODCAST_FOCUS_MAX_CHARS} tekens")
+    source_ids = options.get("source_ids")
+    if source_ids is not None:
+        if (not isinstance(source_ids, list) or not source_ids
+                or not all(isinstance(x, str) and x for x in source_ids)):
+            raise ValueError("Ongeldige bronselectie")
+        source_ids = list(dict.fromkeys(source_ids))
+    return {"format": fmt, "length": length, "focus": focus, "source_ids": source_ids}
+
+
+def podcast_title(notebook_name: str, options: dict) -> str:
+    """"<naam> — Podcast", plus " · <Indeling>" for a non-default format and
+    " · kort" for the short length, so the studio list tells episodes apart."""
+    title = f"{notebook_name} — Podcast"
+    if options.get("format", "deep") != "deep":
+        title += f" · {PODCAST_FORMATS[options['format']]['label']}"
+    if options.get("length", "standard") == "short":
+        title += f" · {PODCAST_LENGTHS['short']['label']}"
+    return title
 
 
 # How many times the script call may be made before the job gives up. The
@@ -561,7 +685,8 @@ def _transcript_markdown(notebook_name: str, turns: list[tuple[str, str]]) -> st
     return "\n".join(lines).rstrip() + "\n"
 
 
-def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None) -> str:
+def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None,
+                      options: Optional[dict] = None) -> str:
     """Validate, register and schedule a podcast job; return its job id.
 
     Synchronous (like ResearchHandler.start_research) and therefore requires a
@@ -575,6 +700,9 @@ def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None) -> 
     core.database.SessionLocal); the job opens one per phase through it.
     """
     factory = db_session_factory or SessionLocal
+    # Raises ValueError on a bad payload — before any DB work, same as the
+    # route's own 400 mapping expects.
+    opts = normalize_podcast_options(options)
 
     now = time.time()
     _reap_stale_jobs(now)
@@ -600,7 +728,15 @@ def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None) -> 
         # die as a job error minutes later, where the spec wants a 400 before
         # the job starts. The job gathers the text again (the session is closed
         # in between); that is the same cost profile as the Fase 2 route.
-        if not gather_source_text(notebook, session):
+        if opts["source_ids"] is not None:
+            known = {
+                doc_id for (doc_id,) in session.query(NotebookSource.document_id)
+                .filter(NotebookSource.notebook_id == notebook.id,
+                        NotebookSource.document_id.isnot(None))
+            }
+            if not set(opts["source_ids"]) <= known:
+                raise ValueError("Onbekende bron in de bronselectie")
+        if not gather_source_text(notebook, session, opts["source_ids"]):
             raise ValueError("Geen geïndexeerde bronnen")
     finally:
         session.close()
@@ -622,6 +758,7 @@ def start_podcast_job(notebook_id: str, owner: str, db_session_factory=None) -> 
         "started_at": now,
         "completed_at": None,
         "task": None,
+        "options": opts,
     }
     _active_jobs[job_id] = entry
     task = asyncio.create_task(_run_job(job_id, notebook_id, owner, factory))
@@ -676,16 +813,22 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
             raise RuntimeError("Notebook niet gevonden")
         # Copied out as plain values: the session closes before the LLM call.
         notebook_name = notebook.name
-        source_text = gather_source_text(notebook, session)
+        opts = entry.get("options") or normalize_podcast_options(None)
+        source_text = gather_source_text(notebook, session, opts["source_ids"])
     finally:
         session.close()
 
     if not source_text:
         raise RuntimeError("Geen geïndexeerde bronnen")
 
+    prompt = build_podcast_prompt(opts["format"], opts["length"])
+    user_msg = untrusted_context_message(f"notebook-bronnen: {notebook_name}", source_text)
+    focus_text = podcast_focus_text(opts["focus"])
+    if focus_text:
+        user_msg = {"role": user_msg["role"], "content": user_msg["content"] + focus_text}
     messages = [
-        {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{PODCAST_PROMPT}"},
-        untrusted_context_message(f"notebook-bronnen: {notebook_name}", source_text),
+        {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{prompt}"},
+        user_msg,
     ]
     # This job is user-initiated and interactive: the user is waiting with an
     # open browser and the UI polls for progress. wait_for_quiet=True would
@@ -818,7 +961,7 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
         document_id = str(uuid.uuid4())
         session.add(Document(
             id=document_id,
-            title=f"{notebook.name} — Podcast",
+            title=podcast_title(notebook.name, opts),
             owner=owner,
             language="markdown",
             current_content=_transcript_markdown(notebook.name, turns),
@@ -829,7 +972,7 @@ async def _generate(entry: dict, notebook_id: str, owner: str, factory) -> None:
             notebook_id=notebook.id,
             document_id=document_id,
             kind="podcast",
-            title=f"{notebook.name} — Podcast",
+            title=podcast_title(notebook.name, opts),
             audio_path=filename,
         )
         session.add(artifact)

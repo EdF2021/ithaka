@@ -29,6 +29,7 @@ DEFAULT_PRIVILEGES = {
     "can_use_documents": True,
     "can_use_research": True,
     "can_generate_images": True,
+    "can_generate_videos": True,
     "can_manage_memory": True,
     "max_messages_per_day": 0,
     "allowed_models": [],

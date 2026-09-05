@@ -1504,6 +1504,98 @@ export function buildImageBubble(imageUrl, prompt, model, size, quality, imageId
   return wrap;
 }
 
+/**
+ * Pending status bubble for an in-flight generate_video job. Reuses the
+ * generated-image bubble container/caption classes (centered body, muted
+ * caption) so no new CSS is needed; the spinner is the same whirlpool used
+ * for attachment skeletons and the "thinking-indicator" row styles the
+ * status text (italic, var(--red)) like elsewhere in the app.
+ */
+export function buildVideoPendingBubble(jobId, model, costEstimate) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg msg-ai generated-image-wrap generated-video-wrap';
+  if (jobId) wrap.dataset.videoJobId = jobId;
+
+  const role = document.createElement('div');
+  role.className = 'role';
+  role.textContent = (model || 'video').split('/').pop();
+  wrap.appendChild(role);
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  const status = document.createElement('div');
+  status.className = 'thinking-indicator generated-video-status';
+
+  const sp = spinnerModule.createWhirlpool(16);
+  status.appendChild(sp.element);
+
+  const label = document.createElement('span');
+  const costText = typeof costEstimate === 'number' ? costEstimate.toFixed(2) : null;
+  label.textContent = 'Generating video with ' + (model || 'Veo')
+    + ' (usually 1-3 min' + (costText ? ', ~$' + costText : '') + ')...';
+  status.appendChild(label);
+
+  body.appendChild(status);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+/** Finished-job bubble: an inline <video> plus a small model/prompt caption. */
+export function buildVideoBubble(job) {
+  job = job || {};
+  const wrap = document.createElement('div');
+  wrap.className = 'msg msg-ai generated-image-wrap generated-video-wrap';
+  if (job.job_id) wrap.dataset.videoJobId = job.job_id;
+
+  const role = document.createElement('div');
+  role.className = 'role';
+  role.textContent = (job.model || 'video').split('/').pop();
+  wrap.appendChild(role);
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  if (!job.video_url) {
+    body.textContent = '[Video unavailable]';
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  const video = document.createElement('video');
+  video.controls = true;
+  video.preload = 'metadata';
+  video.src = job.video_url;
+  video.style.maxWidth = '100%';
+  body.appendChild(video);
+
+  if (job.model || job.prompt) {
+    const caption = document.createElement('div');
+    caption.className = 'generated-image-caption';
+    const parts = [];
+    if (job.model) parts.push(job.model.split('/').pop());
+    if (job.prompt) parts.push(job.prompt);
+    caption.textContent = parts.join(' · ');
+    body.appendChild(caption);
+  }
+
+  wrap.appendChild(body);
+  return wrap;
+}
+
+/** Replace a pending video bubble's body with a red error line. */
+export function renderVideoError(bubbleEl, message) {
+  if (!bubbleEl) return;
+  const body = (bubbleEl.querySelector && bubbleEl.querySelector('.body')) || bubbleEl;
+  body.textContent = '';
+
+  const err = document.createElement('div');
+  err.className = 'generated-video-error';
+  err.style.color = 'var(--red)';
+  err.textContent = message || 'Video generation failed';
+  body.appendChild(err);
+}
+
 export function hideWelcomeScreen() {
   const ws = document.getElementById('welcome-screen');
   const cc = document.getElementById('chat-container');
@@ -2494,6 +2586,15 @@ export function addMessage(role, content, modelName, metadata) {
             if (ev.image_url) {
               box.appendChild(buildImageBubble(ev.image_url, ev.image_prompt, ev.image_model, ev.image_size, ev.image_quality, ev.image_id));
             }
+            if (ev.video_job_id) {
+              if (ev.video_url) {
+                box.appendChild(buildVideoBubble({ video_url: ev.video_url, model: ev.video_model, prompt: ev.command, job_id: ev.video_job_id }));
+              } else {
+                const videoBubble = buildVideoPendingBubble(ev.video_job_id, ev.video_model, ev.video_cost_estimate);
+                box.appendChild(videoBubble);
+                window.chatModule?.startVideoJobPoll?.(ev.video_job_id, videoBubble);
+              }
+            }
           }
         }
       }
@@ -2866,6 +2967,9 @@ const chatRenderer = {
   linkifyCitations,
   appendReportButton,
   buildImageBubble,
+  buildVideoBubble,
+  buildVideoPendingBubble,
+  renderVideoError,
   hideWelcomeScreen,
   showWelcomeScreen,
   createMsgFooter,

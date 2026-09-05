@@ -12,6 +12,7 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 import { openCookbookDependencies } from './cookbook-diagnosis.js';
 import { _hwfitCache } from './cookbook-hwfit.js';
 import { topPortalZ } from './toolWindowZOrder.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 // Shared state/functions injected by init()
 let _envState;
@@ -1144,8 +1145,12 @@ function _rerenderCachedModels() {
       cancelDiv.innerHTML = _di(_cancelIco) + '<span>Cancel</span>';
       cancelDiv.addEventListener('click', () => { closeDropdown(); });
       dropdown.appendChild(cancelDiv);
+      // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+      // rect/window terms before assigning as local px (see uiZoom.js,
+      // PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const rect = btn.getBoundingClientRect();
-      dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};visibility:hidden;top:0;right:${window.innerWidth-rect.right}px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,0.3);font-size:12px;`;
+      dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};visibility:hidden;top:0;right:${toLocalPx(window.innerWidth - rect.right, _z)}px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,0.3);font-size:12px;`;
       document.body.appendChild(dropdown);
       // Clamp into the VISIBLE area (visualViewport, not innerHeight — they differ
       // on mobile under the dynamic toolbar). Flip above the button if there's no
@@ -1153,13 +1158,15 @@ function _rerenderCachedModels() {
       // off-screen / grows the page.
       {
         const vv = window.visualViewport;
-        const viewTop = vv ? vv.offsetTop : 0;
-        const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+        // dh (offsetHeight) is local; the viewport terms are converted
+        // individually before being combined with it (see uiZoom.js, PR #76/#77).
+        const viewTop = toLocalPx(vv ? vv.offsetTop : 0, _z);
+        const viewBottom = toLocalPx(vv ? vv.offsetTop + vv.height : window.innerHeight, _z);
         const dh = dropdown.offsetHeight;
         const mm = 8;
-        let top = rect.bottom + 2;
+        let top = toLocalPx(rect.bottom, _z) + 2;
         if (top + dh > viewBottom - mm) {
-          const above = rect.top - 2 - dh;
+          const above = toLocalPx(rect.top, _z) - 2 - dh;
           top = above >= viewTop + mm ? above : Math.max(viewTop + mm, viewBottom - dh - mm);
         }
         dropdown.style.top = top + 'px';
@@ -2406,11 +2413,17 @@ function _rerenderCachedModels() {
         document.body.appendChild(dropdown);
         // Clamp into the viewport using the menu's real size (both axes); flip
         // above the toggle if there isn't room below. Right-align to the anchor.
+        // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+        // rect/window term individually; w/h (offsetWidth/Height) are already
+        // local (see uiZoom.js, PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const w = dropdown.offsetWidth, h = dropdown.offsetHeight;
-        let left = Math.min(rect.right - w, window.innerWidth - w - 8);
+        const vw = toLocalPx(window.innerWidth, _z);
+        const vh = toLocalPx(window.innerHeight, _z);
+        let left = Math.min(toLocalPx(rect.right, _z) - w, vw - w - 8);
         left = Math.max(8, left);
-        let top = rect.bottom + 6;
-        if (top + h > window.innerHeight - 8) top = Math.max(8, rect.top - 6 - h);
+        let top = toLocalPx(rect.bottom, _z) + 6;
+        if (top + h > vh - 8) top = Math.max(8, toLocalPx(rect.top, _z) - 6 - h);
         dropdown.style.left = `${left}px`;
         dropdown.style.top = `${top}px`;
         dropdown.style.visibility = '';
@@ -2511,19 +2524,25 @@ function _rerenderCachedModels() {
           }));
           menu.appendChild(mk('Clear Server', 'cookbook-dropdown-danger', () => _clearBtn?.click()));
           menu.appendChild(mk('Cancel', 'dropdown-cancel-mobile', () => {}));
+          // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+          // rect/window terms before assigning as local px (see uiZoom.js,
+          // PR #76/#77).
+          const _z = zoomOf(document.documentElement);
           const r = _launchMoreBtn.getBoundingClientRect();
           menu.style.position = 'fixed';
-          menu.style.right = (window.innerWidth - r.right) + 'px';
+          menu.style.right = toLocalPx(window.innerWidth - r.right, _z) + 'px';
           document.body.appendChild(menu);
           {
             const vv = window.visualViewport;
-            const viewTop = vv ? vv.offsetTop : 0;
-            const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+            // mh (offsetHeight) is local; viewport terms are converted
+            // individually before being combined with it.
+            const viewTop = toLocalPx(vv ? vv.offsetTop : 0, _z);
+            const viewBottom = toLocalPx(vv ? vv.offsetTop + vv.height : window.innerHeight, _z);
             const mh = menu.offsetHeight;
             const m = 8;
-            let top = r.bottom + 4;
+            let top = toLocalPx(r.bottom, _z) + 4;
             if (top + mh > viewBottom - m) {
-              const above = r.top - 4 - mh;
+              const above = toLocalPx(r.top, _z) - 4 - mh;
               top = above >= viewTop + m ? above : Math.max(viewTop + m, viewBottom - mh - m);
             }
             menu.style.top = top + 'px';
@@ -2557,22 +2576,28 @@ function _rerenderCachedModels() {
           };
           menu.appendChild(mk('Probe GPUs', '', () => _probeBtn?.click()));
           menu.appendChild(mk('Cancel', 'dropdown-cancel-mobile', () => {}));
+          // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+          // rect/window terms before assigning as local px (see uiZoom.js,
+          // PR #76/#77).
+          const _z = zoomOf(document.documentElement);
           const r = _splitArrow.getBoundingClientRect();
           menu.style.position = 'fixed';
-          menu.style.right = (window.innerWidth - r.right) + 'px';
+          menu.style.right = toLocalPx(window.innerWidth - r.right, _z) + 'px';
           document.body.appendChild(menu);
           // Default open BELOW, but if there's no room (esp. on mobile where
           // the arrow sits near the bottom of the modal) flip ABOVE so the
           // popup isn't off-screen.
           {
             const vv = window.visualViewport;
-            const viewTop = vv ? vv.offsetTop : 0;
-            const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+            // mh (offsetHeight) is local; viewport terms are converted
+            // individually before being combined with it.
+            const viewTop = toLocalPx(vv ? vv.offsetTop : 0, _z);
+            const viewBottom = toLocalPx(vv ? vv.offsetTop + vv.height : window.innerHeight, _z);
             const mh = menu.offsetHeight;
             const m = 8;
-            let top = r.bottom + 4;
+            let top = toLocalPx(r.bottom, _z) + 4;
             if (top + mh > viewBottom - m) {
-              const above = r.top - 4 - mh;
+              const above = toLocalPx(r.top, _z) - 4 - mh;
               top = above >= viewTop + m ? above : Math.max(viewTop + m, viewBottom - mh - m);
             }
             menu.style.top = top + 'px';
@@ -2665,17 +2690,21 @@ function _rerenderCachedModels() {
           // we get the real rendered size, then clamp both axes so the
           // popup stays fully visible — GPU buttons near the right edge
           // of the modal previously anchored the popup mostly off-screen.
+          // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+          // rect/window term individually; pw/ph (offsetWidth/Height) are
+          // already local (see uiZoom.js, PR #76/#77).
+          const _z = zoomOf(document.documentElement);
           const r = anchorBtn.getBoundingClientRect();
-          const vw = window.innerWidth  || document.documentElement.clientWidth;
-          const vh = window.innerHeight || document.documentElement.clientHeight;
+          const vw = toLocalPx(window.innerWidth, _z);
+          const vh = toLocalPx(window.innerHeight, _z);
           const pw = popup.offsetWidth  || 320;
           const ph = popup.offsetHeight || 200;
-          let left = r.left;
-          let top  = r.bottom + 4;
+          let left = toLocalPx(r.left, _z);
+          let top  = toLocalPx(r.bottom, _z) + 4;
           // Push left so the popup doesn't overflow the right edge.
           if (left + pw > vw - 8) left = Math.max(8, vw - pw - 8);
           // If there isn't room below, render above the button instead.
-          if (top + ph > vh - 8) top = Math.max(8, r.top - ph - 4);
+          if (top + ph > vh - 8) top = Math.max(8, toLocalPx(r.top, _z) - ph - 4);
           popup.style.left = `${left}px`;
           popup.style.top  = `${top}px`;
 

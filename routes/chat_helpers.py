@@ -248,96 +248,6 @@ async def auto_name_session(session_manager, sess):
         logger.error(f"Auto-name failed for {sess.id}: {e}\n{traceback.format_exc()}")
 
 
-def try_fallback_endpoint(sess, session_id: str) -> dict | None:
-    """Find an alternative working endpoint when the current one fails.
-
-    Returns {"model": ..., "endpoint_url": ..., "endpoint_name": ...} or None.
-    """
-    import requests as _req
-    from src.endpoint_resolver import (
-        build_chat_url,
-        build_headers,
-        build_models_url,
-        normalize_base,
-        resolve_endpoint_runtime,
-    )
-    from src.chatgpt_subscription import is_chatgpt_subscription_base
-
-    current_url = sess.endpoint_url or ""
-    owner = getattr(sess, "owner", None)
-    db = SessionLocal()
-    try:
-        q = db.query(ModelEndpoint).filter(
-            ModelEndpoint.is_enabled == True
-        )
-        if owner:
-            from src.auth_helpers import owner_filter
-            q = owner_filter(q, ModelEndpoint, owner)
-        endpoints = q.all()
-    finally:
-        db.close()
-
-    for ep in endpoints:
-        base = normalize_base(ep.base_url)
-        # Skip current endpoint
-        if current_url and base in current_url:
-            continue
-        try:
-            base, api_key = resolve_endpoint_runtime(ep, owner=owner)
-        except Exception:
-            continue
-        ping_url = build_models_url(base)
-        headers = build_headers(api_key, base)
-        try:
-            if ping_url:
-                r = _req.get(ping_url, headers=headers, timeout=5)
-                r.raise_for_status()
-                data = r.json()
-                models = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
-                if not models:
-                    models = [
-                        m.get("name") or m.get("model")
-                        for m in (data.get("models") or [])
-                        if m.get("name") or m.get("model")
-                    ]
-            else:
-                models = json.loads(ep.cached_models or "[]")
-            if not models:
-                continue
-            # Found a working endpoint — update session
-            new_model = models[0]
-            chat_url = build_chat_url(base)
-            new_headers = build_headers(api_key, base)
-            persisted_headers = {} if is_chatgpt_subscription_base(base) else new_headers
-
-            sess.model = new_model
-            sess.endpoint_url = chat_url
-            sess.headers = new_headers
-
-            # Persist
-            _db = SessionLocal()
-            try:
-                _db.query(DBSession).filter(DBSession.id == session_id).update({
-                    "model": new_model,
-                    "endpoint_url": chat_url,
-                    "headers": persisted_headers,
-                })
-                _db.commit()
-            finally:
-                _db.close()
-
-            logger.info(f"Fallback: switched session {session_id} from {current_url} to {ep.name} ({new_model})")
-            return {
-                "model": new_model,
-                "endpoint_url": chat_url,
-                "endpoint_name": ep.name,
-            }
-        except Exception:
-            continue
-
-    return None
-
-
 def extract_preset(chat_handler, preset_id) -> PresetInfo:
     """Extract preset parameters via chat_handler."""
     temperature, max_tokens, system_prompt, char_name = (
@@ -623,15 +533,36 @@ def _session_is_research_spinoff(sess) -> bool:
     return False
 
 
+# Client-side sentinels that must never be treated as a real notebook id.
+# A broken client binding (e.g. a JS `undefined` stringified into a FormData
+# field, or a stray "null") must never reach the Chroma `where` filter as a
+# literal value — that filter then matches nothing and RAG silently returns
+# zero results instead of falling back to unscoped chat (#112).
+_NOTEBOOK_ID_SENTINELS = frozenset({"undefined", "null"})
+
+
 def _session_notebook_id(sess):
     """The notebook this session is bound to, or None.
 
     A bound session answers strictly from that notebook's sources. Tolerates
     sessions that predate the column (attribute missing) and normalises the
     empty string to None so ``if _session_notebook_id(sess)`` is the single
-    truth test everywhere (tool lockdown reads this too).
+    truth test everywhere (tool lockdown reads this too). Also normalises a
+    stringified-JS-undefined/null binding to None — a broken client read must
+    degrade to "no notebook", never poison the RAG where-filter with a
+    literal value that matches nothing (#112).
     """
-    return getattr(sess, "notebook_id", None) or None
+    raw = getattr(sess, "notebook_id", None) or None
+    if raw is None:
+        return None
+    if raw.strip().lower() in _NOTEBOOK_ID_SENTINELS:
+        logger.warning(
+            "session %s: notebook_id is the literal string %r — treating as "
+            "unbound (broken client binding, #112)",
+            getattr(sess, "id", "?"), raw,
+        )
+        return None
+    return raw
 
 
 async def build_chat_context(
@@ -656,6 +587,7 @@ async def build_chat_context(
     agent_mode: bool = False,
     allow_tool_preprocessing: bool = True,
     source_ids: list = None,
+    search_hint: str = None,
 ) -> ChatContext:
     """Build the full context (preface + messages) for an LLM call.
 
@@ -760,6 +692,10 @@ async def build_chat_context(
         # source_ids is a notebook feature (per-source checkboxes); outside a
         # notebook there is no bounded source set to restrict, so drop it.
         source_ids=source_ids if notebook_id else None,
+        # search_hint (#112) is likewise notebook-only — it only means
+        # anything as a fallback anchor for the notebook RAG-condensation
+        # step below.
+        search_hint=search_hint if notebook_id else None,
     )
     if use_rag is not None or is_research_spinoff or casual_low_signal or notebook_id:
         _preface_kwargs["use_rag"] = use_rag_val

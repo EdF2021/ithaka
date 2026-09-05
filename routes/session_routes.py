@@ -157,6 +157,33 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 
+
+# Mirrors routes/chat_helpers.py's _session_notebook_id read-time guard, but
+# at write time: a broken client read (FormData.append() stringifying an
+# actual JS `undefined`, or a stray "null") must never persist as a literal
+# value on the sessions.notebook_id column — that value later poisons the
+# Chroma `where` filter and silently zeroes out RAG results (#112).
+_NOTEBOOK_ID_SENTINELS = frozenset({"undefined", "null"})
+
+
+def _clean_notebook_id_form_value(raw: str | None) -> str | None:
+    """Normalise a posted ``notebook_id`` form field for storage.
+
+    Empty/whitespace-only input and the client-side sentinels above both
+    become ``None``; anything else is returned trimmed. Logs a warning on the
+    sentinel case so a broken binding is diagnosable from prod logs alone.
+    """
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.lower() in _NOTEBOOK_ID_SENTINELS:
+        logger.warning(
+            "create_session: notebook_id posted as the literal string %r "
+            "— dropping (broken client binding, #112)", cleaned,
+        )
+        return None
+    return cleaned
+
 def _current_user_is_admin(request: Request, user: str | None) -> bool:
     if not user:
         return False
@@ -460,8 +487,10 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             rag=str(rag).lower() == "true" if rag else False,
             owner=user,
             # Binds the session to a notebook: chat then answers strictly from
-            # that notebook's sources (see routes/chat_helpers.py).
-            notebook_id=(notebook_id or "").strip() or None,
+            # that notebook's sources (see routes/chat_helpers.py). Rejects a
+            # stringified-JS-undefined/null binding — see
+            # _clean_notebook_id_form_value above (#112).
+            notebook_id=_clean_notebook_id_form_value(notebook_id),
         )
         # Set auth headers for custom API-key endpoints
         resolved_key = request_api_key
@@ -980,8 +1009,8 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             raise HTTPException(400, "Nothing old enough to compact")
 
         from src.context_compactor import SELF_SUMMARY_SYSTEM_PROMPT
-        from src.endpoint_resolver import resolve_endpoint
-        from src.llm_core import llm_call_async
+        from src.endpoint_resolver import resolve_endpoint, resolve_utility_fallback_candidates
+        from src.llm_core import llm_call_async_with_fallback
 
         owner = getattr(session, "owner", None) or effective_user(request)
         url, model, headers = resolve_endpoint("utility", owner=owner)
@@ -1003,14 +1032,18 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             f"{_message_role(m).upper()}: {_message_text(m)[:2000]}"
             for m in older
         )
+        # Chain the configured utility fallbacks behind the primary pick
+        # (utility model, or the session's own model when utility isn't
+        # configured) so a down endpoint doesn't hard-fail compaction
+        # (see #183 part B).
+        candidates = [(url, model, headers)]
+        candidates.extend(resolve_utility_fallback_candidates(owner=owner or None) or [])
         try:
-            summary = await llm_call_async(
-                url,
-                model,
+            summary = await llm_call_async_with_fallback(
+                candidates,
                 [{"role": "system", "content": prompt}, {"role": "user", "content": convo_text}],
                 temperature=0.2,
                 max_tokens=1024,
-                headers=headers,
                 timeout=60,
             )
         except Exception as e:

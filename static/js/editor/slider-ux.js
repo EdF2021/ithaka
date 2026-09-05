@@ -19,6 +19,7 @@
  * }} deps
  */
 import { state } from './state.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 export function wireSliderUx({ registerDocClickAway }) {
   const container = state.container;
@@ -54,12 +55,15 @@ export function wireSliderUx({ registerDocClickAway }) {
     // overflow:hidden / overflow:auto on the row's ancestors. The
     // bubble's X is CLAMPED to the slider's track so it can't follow
     // a finger that drags way past either end.
+    // UI text-scale zoom (:root.ui-scale-125) — the clamp stays in viewport
+    // space; divide only the final assignment (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const sliderRect = slider.getBoundingClientRect();
     const minX = sliderRect.left + 8;
     const maxX = sliderRect.right - 8;
     const x = Math.max(minX, Math.min(maxX, cursorX));
-    sliderBubble.style.left = x + 'px';
-    sliderBubble.style.top  = (sliderRect.top - 8) + 'px';
+    sliderBubble.style.left = toLocalPx(x, _z) + 'px';
+    sliderBubble.style.top  = toLocalPx(sliderRect.top - 8, _z) + 'px';
   }
   function showSliderBubble(slider, e) {
     if (sliderBubble.parentElement !== document.body) document.body.appendChild(sliderBubble);
@@ -159,12 +163,21 @@ export function wireSliderUx({ registerDocClickAway }) {
     inp.className = 'ge-slider-edit';
     chip.style.visibility = 'hidden';
     row.appendChild(inp);
-    // Position the input over where the chip sits.
+    // Position the input over where the chip sits. `inp` is position:absolute
+    // inside `row` (position:relative) — both live inside the zoomed :root
+    // subtree, so a delta between two getBoundingClientRect() reads is still
+    // viewport-space and needs dividing once before assigning as local px
+    // (same re-multiplication issue as fixed popups; see uiZoom.js, PR #76/#77).
+    // The `-1`/`+8` below are handwritten local design constants (not
+    // measurements) and stay OUTSIDE the division, same as every other local
+    // term in this codebase (sizeCss in notes.js, paddingTop/lineH in
+    // document.js) — only the viewport-space delta gets divided.
+    const _z = zoomOf(document.documentElement);
     const crect = chip.getBoundingClientRect();
     const rrect = row.getBoundingClientRect();
-    inp.style.left = (crect.left - rrect.left) + 'px';
-    inp.style.top = (crect.top - rrect.top - 1) + 'px';
-    inp.style.width = Math.max(40, crect.width + 8) + 'px';
+    inp.style.left = toLocalPx(crect.left - rrect.left, _z) + 'px';
+    inp.style.top = (toLocalPx(crect.top - rrect.top, _z) - 1) + 'px';
+    inp.style.width = Math.max(40, toLocalPx(crect.width, _z) + 8) + 'px';
     inp.focus();
     inp.select();
     const commit = () => {

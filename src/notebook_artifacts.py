@@ -19,6 +19,7 @@ why the background workload would self-deadlock.
 
 from __future__ import annotations
 
+from typing import Optional
 import logging
 import re
 import uuid
@@ -26,11 +27,15 @@ import uuid
 from core.database import Document, Notebook, NotebookArtifact, NotebookSource
 from src.event_bus import fire_event
 from src.notebook_flashcards import validate_flashcards_markdown
-from src.notebook_infographic import validate_infographic_markdown
+from src.notebook_infographic import extract_infographic
 from src.notebook_language import DUTCH_OUTPUT_RULE
 from src.notebook_mindmap import validate_mindmap_markdown
 from src.notebook_slides import extract_slide_deck
-from src.prompt_security import UNTRUSTED_CONTEXT_POLICY, untrusted_context_message
+from src.prompt_security import (
+    UNTRUSTED_CONTEXT_POLICY,
+    _escape_guard_markers,
+    untrusted_context_message,
+)
 from src.task_endpoint import task_llm_call_async
 
 logger = logging.getLogger(__name__)
@@ -176,18 +181,38 @@ mindmap
       Detail drie
 ```""",
 
-    "infographic": """Maak een infographic: een compacte, visueel scanbare pagina met de kern van de bronnen in cijfers en korte feiten.
+    "infographic": """Maak een infographic: één landscape-compositie met thematische kolommen, genummerde stappen, icoon-kaarten, een centraal hero-element, een vergelijkingsblok en kerncijfers. De tekst blijft in HTML; illustraties worden apart gegenereerd op basis van jouw prompts.
 
-Structuur, exact in deze volgorde en met exact deze koppen (de renderer parst op deze structuur):
-- "# " met een pakkende titel in het Nederlands.
-- "## Key numbers": 3 tot 5 bullets, elk exact in de vorm "- **<getal, percentage of korte metric>** — <label van maximaal 8 woorden>". Zijn er geen cijfers in de bronnen, gebruik dan een telwoord of kort feit als "getal" (bijvoorbeeld "3 panelen" of "geen vermeld") - verzin nooit een cijfer dat niet in de bronnen staat.
-- Daarna 3 tot 4 gewone secties, elk "## <sectiekop>" met 2 tot 4 korte bullet-feiten.
-- Afsluitend één blockquote-regel "> " met één kernboodschap in één zin.
+Lever exact één codefence met taalaanduiding "json" en daarin één JSON-object, niets anders. Schema:
 
-Regels:
-- Elk "key number" en elk bullet-feit moet herleidbaar zijn tot de bronnen; geen verzonnen cijfers of aannames.
-- Houd bullets kort en concreet - geen volledige alinea's.
-- Gebruik uitsluitend de koppen "## Key numbers" en de overige sectiekoppen; geen extra kopniveaus (geen "###").""",
+{
+  "title": "titel in het Nederlands (max 80 tekens)",
+  "subtitle": "ondertitel (optioneel, max 120 tekens)",
+  "takeaway": "één zin met de kernboodschap (max 240 tekens)",
+  "blocks": [
+    {"id": "slug", "type": "column", "heading": "kop", "subheading": "korte toelichting",
+     "illustration_prompt": "optioneel", "children": [ ...2 tot 3 sub-blokken van type steps, icon_card of key_numbers... ]},
+    {"id": "slug", "type": "steps", "heading": "kop", "items": [{"label": "kort", "text": "max 120 tekens"}]},
+    {"id": "slug", "type": "icon_card", "heading": "kop", "icon": "chat", "text": "1 tot 2 zinnen, max 200 tekens"},
+    {"id": "slug", "type": "hero", "heading": "kop", "illustration_prompt": "...", "text": "max 240 tekens"},
+    {"id": "slug", "type": "comparison", "heading": "kop", "rows": [{"label": "kort", "value": "letterlijke bronwaarde", "ratio": 0.6}]},
+    {"id": "slug", "type": "key_numbers", "heading": "kop", "items": [{"number": "42%", "label": "max 8 woorden"}]}
+  ]
+}
+
+Regels voor de structuur:
+- 5 tot 8 blokken op het hoogste niveau; precies één "hero".
+- Maximaal TWEE "column"-blokken (links en rechts van de hero); een derde thema wordt geen column maar losse blokken (steps, icon_card of key_numbers) op het hoogste niveau. Elke column heeft 2 tot 3 children; children mogen zelf geen column of hero zijn.
+- "steps" heeft 2 tot 5 stappen; "comparison" 2 tot 4 rijen; "key_numbers" 3 tot 5 items.
+- "id" is een unieke slug (a-z, 0-9, - of _); "heading" maximaal 60 tekens.
+- "icon" is optioneel; de waarde moet exact één van deze sleutels zijn: sources, audio, video, chat, graph, bars, target, warning, gear, people, doc, search, spark. Laat weg als geen sleutel past.
+- "illustration_prompt" is optioneel, in het Engels, maximaal 200 tekens: beschrijf een eenvoudige scène of metafoor zonder merknamen of personen en vraag nooit om tekst in beeld (geen text, label, caption, words, letters). Geef er maximaal 5, in elk geval bij de hero.
+
+Regels voor de inhoud:
+- Elk cijfer, elke stap en elke vergelijkingswaarde moet herleidbaar zijn tot de bronnen; verzin niets.
+- "ratio" alleen als de bronnen een vergelijkbare grootheid geven; anders het comparison-blok weglaten. "value" is de letterlijke bronwaarde (bijvoorbeeld "300 bronnen").
+- Zijn er geen cijfers in de bronnen, gebruik dan een telwoord of kort feit als "number" (bijvoorbeeld "3 panelen").
+- Alle tekstvelden in het Nederlands, behalve "illustration_prompt". Geen markdown of HTML binnen de JSON-strings.""",
 
     "flashcards": """Maak 10 tot 15 flashcards waarmee iemand de kernbegrippen uit de bronnen kan oefenen.
 
@@ -236,6 +261,21 @@ Regels:
 - "notes" is de uitgeschreven toelichting die een spreker bij de slide zou vertellen - op zichzelf begrijpelijk.
 - Elk feit moet herleidbaar zijn tot de bronnen; verzin niets.
 - Geen markdown of HTML binnen de JSON-strings; alleen platte tekst.""",
+
+    "report": """Maak een rapport op basis van de bronnen.
+
+Structuur:
+- "# " met een titel in het Nederlands die bij het onderwerp past.
+- Volg de indeling-instructie die in het bericht hierna is meegegeven voor structuur, secties, stijl en toon. Geeft die geen duidelijke sectie-indeling, kies dan zelf een heldere indeling met "## "-koppen die recht doet aan de bronnen.
+- Gebruik doorlopende alinea's; gebruik bullets of een tabel alleen waar dat de leesbaarheid echt dient.
+
+Bronverwijzingen:
+- Voor dit rapport zijn de bronnen genummerd met koppen van de vorm "=== BRON [n]: bestandsnaam ===" (in plaats van de ongenummerde koppen hierboven).
+- Citeer elke bewering die op een bron steunt met "[n]", waarbij n het bronnummer uit die kop is - direct achter de zin of het zinsdeel dat de bewering bevat.
+- Sluit het rapport af met een kop "## Bronnen" met daaronder één regel per gebruikte bron, in de vorm "[n] bestandsnaam".
+
+Regels:
+- Is er geen indeling-instructie meegegeven, schrijf dan een overzichtelijk, zakelijk rapport van 500 tot 900 woorden.""",
 }
 
 _KIND_LABELS = {
@@ -248,6 +288,7 @@ _KIND_LABELS = {
     "flashcards": "Flashcards",
     "data_table": "Gegevenstabel",
     "slide_deck": "Diapresentatie",
+    "report": "Rapport",
 }
 
 # Post-generation format validators: kind -> callable that raises ValueError
@@ -260,7 +301,7 @@ _KIND_VALIDATORS = {
     # then surfaced as raw markdown (infographic fallback card, one-card
     # flashcard deck, unrendered mindmap) — 2026-08-20..23 production
     # regressions with format-ignoring models.
-    "infographic": validate_infographic_markdown,
+    "infographic": extract_infographic,
     "flashcards": validate_flashcards_markdown,
     "mindmap": validate_mindmap_markdown,
 }
@@ -300,23 +341,27 @@ def is_artifacts_generate_request(method: str, path: str) -> bool:
 # Source collection
 # --------------------------------------------------------------------------
 
-def _source_entries(notebook: Notebook, db_session) -> list[tuple[str, str]]:
+def _source_entries(notebook: Notebook, db_session,
+                    source_ids: Optional[list[str]] = None) -> list[tuple[str, str]]:
     """Return [(filename, text)] for the notebook's usable sources.
 
     Only sources that were indexed successfully *and* still have a backing
     Document with content qualify - a failed upload or a source whose Document
-    was deleted from the Library has no full text to summarize.
+    was deleted from the Library has no full text to summarize. `source_ids`
+    (document ids, the same ids the workspace's source checkboxes carry)
+    narrows the set further; None means every usable source.
     """
-    rows = (
+    query = (
         db_session.query(NotebookSource)
         .filter(
             NotebookSource.notebook_id == notebook.id,
             NotebookSource.status == "indexed",
             NotebookSource.document_id.isnot(None),
         )
-        .order_by(NotebookSource.created_at, NotebookSource.filename)
-        .all()
     )
+    if source_ids is not None:
+        query = query.filter(NotebookSource.document_id.in_(list(source_ids)))
+    rows = query.order_by(NotebookSource.created_at, NotebookSource.filename).all()
     entries = []
     for src in rows:
         doc = db_session.get(Document, src.document_id)
@@ -329,24 +374,26 @@ def _source_entries(notebook: Notebook, db_session) -> list[tuple[str, str]]:
     return entries
 
 
-def gather_source_text(notebook: Notebook, db_session) -> str:
-    """Build the source payload for the model, capped at MAX_CONTEXT_CHARS.
+def _assemble_source_blocks(headers: list[str], entries: list[tuple[str, str]]) -> str:
+    """Water-filling assembly shared by gather_source_text and
+    gather_source_text_numbered, capped at MAX_CONTEXT_CHARS.
 
-    Blocks are "=== BRON: <filename> ===" headers followed by the document's
-    full text. When the total exceeds the cap, only the sources that would
-    not fit their fair share of the remaining budget are truncated (and
-    marked with "(bron ingekort)"); a source that fits is kept complete and
-    unmarked, even while a larger sibling gets cut. This is a water-filling
-    pass over sources sorted ascending by length: each source in turn either
-    keeps its full text (consuming only what it needs, so leftover budget
-    grows for the sources still to come) or is cut to that step's fair
-    share. Returns "" when the notebook has no usable sources.
+    Joins each header with its entry's document text. When the total exceeds
+    the cap, only the sources that would not fit their fair share of the
+    remaining budget are truncated (and marked with "(bron ingekort)"); a
+    source that fits is kept complete and unmarked, even while a larger
+    sibling gets cut. This is a water-filling pass over sources sorted
+    ascending by length: each source in turn either keeps its full text
+    (consuming only what it needs, so leftover budget grows for the sources
+    still to come) or is cut to that step's fair share.
+
+    `headers` and `entries` must be the same length and in the same order —
+    the truncation math only looks at `entries`' text lengths, so the two
+    callers differ solely in what header string they hand in per source
+    (unnumbered "=== BRON: ... ===" vs. numbered "=== BRON [n]: ... ===");
+    factored out here so that difference can't let the shared truncation
+    logic drift between them.
     """
-    entries = _source_entries(notebook, db_session)
-    if not entries:
-        return ""
-
-    headers = [_SOURCE_HEADER.format(filename=name) + "\n" for name, _ in entries]
     # The cap covers the whole payload, so headers and separators are spent
     # before any text budget is handed out.
     overhead = sum(len(h) for h in headers) + len(_BLOCK_SEPARATOR) * (len(entries) - 1)
@@ -399,18 +446,132 @@ def gather_source_text(notebook: Notebook, db_session) -> str:
     return result
 
 
+def gather_source_text(notebook: Notebook, db_session,
+                       source_ids: Optional[list[str]] = None) -> str:
+    """Build the source payload for the model, capped at MAX_CONTEXT_CHARS.
+
+    Blocks are "=== BRON: <filename> ===" headers followed by the document's
+    full text; the water-filling truncation strategy is
+    _assemble_source_blocks (see its docstring). Returns "" when the
+    notebook has no usable sources. `source_ids` (document ids) restricts
+    the payload to a subset; None means all usable sources.
+    """
+    entries = _source_entries(notebook, db_session, source_ids)
+    if not entries:
+        return ""
+
+    headers = [_SOURCE_HEADER.format(filename=name) + "\n" for name, _ in entries]
+    return _assemble_source_blocks(headers, entries)
+
+
+# --------------------------------------------------------------------------
+# Report-kind source collection (numbered headers for citations)
+#
+# Only kind="report" uses this. Every other kind keeps calling
+# gather_source_text/_SOURCE_HEADER above, whose output stays byte-for-byte
+# unchanged - the two share only the water-filling truncation math
+# (_assemble_source_blocks); each builds its own header strings.
+# --------------------------------------------------------------------------
+
+_SOURCE_HEADER_NUMBERED = "=== BRON [{n}]: {filename} ==="
+
+
+def gather_source_text_numbered(notebook: Notebook, db_session) -> tuple[str, int]:
+    """Report-kind variant of gather_source_text: numbered source headers.
+
+    Same water-filling truncation, cap (MAX_CONTEXT_CHARS) and skip rules as
+    gather_source_text (both delegate to _assemble_source_blocks), but
+    headers are "=== BRON [n]: filename ===" (n = 1-based position in source
+    order, matching _source_entries' ordering) instead of the shared
+    "=== BRON: filename ===", so the report kind's citation instruction
+    (_KIND_INSTRUCTIONS["report"]) can point "[n]" back at a specific
+    numbered source.
+
+    Returns (payload, source_count): source_count is the number of sources
+    included (0 when the notebook has no usable sources, mirroring
+    gather_source_text's "" return). validate_report_markdown uses it to
+    bound citation numbers.
+    """
+    entries = _source_entries(notebook, db_session)
+    if not entries:
+        return "", 0
+
+    headers = [
+        _SOURCE_HEADER_NUMBERED.format(n=i, filename=name) + "\n"
+        for i, (name, _) in enumerate(entries, start=1)
+    ]
+    return _assemble_source_blocks(headers, entries), len(entries)
+
+
+# --------------------------------------------------------------------------
+# Report-kind citation validator
+# --------------------------------------------------------------------------
+
+# A bare "[n]" (digits only) not immediately followed by "(" - excludes
+# markdown links "[tekst](url)" and numeric-text links "[1](url)". Footnote
+# syntax "[^1]" is excluded too, since "^" isn't a digit so \d+ never matches
+# there.
+_CITATION_RE = re.compile(r"\[(\d+)\](?!\()")
+
+
+def validate_report_markdown(text: str, source_count: int) -> str | None:
+    """Check that every "[n]" citation in a report artifact points at an
+    existing numbered source.
+
+    Report kind only. gather_source_text_numbered numbers sources 1..N in
+    generation order; the report instruction (_KIND_INSTRUCTIONS["report"])
+    asks the model to cite claims as "[n]" against that numbering. This only
+    bounds those citation numbers - it does NOT require any citations and
+    does NOT require a "## Bronnen" section, because a layout_instruction
+    may legitimately steer the report away from either, and the retry loop
+    (_VALIDATION_ATTEMPTS, see generate_artifact) must not get stuck
+    demanding something the instruction told the model to skip.
+
+    Unlike the other validate_*_markdown functions (which raise ValueError
+    and are registered directly in _KIND_VALIDATORS), this one returns
+    instead of raising: source_count is per-call (the notebook's actual
+    source count), not known at module-import time, so generate_artifact
+    wraps this in a small closure for the retry loop rather than registering
+    it in _KIND_VALIDATORS.
+
+    Returns None when every citation number is within 1..source_count (or
+    there are none at all), otherwise a Dutch error string naming the
+    out-of-range number(s) - fed back to the model on retry, same shape as
+    the other validators' ValueError messages.
+    """
+    numbers = {int(m.group(1)) for m in _CITATION_RE.finditer(text or "")}
+    bad = sorted(n for n in numbers if not (1 <= n <= source_count))
+    if not bad:
+        return None
+    bad_list = ", ".join(f"[{n}]" for n in bad)
+    return (
+        f"citatie(s) {bad_list} verwijzen naar een bron die niet bestaat "
+        f"(er zijn {source_count} genummerde bronnen; gebruik alleen "
+        f"[1] t/m [{source_count}])"
+    )
+
+
 # --------------------------------------------------------------------------
 # Generation
 # --------------------------------------------------------------------------
 
 async def generate_artifact(
-    notebook_id: str, owner: str, kind: str, db_session, focus: str | None = None
+    notebook_id: str, owner: str, kind: str, db_session, focus: str | None = None,
+    layout_instruction: str | None = None,
 ) -> NotebookArtifact:
     """Generate one artifact for `notebook_id` and return its NotebookArtifact.
 
     Rows are written only after the model answered: a failed or empty LLM call
     leaves no Document and no artifact behind. Regenerating the same kind adds
     a new artifact rather than overwriting the old one.
+
+    `layout_instruction` is only used when kind="report" (the "Rapport
+    maken" flow in src/notebook_report_layouts.py): a fixed template's, an
+    AI-recommended layout's, or a user-typed instruction describing the
+    report's structure, style and tone. It is appended as extra instruction
+    in the user role (not the system role), escaped via
+    _escape_guard_markers first since it can carry LLM-generated text traced
+    back to untrusted source content.
 
     Raises ValueError for an unknown kind, an unknown/foreign notebook, or a
     notebook without usable sources; RuntimeError when the model returns
@@ -434,7 +595,15 @@ async def generate_artifact(
     if notebook is None:
         raise ValueError("Notebook niet gevonden")
 
-    source_text = gather_source_text(notebook, db_session)
+    if kind == "report":
+        # Numbered "=== BRON [n]: ... ===" headers so the report's citation
+        # instruction can point "[n]" at a specific source; source_count
+        # bounds validate_report_markdown's accepted citation range below.
+        # Every other kind keeps gather_source_text/_SOURCE_HEADER unchanged.
+        source_text, source_count = gather_source_text_numbered(notebook, db_session)
+    else:
+        source_text = gather_source_text(notebook, db_session)
+        source_count = None
     if not source_text:
         raise ValueError("Geen geïndexeerde bronnen")
 
@@ -447,6 +616,21 @@ async def generate_artifact(
             f"maar behoud het mermaid-mindmap formaat."
         )
         user_msg = {"role": user_msg["role"], "content": user_msg["content"] + focus_instruction}
+    if kind == "report" and layout_instruction and layout_instruction.strip():
+        # layout_instruction isn't always user-typed: it can be an
+        # AI-recommended layout's `instruction` field, itself LLM output
+        # generated from untrusted notebook source content (see
+        # src/notebook_report_layouts.py), cached, and posted back verbatim.
+        # Escape guard-marker literals before it lands in this trusted zone
+        # of the message, or a malicious source document could steer the
+        # suggestion call into laundering guard markers into the
+        # report-generation call below.
+        safe_instruction = _escape_guard_markers(layout_instruction.strip())
+        layout_instruction_text = (
+            f"\n\nIndeling-instructie voor dit rapport: {safe_instruction} "
+            f"Volg deze instructie voor de structuur, stijl en toon van het rapport."
+        )
+        user_msg = {"role": user_msg["role"], "content": user_msg["content"] + layout_instruction_text}
     messages = [
         {"role": "system", "content": f"{UNTRUSTED_CONTEXT_POLICY}\n\n{spec['prompt']}"},
         user_msg,
@@ -469,7 +653,18 @@ async def generate_artifact(
     # workload="foreground" tells the local-model slot this is a synchronous
     # user-facing call, not a genuine background job, so it does not wait on
     # its own request's activity flag.
-    validator = _KIND_VALIDATORS.get(kind)
+    if kind == "report":
+        # validate_report_markdown returns str|None (not raise) and needs
+        # source_count, which isn't known until generation time - so it
+        # can't sit in the static _KIND_VALIDATORS dict like the others.
+        # This closure adapts it to the raise-based contract the retry loop
+        # below expects, keeping that loop uniform across every kind.
+        def validator(text: str) -> None:
+            error = validate_report_markdown(text, source_count)
+            if error:
+                raise ValueError(error)
+    else:
+        validator = _KIND_VALIDATORS.get(kind)
     content = ""
     last_error = ""
     for attempt in range(_VALIDATION_ATTEMPTS):

@@ -115,6 +115,9 @@ where you run it matters:
 
 > **ChromaDB caveat (Docker only).** In the Docker setup, ChromaDB stores its
 > vectors in a separate Compose-managed volume (declared as `chromadb-data`),
+> mounted at `/data` inside the container (the chroma 1.x image's
+> `persist_path`; until 2026-09-02 compose mounted it at `/chroma/chroma`, so the
+> data silently lived in the container's writable layer and the volume stayed empty),
 > **not** under `./data`. `ithaka-backup` therefore does not capture the Docker
 > ChromaDB store. Back it up separately if you need it. Compose prefixes the
 > volume with the project name, so find the real name first

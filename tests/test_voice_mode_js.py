@@ -168,6 +168,98 @@ def test_empty_transcription_rearms_mic():
     assert values["armedFinal"] is True
 
 
+# ── STT failure visibility (2026-09-02 incident: silent deactivation) ──
+
+
+def test_transcription_error_shows_status_without_deactivating():
+    values = _node_eval(
+        _VOICE_MODE_DOM_STUB
+        + """
+        globalThis.uiModule = { showError(msg) { calls.push(msg) }, showToast() {} };
+        const calls = [];
+        const voiceMode = (await import('./static/js/voiceMode.js')).default;
+        let lastOpts = null;
+        let lastOnErr = null;
+        const recorder = {
+          _sttProvider: 'endpoint:abc',
+          async refreshSttProvider() {},
+          startRecording(onFile, onToast, onErr, opts) { lastOpts = opts; lastOnErr = onErr; },
+          stopRecording() {},
+          getIsRecording: () => false,
+        };
+        voiceMode.init(null, recorder);
+        await voiceMode.activate();
+        // Simulate the recorder's showError callback firing for a failed
+        // transcription (voiceRecorder.js prefixes these with 'Transcription failed').
+        lastOnErr('Transcription failed: HTTP 500: endpoint returned HTTP 500');
+        const activeAfterError = voiceMode.isActive;
+        console.log(JSON.stringify({ activeAfterError, calls }));
+        """
+    )
+    # a recoverable transcription error must not deactivate voice mode...
+    assert values["activeAfterError"] is True
+    # ...but must be surfaced, mentioning the HTTP status
+    assert len(values["calls"]) == 1
+    assert "500" in values["calls"][0]
+
+
+def test_mic_permission_error_deactivates_immediately():
+    values = _node_eval(
+        _VOICE_MODE_DOM_STUB
+        + """
+        globalThis.uiModule = { showError(msg) { calls.push(msg) }, showToast() {} };
+        const calls = [];
+        const voiceMode = (await import('./static/js/voiceMode.js')).default;
+        let lastOnErr = null;
+        const recorder = {
+          _sttProvider: 'endpoint:abc',
+          async refreshSttProvider() {},
+          startRecording(onFile, onToast, onErr, opts) { lastOnErr = onErr; },
+          stopRecording() {},
+          getIsRecording: () => false,
+        };
+        voiceMode.init(null, recorder);
+        await voiceMode.activate();
+        // A mic-level error (voiceRecorder.js showError, no matching onDone call)
+        lastOnErr('Microphone access denied. Check browser permissions.');
+        console.log(JSON.stringify({ active: voiceMode.isActive, calls }));
+        """
+    )
+    assert values["active"] is False
+    assert values["calls"] == ['Microphone access denied. Check browser permissions.']
+
+
+def test_three_transcription_errors_deactivate_with_persistent_message():
+    values = _node_eval(
+        _VOICE_MODE_DOM_STUB
+        + """
+        globalThis.uiModule = { showError(msg) { calls.push(msg) }, showToast() {} };
+        const calls = [];
+        const voiceMode = (await import('./static/js/voiceMode.js')).default;
+        let lastOpts = null;
+        let lastOnErr = null;
+        const recorder = {
+          _sttProvider: 'endpoint:abc',
+          async refreshSttProvider() {},
+          startRecording(onFile, onToast, onErr, opts) { lastOpts = opts; lastOnErr = onErr; },
+          stopRecording() {},
+          getIsRecording: () => false,
+        };
+        voiceMode.init(null, recorder);
+        await voiceMode.activate();
+        for (let i = 0; i < 3; i++) {
+          lastOnErr('Transcription failed: HTTP 500: server error');
+          lastOpts.onDone('error');
+        }
+        console.log(JSON.stringify({ active: voiceMode.isActive, calls }));
+        """
+    )
+    assert values["active"] is False
+    # 3 per-attempt messages + 1 final persistent line
+    assert len(values["calls"]) == 4
+    assert values["calls"][-1] == 'Voice mode disabled after 3 speech recognition errors'
+
+
 def test_transcribed_outcome_does_not_double_arm():
     values = _node_eval(
         _VOICE_MODE_DOM_STUB

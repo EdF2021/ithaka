@@ -12,6 +12,7 @@ import markdownModule from './markdown.js';
 import { makeWindowDraggable } from './windowDrag.js';
 import { langIcon } from './langIcons.js';
 import { registerMenuDismiss, dismissOrRemove } from './escMenuStack.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 // ── Injected references from documentModule ──
 let API_BASE = '';
@@ -224,17 +225,20 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
     cancel.addEventListener('click', (e) => { e.stopPropagation(); teardown(); if (typeof opts.onCancel === 'function') opts.onCancel(); });
     dd.appendChild(cancel);
     document.body.appendChild(dd);
+    // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+    // rect/window terms before assigning as local px (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const rect = anchor.getBoundingClientRect();
-    dd.style.right = (window.innerWidth - rect.right) + 'px';
-    dd.style.top = (rect.bottom + 2) + 'px';
+    dd.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
+    dd.style.top = toLocalPx(rect.bottom + 2, _z) + 'px';
     dd.style.display = 'block';
     dd.style.zIndex = String(topPortalZ());
     requestAnimationFrame(() => {
       const mr = dd.getBoundingClientRect();
       if (mr.bottom > window.innerHeight - 8) {
-        dd.style.top = (rect.top - mr.height - 2) + 'px';
+        dd.style.top = toLocalPx(rect.top - mr.height - 2, _z) + 'px';
       }
-      if (mr.left < 8) { dd.style.left = '8px'; dd.style.right = 'auto'; }
+      if (mr.left < 8) { dd.style.left = toLocalPx(8, _z) + 'px'; dd.style.right = 'auto'; }
     });
     // Single idempotent teardown shared by every dismissal path (item click,
     // outside click, swipe, and the Escape arbiter via registerMenuDismiss).
@@ -267,7 +271,16 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
       if (Math.abs(dy) < Math.abs(dx)) { _swipeStart = null; return; }
       if (dy > 0) {
         _swipeDy = dy;
-        dd.style.transform = 'translateY(' + dy + 'px)';
+        // UI text-scale zoom (:root.ui-scale-125) — `dy` is a viewport-space
+        // touch delta (clientY); `dd` sits inside the zoomed root, so the
+        // transform must be divided by zoom before assignment or the popup
+        // will outrun the finger under ui-scale-125 (same re-multiplication
+        // bug class as position:top/left; see uiZoom.js, PR #76/#77). The
+        // `_swipeDy > 60` release threshold below stays viewport-space (a
+        // gesture-distance tolerance, same precedent as windowDrag.js's
+        // SNAP_PX/DOCK_EDGE_PX), and the `translateY(120px)` snap-away
+        // distance stays a local design constant, same as the `/ 240` fade.
+        dd.style.transform = 'translateY(' + toLocalPx(dy, zoomOf(document.documentElement)) + 'px)';
         dd.style.opacity = String(Math.max(0.3, 1 - dy / 240));
       }
     }, { passive: true });
@@ -627,18 +640,22 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           hideCardDropdown();
         } else {
           // Position fixed on body to escape overflow clipping
+          // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+          // rect/window terms before assigning as local px (see uiZoom.js,
+          // PR #76/#77).
+          const _z = zoomOf(document.documentElement);
           const rect = menuBtn.getBoundingClientRect();
           document.body.appendChild(dropdown);
           dropdown.dataset.owner = doc.id;
           dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:0;width:max-content;padding:4px;background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);backdrop-filter:blur(12px);font-size:12px;display:block;`;
-          dropdown.style.top = (rect.bottom + 4) + 'px';
+          dropdown.style.top = toLocalPx(rect.bottom + 4, _z) + 'px';
           dropdown.style.left = 'auto';
-          dropdown.style.right = (window.innerWidth - rect.right) + 'px';
+          dropdown.style.right = toLocalPx(window.innerWidth - rect.right, _z) + 'px';
           // Clamp to viewport
           requestAnimationFrame(() => {
             const mr = dropdown.getBoundingClientRect();
-            if (mr.bottom > window.innerHeight - 8) dropdown.style.top = (rect.top - mr.height - 4) + 'px';
-            if (mr.left < 8) { dropdown.style.left = '8px'; dropdown.style.right = 'auto'; }
+            if (mr.bottom > window.innerHeight - 8) dropdown.style.top = toLocalPx(rect.top - mr.height - 4, _z) + 'px';
+            if (mr.left < 8) { dropdown.style.left = toLocalPx(8, _z) + 'px'; dropdown.style.right = 'auto'; }
           });
           // Close on outside click or Escape (the latter via the registry).
           _cardDocClick = (ev) => {
@@ -1747,11 +1764,15 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
             content.style.margin = '0';
             // Clamp to viewport in case window was resized
             requestAnimationFrame(() => {
+              // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+              // rect/window terms before assigning as local px (see uiZoom.js,
+              // PR #76/#77).
+              const _z = zoomOf(document.documentElement);
               const r = content.getBoundingClientRect();
-              if (r.right > window.innerWidth) content.style.left = Math.max(0, window.innerWidth - r.width - 8) + 'px';
-              if (r.bottom > window.innerHeight) content.style.top = Math.max(0, window.innerHeight - r.height - 8) + 'px';
-              if (r.left < 0) content.style.left = '8px';
-              if (r.top < 0) content.style.top = '8px';
+              if (r.right > window.innerWidth) content.style.left = toLocalPx(Math.max(0, window.innerWidth - r.width - 8), _z) + 'px';
+              if (r.bottom > window.innerHeight) content.style.top = toLocalPx(Math.max(0, window.innerHeight - r.height - 8), _z) + 'px';
+              if (r.left < 0) content.style.left = toLocalPx(8, _z) + 'px';
+              if (r.top < 0) content.style.top = toLocalPx(8, _z) + 'px';
             });
           }
         } catch {}
@@ -1786,10 +1807,14 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           content.style.borderRadius = '';
           content.style.right = '';
           content.style.bottom = '';
+          // UI text-scale zoom (:root.ui-scale-125) — cx/cy (the exit-gesture
+          // point) and w (rect width) are viewport-space; divide before
+          // assigning as local px (see uiZoom.js, PR #76/#77).
+          const _z = zoomOf(document.documentElement);
           const r0 = content.getBoundingClientRect();
           const w = r0.width || Math.min(900, window.innerWidth * 0.92);
-          content.style.left = Math.max(8, cx - w / 2) + 'px';
-          content.style.top = Math.max(8, cy - 20) + 'px';
+          content.style.left = toLocalPx(Math.max(8, cx - w / 2), _z) + 'px';
+          content.style.top = toLocalPx(Math.max(8, cy - 20), _z) + 'px';
         };
         makeWindowDraggable(modal, {
           content,

@@ -1360,7 +1360,7 @@ def _wire_generate(monkeypatch, tmp_path, scripts):
     script, so stubbing it would silently disable the behaviour under test.
     """
     monkeypatch.setattr(audio, "NOTEBOOK_AUDIO_DIR", str(tmp_path))
-    monkeypatch.setattr(audio, "gather_source_text", lambda nb, s: "Genoeg brontekst.")
+    monkeypatch.setattr(audio, "gather_source_text", lambda nb, s, source_ids=None: "Genoeg brontekst.")
     monkeypatch.setattr(audio, "split_turn", lambda text: [text])
     monkeypatch.setattr(audio, "resolve_voices", lambda: ("voice-a", "voice-b"))
     monkeypatch.setattr(audio, "get_synthesizer", lambda: (lambda chunk, voice: _wav(120)))
@@ -1449,3 +1449,119 @@ def test_get_job_exposes_script_attempt_to_the_poll():
         assert snap["script_attempt"] == 2
     finally:
         audio._active_jobs.pop("j1", None)
+
+
+# ── Customize modal: format / length / focus / source_ids ───────────────────
+
+def test_build_podcast_prompt_default_is_the_module_prompt():
+    assert audio.build_podcast_prompt() == audio.PODCAST_PROMPT
+    assert "20 tot 40 beurten" in audio.PODCAST_PROMPT
+
+
+def test_build_podcast_prompt_short_length_asks_fewer_turns():
+    prompt = audio.build_podcast_prompt(length="short")
+    assert "8 tot 14 beurten" in prompt
+    assert "20 tot 40 beurten" not in prompt
+
+
+@pytest.mark.parametrize("fmt, marker", [
+    ("overview", "kernideeën"),
+    ("critique", "constructieve feedback"),
+    ("debate", "tegengestelde"),
+])
+def test_build_podcast_prompt_formats_change_the_host_roles(fmt, marker):
+    prompt = audio.build_podcast_prompt(fmt=fmt)
+    assert marker in prompt
+    # The hard rules never change with the format.
+    assert audio.DUTCH_OUTPUT_RULE in prompt
+    assert 'Elke regel begint met "S1: " of "S2: "' in prompt
+
+
+def test_podcast_focus_message_is_escaped_user_text():
+    text = audio.podcast_focus_text("Beschrijf fase 1 tot en met fase 3.")
+    assert "Beschrijf fase 1 tot en met fase 3." in text
+    assert "Focus" in text
+    assert audio.podcast_focus_text("") == ""
+
+
+def test_normalize_podcast_options_defaults():
+    assert audio.normalize_podcast_options(None) == {
+        "format": "deep", "length": "standard", "focus": "", "source_ids": None,
+    }
+    assert audio.normalize_podcast_options({}) == audio.normalize_podcast_options(None)
+
+
+def test_normalize_podcast_options_strips_and_keeps_valid_values():
+    opts = audio.normalize_podcast_options({
+        "format": "debate", "length": "short", "focus": "  fase 1  ",
+        "source_ids": ["d1", "d2"],
+    })
+    assert opts == {"format": "debate", "length": "short", "focus": "fase 1",
+                    "source_ids": ["d1", "d2"]}
+
+
+@pytest.mark.parametrize("bad", [
+    {"format": "rap"},
+    {"length": "epic"},
+    {"focus": "x" * 501},
+    {"source_ids": "d1"},
+    {"source_ids": [1, 2]},
+    {"source_ids": []},
+])
+def test_normalize_podcast_options_rejects_invalid(bad):
+    with pytest.raises(ValueError):
+        audio.normalize_podcast_options(bad)
+
+
+async def test_job_options_shape_prompt_and_artifact_title(monkeypatch, tmp_path):
+    llm, _ = _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook(name="Testboek", content="brontekst over vogels")
+
+    job = await _await_job(audio.start_podcast_job(
+        nb_id, "own", _TS,
+        options={"format": "debate", "length": "short", "focus": "Alleen de roofvogels."},
+    ))
+    assert job["status"] == "done", job.get("error")
+    system = "\n".join(m["content"] for m in llm.messages if m["role"] == "system")
+    user = "\n".join(m["content"] for m in llm.messages if m["role"] == "user")
+    assert "tegengestelde" in system
+    assert "8 tot 14 beurten" in system
+    # The focus is user-typed: it rides in the user role (like the report's
+    # layout instruction), never in the trusted system prompt.
+    assert "Alleen de roofvogels." not in system
+    assert "Alleen de roofvogels." in user
+    assert job["artifact"]["title"] == "Testboek — Podcast · Debat · kort"
+
+
+async def test_job_default_options_keep_the_plain_title(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook(name="Testboek")
+    job = await _await_job(audio.start_podcast_job(nb_id, "own", _TS))
+    assert job["status"] == "done", job.get("error")
+    assert job["artifact"]["title"] == "Testboek — Podcast"
+
+
+async def test_job_source_ids_limit_the_sources_sent_to_the_model(monkeypatch, tmp_path):
+    llm, _ = _prepare(monkeypatch, tmp_path)
+    session = _TS()
+    try:
+        nb = make_notebook(session, name="Testboek")
+        a = make_source(session, nb, filename="a.txt", content="tekst A")
+        make_source(session, nb, filename="b.txt", content="tekst B")
+        nb_id, a_doc = nb.id, a.document_id
+    finally:
+        session.close()
+
+    job = await _await_job(audio.start_podcast_job(
+        nb_id, "own", _TS, options={"source_ids": [a_doc]}))
+    assert job["status"] == "done", job.get("error")
+    user = "\n".join(m["content"] for m in llm.messages if m["role"] == "user")
+    assert "=== BRON: a.txt ===" in user
+    assert "=== BRON: b.txt ===" not in user
+
+
+def test_start_podcast_job_rejects_source_ids_outside_the_notebook(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    nb_id = _seed_notebook()
+    with pytest.raises(ValueError, match="bron"):
+        audio.start_podcast_job(nb_id, "own", _TS, options={"source_ids": ["not-a-doc"]})

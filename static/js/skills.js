@@ -9,6 +9,7 @@ import uiModule from './ui.js';
 import * as spinnerModule from './spinner.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 import { topPortalZ } from './toolWindowZOrder.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 const API = window.location.origin;
 let skills = [];
@@ -442,17 +443,20 @@ function _openSkillMenu(btn, card, sk, name, isPublished) {
   // tool-window stack so the kebab menu stays above its modal even after the
   // bring-to-front counter climbs past the static value (#4720).
   menu.style.zIndex = String(topPortalZ());
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+  // rect/window terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const r = btn.getBoundingClientRect();
-  menu.style.top = (r.bottom + 4) + 'px';
-  menu.style.right = Math.max(6, window.innerWidth - r.right) + 'px';
+  menu.style.top = toLocalPx(r.bottom + 4, _z) + 'px';
+  menu.style.right = toLocalPx(Math.max(6, window.innerWidth - r.right), _z) + 'px';
   // Keep it on-screen (mobile): flip above the button if it would overflow the
   // bottom, clamp the left edge, and cap the height as a last resort.
   const mr = menu.getBoundingClientRect();
   if (mr.bottom > window.innerHeight - 6) {
-    menu.style.top = Math.max(6, r.top - mr.height - 4) + 'px';
+    menu.style.top = toLocalPx(Math.max(6, r.top - mr.height - 4), _z) + 'px';
   }
   if (mr.left < 6) {
-    menu.style.right = Math.max(6, window.innerWidth - 6 - mr.width) + 'px';
+    menu.style.right = toLocalPx(Math.max(6, window.innerWidth - 6 - mr.width), _z) + 'px';
   }
   const mr2 = menu.getBoundingClientRect();
   if (mr2.bottom > window.innerHeight - 6) {

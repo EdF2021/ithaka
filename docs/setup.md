@@ -166,6 +166,53 @@ To enable manually without the script, add this to `.env`:
 COMPOSE_FILE=docker-compose.yml:docker/gpu.nvidia.yml
 ```
 
+**Fastembed/onnxruntime CUDA (NVIDIA only).** The `docker/gpu.nvidia.yml`
+overlay (and the standalone `docker-compose.gpu-nvidia.yml`) also rebuild the
+image with `GPU_EXTRAS=1`, which installs `onnxruntime-gpu` plus the CUDA 13 /
+cuDNN 9 runtime libraries the built-in fastembed embedding lane (RAG, semantic
+memory, tool selection) needs to actually run on the GPU instead of silently
+falling back to CPU. This is separate from GPU *passthrough* above and from
+Cookbook's own model-serving engines — it only affects the local
+`fastembed`/`onnxruntime` embedder. Adds ~1.5-2GB to the image, so it stays
+opt-in behind this overlay; see `requirements-gpu-nvidia.txt` and the
+Dockerfile's `GPU_EXTRAS` arg for the package list and the
+`readelf`-verified rationale. Rebuild after enabling:
+
+```bash
+docker compose build --no-cache ithaka   # or just: docker compose up -d --build
+```
+
+Verify it actually loaded the CUDA execution provider (watch the boot log for
+the `libcublasLt.so` / "Failed to create CUDAExecutionProvider" warnings this
+is meant to fix, and confirm they're gone):
+
+```bash
+docker compose logs ithaka | grep -i "onnxruntime\|CUDAExecutionProvider"
+docker compose exec --user 1000:1000 ithaka python -c \
+  "import onnxruntime as o; print(o.__file__, o.__version__, o.get_available_providers())"
+```
+
+> **Stale Cookbook-installed onnxruntime shadows the image's copy.** If you
+> ever manually `pip install`ed `onnxruntime` / `onnxruntime-gpu` via
+> Cookbook -> Dependencies (or `pip install --user` inside the container) to
+> work around this before the overlay existed, that install lives under
+> `${APP_DATA_DIR:-./data}/local` (`/app/.local` in the container) — a bind
+> mount that survives `docker compose up --build`. Python's user-site
+> (`/app/.local/lib/python3.14/site-packages`) is searched *before* the
+> image's `/usr/local` site-packages for the app's uid-1000 process, so a
+> leftover manual install keeps shadowing the image's properly
+> dependency-tracked one even after rebuilding with `GPU_EXTRAS=1`. Check
+> with `docker compose exec --user 1000:1000 ithaka python -c "import
+> onnxruntime as o; print(o.__file__, o.__version__)"` — a path starting
+> `/app/.local/...` means it's the shadow, not the image. Remove it (host
+> side, container can keep running) before relying on the overlay:
+> ```bash
+> rm -rf data/local/lib/python3.14/site-packages/onnxruntime \
+>        data/local/lib/python3.14/site-packages/onnxruntime_gpu*.dist-info \
+>        data/local/lib/python3.14/site-packages/onnxruntime*.dist-info
+> docker compose restart ithaka
+> ```
+
 **AMD / ROCm.** AMD setup is read-only diagnostic plus manual `.env` edit. Run:
 
 ```bash

@@ -58,7 +58,7 @@ services:
       - EMBEDDING_URL=${EMBEDDING_URL:-}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
-      - FASTEMBED_MODEL=${FASTEMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - FASTEMBED_MODEL=${FASTEMBED_MODEL:-sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
       - FASTEMBED_CACHE_PATH=${FASTEMBED_CACHE_PATH:-}
       - CLEANUP_INTERVAL_HOURS=${CLEANUP_INTERVAL_HOURS:-24}
       - ITHAKA_INPROCESS_POLLERS=${ITHAKA_INPROCESS_POLLERS:-1}
@@ -71,7 +71,13 @@ services:
       - ITHAKA_PERSONAL_UPLOAD_MAX_BYTES=${ITHAKA_PERSONAL_UPLOAD_MAX_BYTES:-26214400}
       - ITHAKA_EMAIL_COMPOSE_UPLOAD_MAX_BYTES=${ITHAKA_EMAIL_COMPOSE_UPLOAD_MAX_BYTES:-26214400}
       - ITHAKA_STT_MAX_AUDIO_BYTES=${ITHAKA_STT_MAX_AUDIO_BYTES:-26214400}
+      - ITHAKA_MEETING_CHUNK_MAX_BYTES=${ITHAKA_MEETING_CHUNK_MAX_BYTES:-10485760}
+      - ITHAKA_MEETING_AUDIO_MAX_BYTES=${ITHAKA_MEETING_AUDIO_MAX_BYTES:-524288000}
       - ITHAKA_ICS_MAX_BYTES=${ITHAKA_ICS_MAX_BYTES:-10485760}
+      # Pre-warm the tool index (FastEmbed load + 70 tool embeddings ≈ 14 s cold)
+      # so the first agent turn after a restart is not cut off by the 1.5 s
+      # tool-selection cap. Opt-in upstream; forwarded so .env can enable it.
+      - ITHAKA_STARTUP_WARMUPS=${ITHAKA_STARTUP_WARMUPS:-}
       # Allow CalDAV account URLs that resolve to private IPs (needed for the
       # bundled DavMail gateway reachable as http://davmail:1080 inside the
       # compose network). Set to 0 if you don't run the davmail service.
@@ -110,7 +116,7 @@ services:
     ports:
       - "${CHROMADB_BIND:-127.0.0.1}:8100:8000"
     volumes:
-      - chromadb-data:/chroma/chroma
+      - chromadb-data:/data
     environment:
       - ANONYMIZED_TELEMETRY=FALSE
     restart: unless-stopped

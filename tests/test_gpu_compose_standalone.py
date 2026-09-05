@@ -40,13 +40,21 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
     ``environment`` and add otherwise-absent keys (``deploy``, ``devices``,
     ``group_add``), so this keeps the expected merge explicit without invoking
     docker compose.
+
+    ``build`` is special-cased: compose's short form (``build: .``) is
+    shorthand for ``build: {context: .}``, and a mapping-form overlay (e.g.
+    ``build: {args: {...}}``) merges into that expanded form rather than
+    replacing it outright — verified against real ``docker compose config``.
     """
     result = copy.deepcopy(base)
     for key, value in overlay.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], value)
-        elif isinstance(value, list) and isinstance(result.get(key), list):
-            result[key] = copy.deepcopy(result[key]) + copy.deepcopy(value)
+        base_value = result.get(key)
+        if key == "build" and isinstance(base_value, str) and isinstance(value, dict):
+            base_value = {"context": base_value}
+        if isinstance(value, dict) and isinstance(base_value, dict):
+            result[key] = _deep_merge(base_value, value)
+        elif isinstance(value, list) and isinstance(base_value, list):
+            result[key] = copy.deepcopy(base_value) + copy.deepcopy(value)
         else:
             result[key] = copy.deepcopy(value)
     return result

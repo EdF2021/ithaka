@@ -549,7 +549,12 @@ async function _createSessionForNotebook(nb) {
   const cfg = await _resolveChatConfig();
   const fd = new FormData();
   fd.append('name', nb.name || 'Notebook');
-  fd.append('notebook_id', nb.id);
+  // Guarded like sessions.js's materializePendingSession() (#112): FormData
+  // .append() stringifies its value via ToString(), so an unguarded append
+  // of a JS `undefined`/`null` nb.id would silently become the literal
+  // string "undefined"/"null" in the payload instead of just omitting the
+  // field — a broken binding must never look like a real notebook id.
+  if (nb.id) fd.append('notebook_id', nb.id);
   // Mandatory: without it the backend 400s on a missing endpoint_url, and it
   // also lets a bare (model-less) session through when nothing resolved.
   fd.append('skip_validation', 'true');

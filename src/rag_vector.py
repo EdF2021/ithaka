@@ -429,6 +429,20 @@ class VectorRAG:
                 where_filter = conditions[0]
             else:
                 where_filter = None
+            # Diagnosability (#112): a `where` filter that matches nothing in
+            # a non-empty collection makes Chroma return an empty id list —
+            # query_lanes/dedupe_results then produce a legitimate-looking
+            # "0 results" with no exception raised, indistinguishable in the
+            # existing log line from "nothing relevant was indexed". This is
+            # the only place the actual filter values are visible, so log
+            # them at debug level (owner/notebook_id/source_ids are the
+            # values worth checking first when a "Hybrid search ...: 0
+            # results" line shows up with a populated collection).
+            logger.debug(
+                "search() entry: query=%r k=%r owner=%r notebook_id=%r "
+                "source_ids=%r where_filter=%r",
+                query, k, owner, notebook_id, source_ids, where_filter,
+            )
             query_words = _tokenize_for_keyword_score(query)
             candidates = []
 

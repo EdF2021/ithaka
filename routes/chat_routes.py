@@ -226,6 +226,12 @@ def _apply_notebook_tool_lockdown(sess, policy):
         hidden_tools=policy.hidden_tools | names,
         reasons=MappingProxyType(reasons),
         block_all_tool_calls=True,
+        # A blocked fenced/native tool call the model emits this turn must be
+        # discarded outright, not executed-as-blocked and looped back for a
+        # round 2 -- the model never regains a tool later this turn, so a
+        # round 2 only produces a confusing, contentless reply on top of an
+        # already-complete round-1 answer (#141).
+        discard_blocked_tool_calls=True,
         disable_mcp=True,
     )
 
@@ -523,6 +529,18 @@ def setup_chat_routes(
         time_filter = chat_request.time_filter
         preset_id = chat_request.preset_id
         source_ids = chat_request.source_ids
+        # search_hint (#112): best-effort, so an out-of-contract value (too
+        # long — the pydantic model itself does not enforce a max length, to
+        # avoid a hard 422 for what's meant to be ignorable) is dropped here
+        # rather than surfaced as an error. Mirrors the /api/chat_stream
+        # validation below.
+        search_hint = chat_request.search_hint
+        if isinstance(search_hint, str):
+            search_hint = search_hint.strip()
+            if not search_hint or len(search_hint) > 300:
+                search_hint = None
+        else:
+            search_hint = None
 
         # Verify the caller owns this session before loading it.
         # Without this, any authenticated user can post into another user's chat.
@@ -578,6 +596,7 @@ def setup_chat_routes(
             webhook_manager=webhook_manager,
             allow_tool_preprocessing=allow_tool_preprocessing,
             source_ids=source_ids,
+            search_hint=search_hint,
         )
 
         # Research injection
@@ -896,6 +915,20 @@ def setup_chat_routes(
                 ):
                     source_ids = _parsed_source_ids
 
+        # search_hint: bare mindmap-node label (#112), a best-effort anchor
+        # for the notebook RAG-condensation fallback (see
+        # ChatProcessor._condense_notebook_query) — used only when
+        # condensation itself fails or returns empty, so an invalid value is
+        # silently ignored rather than rejected with a 400.
+        search_hint = None
+        _raw_search_hint = form_data.get("search_hint")
+        if _raw_search_hint is None:
+            _raw_search_hint = (body or {}).get("search_hint")
+        if isinstance(_raw_search_hint, str):
+            _stripped_search_hint = _raw_search_hint.strip()
+            if _stripped_search_hint and len(_stripped_search_hint) <= 300:
+                search_hint = _stripped_search_hint
+
         no_memory = str(form_data.get("no_memory", "")).lower() == "true"
         pre_context_tool_policy = build_effective_tool_policy(
             last_user_message=message,
@@ -924,6 +957,7 @@ def setup_chat_routes(
             agent_mode=(chat_mode == "agent"),
             allow_tool_preprocessing=allow_tool_preprocessing,
             source_ids=source_ids,
+            search_hint=search_hint,
         )
 
         _research_flags = {"do": do_research}  # Mutable container for generator scope
@@ -1090,6 +1124,8 @@ def setup_chat_routes(
                 disabled_tools.update({"create_document", "edit_document", "update_document", "suggest_document"})
             if not _privs.get("can_generate_images", True):
                 disabled_tools.add("generate_image")
+            if not _privs.get("can_generate_videos", True):
+                disabled_tools.add("generate_video")
             if not _privs.get("can_manage_memory", True):
                 disabled_tools.update({"manage_memory", "manage_skills"})
             if not _privs.get("can_use_research", True):
@@ -1098,7 +1134,15 @@ def setup_chat_routes(
                 _effective_mode = 'chat'
                 chat_mode = 'chat'
         # Global admin disabled tools
-        from src.settings import get_setting
+        from src.settings import get_setting, get_user_setting
+        # video_gen_enabled mirrors image_gen_enabled's per-session gate
+        # (routes/chat_routes.py, generate-image session branch) but as a
+        # global default-off admin flag, since generate_video is a regular
+        # agent tool rather than a dedicated session type. Per-user override
+        # (see _PER_USER_KEYS) so a user who enabled it for themselves isn't
+        # blocked by a global default-off admin setting.
+        if not get_user_setting("video_gen_enabled", _user or "", False):
+            disabled_tools.add("generate_video")
         _global_disabled = get_setting("disabled_tools", [])
         if _global_disabled and isinstance(_global_disabled, list):
             explicit_web_allowed = (
@@ -1372,14 +1416,14 @@ def setup_chat_routes(
             yield f'data: {json.dumps(_model_info)}\n\n'
 
             if _is_image_generation_session(sess, owner=_user):
-                from src.settings import get_setting
+                from src.settings import get_user_setting
                 if tool_policy.blocks("generate_image"):
                     _blocked_msg = tool_policy.reason_for("generate_image")
                     yield f'data: {json.dumps({"delta": _blocked_msg})}\n\n'
                     yield "data: [DONE]\n\n"
                     _active_streams.pop(session, None)
                     return
-                if not get_setting("image_gen_enabled", True):
+                if not get_user_setting("image_gen_enabled", _user or "", True):
                     yield f'data: {json.dumps({"delta": "Image generation is disabled by the administrator."})}\n\n'
                     yield "data: [DONE]\n\n"
                     _active_streams.pop(session, None)

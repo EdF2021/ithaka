@@ -181,6 +181,7 @@ _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/upload",          # large files
     "/api/image",           # diffusion proxies (inpaint/harmonize/upscale/etc.) — own 120s httpx timeout
     "/api/memory/audit",    # retains own 120s LLM inactivity timeout
+    "/api/realtime/ask",    # one-shot agent loop; own ASK_TIMEOUT_S (60s) in services/realtime/realtime_ask.py
 )
 
 
@@ -719,6 +720,11 @@ app.include_router(setup_personal_routes(personal_docs_mgr, rag_manager, rag_ava
 from routes.notebook_routes import setup_notebook_routes
 app.include_router(setup_notebook_routes(rag_manager, tts_service=tts_service))
 
+# Meetings (recording -> notulen)
+from routes.meeting_routes import setup_meeting_routes
+from src.auth_helpers import get_current_user as _meeting_get_current_user
+app.include_router(setup_meeting_routes(_meeting_get_current_user, SessionLocal))
+
 # Embedding model management
 from routes.embedding_routes import setup_embedding_routes
 app.include_router(setup_embedding_routes())
@@ -745,6 +751,16 @@ stt_service = get_stt_service()
 from routes.stt_routes import setup_stt_routes
 app.include_router(setup_stt_routes(stt_service))
 logger.info("STT service initialized (provider managed via settings)")
+
+# Realtime voice mode
+from services.realtime import get_realtime_service
+realtime_service = get_realtime_service()
+from routes.realtime_routes import setup_realtime_routes
+app.include_router(setup_realtime_routes(realtime_service))
+
+# Video generation (Veo 3.1 chat/agent auto-routing — image/video autoroute plan)
+from routes.video_routes import setup_video_routes
+app.include_router(setup_video_routes())
 
 # Documents (artifacts/canvas)
 from routes.document_routes import setup_document_routes
@@ -1259,6 +1275,53 @@ async def _startup_event():
             await asyncio.sleep(3600)
 
     _startup_tasks.append(asyncio.create_task(_notebook_video_janitor_loop()))
+
+    # Infographic-illustration janitor — sweeps NOTEBOOK_INFOGRAPHICS_DIR
+    # hourly for PNGs whose artifact no longer exists (same shape as above).
+    async def _notebook_illustration_janitor_loop():
+        await asyncio.sleep(300)
+        while True:
+            try:
+                from src.notebook_illustrations import cleanup_orphaned_illustrations
+                await asyncio.to_thread(cleanup_orphaned_illustrations, SessionLocal)
+            except Exception as e:
+                logger.debug(f"Notebook illustration janitor skipped: {e}")
+            await asyncio.sleep(3600)
+
+    _startup_tasks.append(asyncio.create_task(_notebook_illustration_janitor_loop()))
+
+    # Meeting-audio janitor — sweeps MEETING_AUDIO_DIR hourly for stray
+    # `.meetingjob-*` workdirs and orphaned `<uuid>.webm` files (a process
+    # kill mid-recording or mid-job can leave either behind with no Meeting
+    # row, or a row whose audio was deleted out from under it). Same shape
+    # as the podcast/video/illustration janitors above.
+    async def _meeting_audio_janitor_loop():
+        await asyncio.sleep(300)
+        while True:
+            try:
+                from src.meeting_minutes import cleanup_orphaned_meeting_audio
+                await asyncio.to_thread(cleanup_orphaned_meeting_audio, SessionLocal)
+            except Exception as e:
+                logger.debug(f"Meeting audio janitor skipped: {e}")
+            await asyncio.sleep(3600)
+
+    _startup_tasks.append(asyncio.create_task(_meeting_audio_janitor_loop()))
+
+    # Chat/agent video-gen janitor — sweeps VIDEO_DIR (Veo clips generated via
+    # the generate_video tool, distinct from the notebook-studio videos
+    # above) hourly for stray `.video-*.tmp` downloads and `<hex>.mp4`/
+    # `<hex>.owner` files older than a week (image/video autoroute plan).
+    async def _video_gen_janitor_loop():
+        await asyncio.sleep(300)
+        while True:
+            try:
+                from src.video_gen import cleanup_orphaned_videos
+                await asyncio.to_thread(cleanup_orphaned_videos)
+            except Exception as e:
+                logger.debug(f"Video-gen janitor skipped: {e}")
+            await asyncio.sleep(3600)
+
+    _startup_tasks.append(asyncio.create_task(_video_gen_janitor_loop()))
 
     # Nightly skill audit — at ~02:00 local, test + judge a batch of the
     # least-recently-checked skills, auto-fixing/escalating weak ones (never

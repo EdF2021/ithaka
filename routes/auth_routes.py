@@ -36,6 +36,7 @@ from src.integrations import (
     INTEGRATION_PRESETS,
     migrate_from_settings,
 )
+from services.stt.stt_service import probe_endpoint as probe_stt_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -652,6 +653,29 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             raise HTTPException(403, "Admin only")
         body = await request.json()
         current = _load_settings()
+
+        # STT endpoint validation (2026-09-02 incident): the settings card
+        # lists every ModelEndpoint as a candidate STT provider, including
+        # chat-only endpoints with no /audio/transcriptions route — picking
+        # one silently saved and then 500'd every voice-mode turn with no
+        # visible error. Probe before persisting a *new* endpoint choice
+        # (or when STT is being switched on) so a bad pick is refused with
+        # a clear reason instead of accepted. `stt_skip_probe: true` bypasses
+        # this for offline/air-gapped setups where the probe itself can't
+        # reach anything.
+        new_provider = body.get("stt_provider")
+        if isinstance(new_provider, str) and new_provider.startswith("endpoint:"):
+            provider_changed = new_provider != current.get("stt_provider")
+            newly_enabled = bool(body.get("stt_enabled", current.get("stt_enabled"))) and not current.get(
+                "stt_enabled"
+            )
+            if (provider_changed or newly_enabled) and not body.get("stt_skip_probe"):
+                endpoint_id = new_provider.split(":", 1)[1]
+                probe_model = body.get("stt_model", current.get("stt_model", "base"))
+                ok, reason = await probe_stt_endpoint(endpoint_id, probe_model)
+                if not ok:
+                    raise HTTPException(400, f"STT endpoint validation failed: {reason}")
+
         # Per-key validation for numeric settings: coerce to int and clamp to a
         # sane range so a bad value can't disable the agent or let it run away.
         _INT_RANGES = {

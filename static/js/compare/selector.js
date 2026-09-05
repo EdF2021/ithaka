@@ -8,6 +8,7 @@ import { _clearProbeWaves } from './probe.js';
 import uiModule from '../ui.js';
 import spinnerModule from '../spinner.js';
 import themeModule from '../theme.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 const escapeHtml = uiModule.esc;
 
@@ -495,6 +496,11 @@ async function showModelSelector() {
       // a picker near the bottom of the screen would open downward and
       // either clip past the modal or extend off the viewport.
       const _placeDropdown = () => {
+        // UI text-scale zoom (:root.ui-scale-125) — keep the clamp math in
+        // viewport space (all terms below are rect/window measurements),
+        // divide only the final top/left/bottom assignments (see uiZoom.js,
+        // PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const inRect = input.getBoundingClientRect();
         const vh = window.innerHeight;
         const vw = window.innerWidth;
@@ -507,16 +513,16 @@ async function showModelSelector() {
         let left = inRect.left;
         if (left + width > vw - 8) left = vw - 8 - width;
         if (left < 8) left = 8;
-        dropdown.style.left = left + 'px';
+        dropdown.style.left = toLocalPx(left, _z) + 'px';
         dropdown.style.width = width + 'px';
         // Vertical: flip above/below based on available room (fixed coords).
         if (flipUp) {
           dropdown.style.top = 'auto';
-          dropdown.style.bottom = (vh - inRect.top + 2) + 'px';
+          dropdown.style.bottom = toLocalPx(vh - inRect.top + 2, _z) + 'px';
           dropdown.style.maxHeight = Math.max(120, Math.min(280, above - 16)) + 'px';
         } else {
           dropdown.style.bottom = 'auto';
-          dropdown.style.top = (inRect.bottom + 2) + 'px';
+          dropdown.style.top = toLocalPx(inRect.bottom + 2, _z) + 'px';
           dropdown.style.maxHeight = Math.max(120, Math.min(280, below - 16)) + 'px';
         }
       };

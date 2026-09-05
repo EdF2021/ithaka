@@ -164,3 +164,12 @@ def test_testing_docs_use_project_venv_for_python_validation():
         text = path.read_text(encoding="utf-8")
         for stale in stale_patterns:
             assert stale not in text, f"{path.name} still contains {stale!r}"
+
+
+def test_compose_files_forward_startup_warmups_toggle():
+    # app.py gates the tool-index / endpoint warmups on ITHAKA_STARTUP_WARMUPS
+    # (opt-in). Without this passthrough a value in .env never reaches the
+    # container and every restart serves the first agent turn from a cold
+    # index (observed: 1.5 s tool-selection cap hit, ~14 s cold init).
+    for path in COMPOSE_FILES:
+        assert "ITHAKA_STARTUP_WARMUPS" in _compose_env_names(path), path.name

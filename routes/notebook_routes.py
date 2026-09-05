@@ -1,5 +1,6 @@
 """Notebook routes — CRUD for notebooks + per-notebook source upload/removal."""
 
+import json
 import asyncio
 import logging
 import os
@@ -18,6 +19,11 @@ from core.database import Document, SessionLocal, Notebook, NotebookArtifact, No
 from core.database import Session as DbSession
 from src.auth_helpers import get_current_user
 from src.notebook_artifacts import ARTIFACT_KINDS, generate_artifact
+from src.notebook_report_layouts import (
+    FIXED_TEMPLATES,
+    get_recommended_layouts,
+    notebook_has_sources,
+)
 from src.notebook_audio import (
     NOTEBOOK_AUDIO_HEADERS,
     NOTEBOOK_AUDIO_RE,
@@ -25,6 +31,7 @@ from src.notebook_audio import (
     resolve_notebook_audio_path,
     set_synthesizer,
     start_podcast_job,
+    normalize_podcast_options,
 )
 from src.notebook_covers import (
     COVER_IMAGE_HEADERS,
@@ -32,13 +39,21 @@ from src.notebook_covers import (
     start_cover_job,
 )
 from src.notebook_flashcards import generate_flashcards
+from src.notebook_illustrations import (
+    ILLUSTRATION_HEADERS,
+    artifact_id_from_filename,
+    get_artifact_job,
+    load_illustrations,
+    resolve_illustration_path,
+    start_illustration_job,
+)
 from src.notebook_infographic import generate_infographic
 from src.notebook_mindmap import generate_mindmap_viewer
 from src.notebook_slides import generate_slide_deck
 from src.notebook_ingest import ingest_notebook_file, ingest_notebook_url
 from src.notebook_report import generate_notebook_artifact_report
-from src.notebook_suggest import suggest_questions
-from src.settings import load_settings
+from src.notebook_suggest import suggest_questions, _SUGGEST_TIMEOUT_S
+from src.settings import get_user_setting, load_settings
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES, format_byte_limit
 
 logger = logging.getLogger(__name__)
@@ -441,8 +456,14 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             body = None
         kind = body.get("kind") if isinstance(body, dict) else None
         focus = body.get("focus") if isinstance(body, dict) else None
+        layout_instruction = body.get("layout_instruction") if isinstance(body, dict) else None
         if focus is not None and not isinstance(focus, str):
             raise HTTPException(status_code=400, detail="focus moet een string zijn")
+        if layout_instruction is not None:
+            if not isinstance(layout_instruction, str):
+                raise HTTPException(status_code=400, detail="layout_instruction moet een string zijn")
+            if len(layout_instruction) > 2000:
+                raise HTTPException(status_code=400, detail="layout_instruction is te lang (max 2000 tekens)")
         # ARTIFACT_KINDS is a dict, so an unhashable `kind` (a list or dict
         # from the request body) raises TypeError on the membership test
         # below — a 500 where the client sent bad input. Same isinstance
@@ -461,7 +482,10 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             # route to have checked ownership first.
             _get_owned_notebook(db_session, notebook_id, user)
             try:
-                artifact = await generate_artifact(notebook_id, user, kind, db_session, focus=focus)
+                artifact = await generate_artifact(
+                    notebook_id, user, kind, db_session,
+                    focus=focus, layout_instruction=layout_instruction,
+                )
             except HTTPException:
                 # Not raised by generate_artifact today, but this keeps a
                 # future refactor from having HTTPException fall through
@@ -479,7 +503,37 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                     "Artifact generation failed for notebook %s (kind=%s)", notebook_id, kind
                 )
                 raise HTTPException(status_code=502, detail=str(exc))
+            if kind == "infographic" and get_user_setting("image_gen_enabled", user or "", False):
+                # Fire-and-forget: the viewer polls for illustrations. A
+                # failure to start must never turn a successfully stored
+                # artifact into an error response.
+                try:
+                    start_illustration_job(notebook_id, artifact.id, user)
+                except Exception as exc:
+                    logger.warning("Illustration job not started for %s: %s", artifact.id, exc)
             return artifact.to_dict()
+        finally:
+            db_session.close()
+
+    # ---- GET /api/notebooks/{id}/report-layouts ----
+    @router.get("/api/notebooks/{notebook_id}/report-layouts")
+    async def get_report_layouts(request: Request, notebook_id: str):
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            recommended = await get_recommended_layouts(nb, db_session, user)
+            if recommended:
+                recommended_status = "ok"
+            elif notebook_has_sources(nb, db_session):
+                recommended_status = "unavailable"
+            else:
+                recommended_status = "no_sources"
+            return {
+                "templates": FIXED_TEMPLATES,
+                "recommended": recommended,
+                "recommended_status": recommended_status,
+            }
         finally:
             db_session.close()
 
@@ -624,11 +678,16 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                     generated_at=datetime.now(),
                 )
             elif artifact.kind == "infographic":
+                job = get_artifact_job(artifact.id, user)
+                poll_url = None
+                if job is not None and job.get("status") == "running":
+                    poll_url = (f"/api/notebooks/{nb.id}/artifacts/{artifact.id}/illustrations")
                 html_content = generate_infographic(
                     title=artifact.title or document.title,
                     markdown=document.current_content,
                     notebook_name=nb.name,
                     generated_at=datetime.now(),
+                    poll_url=poll_url,
                 )
             else:
                 html_content = generate_notebook_artifact_report(
@@ -660,6 +719,15 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             db_session.close()
         try:
             questions = await suggest_questions(question, answer, user)
+        except asyncio.TimeoutError:
+            # Best-effort: suggesties zijn nice-to-have, nooit een 5xx
+            # richting de chat-flow — maar een timeout mag niet volledig
+            # stil blijven (issue #56).
+            logger.warning(
+                "suggest_questions timed out after %ss for notebook %s",
+                _SUGGEST_TIMEOUT_S, notebook_id,
+            )
+            questions = []
         except Exception:
             # Best-effort: suggesties zijn nice-to-have, nooit een 5xx
             # richting de chat-flow.
@@ -688,8 +756,20 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
         finally:
             db_session.close()
 
+        # Optional customize-modal payload: {format, length, focus, source_ids}.
+        # No body (the old one-click flow) means the defaults.
+        raw = await request.body()
         try:
-            job_id = start_podcast_job(notebook_id, user)
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Ongeldige JSON")
+        try:
+            options = normalize_podcast_options(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        try:
+            job_id = start_podcast_job(notebook_id, user, options=options)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         except RuntimeError as exc:
@@ -892,5 +972,62 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             "webp": "image/webp",
         }.get(ext, "application/octet-stream")
         return FileResponse(str(path), media_type=mime, headers=COVER_IMAGE_HEADERS)
+
+    # ---- GET /api/notebooks/{id}/artifacts/{artifact_id}/illustrations ----
+    @router.get("/api/notebooks/{notebook_id}/artifacts/{artifact_id}/illustrations")
+    async def get_artifact_illustrations(request: Request, notebook_id: str, artifact_id: str):
+        """Viewer poll: job status + illustration URLs. Passive in the
+        interactive gate (src/interactive_gate.py _PASSIVE_PATTERNS)."""
+        user = get_current_user(request)
+        db_session = SessionLocal()
+        try:
+            nb = _get_owned_notebook(db_session, notebook_id, user)
+            row = (
+                db_session.query(NotebookArtifact, Document)
+                .join(Document, Document.id == NotebookArtifact.document_id)
+                .filter(NotebookArtifact.id == artifact_id, NotebookArtifact.notebook_id == nb.id)
+                .first()
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="Artifact not found")
+            _artifact, document = row
+            content = document.current_content
+        finally:
+            db_session.close()
+        if not get_user_setting("image_gen_enabled", user or "", False):
+            return {"status": "none", "illustrations": {}}
+        job = get_artifact_job(artifact_id, user)
+        status = "none"
+        illustrations = load_illustrations(content)
+        if job is not None:
+            status = "running" if job.get("status") == "running" else "done"
+            illustrations.update(job.get("illustrations") or {})
+        return {
+            "status": status,
+            "illustrations": {
+                block_id: f"/api/notebook-illustration/{fn}"
+                for block_id, fn in illustrations.items()
+            },
+        }
+
+    # ---- GET /api/notebook-illustration/{filename} ----
+    @router.get("/api/notebook-illustration/{filename}")
+    async def serve_notebook_illustration(request: Request, filename: str):
+        user = get_current_user(request)
+        path = resolve_illustration_path(filename)
+        artifact_id = artifact_id_from_filename(filename)
+        db_session = SessionLocal()
+        try:
+            row = (
+                db_session.query(Notebook.owner)
+                .join(NotebookArtifact, NotebookArtifact.notebook_id == Notebook.id)
+                .filter(NotebookArtifact.id == artifact_id)
+                .first()
+            )
+            if row is None or row[0] != user:
+                raise HTTPException(status_code=404, detail="Illustration not found")
+        finally:
+            db_session.close()
+        return FileResponse(str(path), media_type="image/png", headers=ILLUSTRATION_HEADERS)
 
     return router

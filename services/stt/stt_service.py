@@ -4,11 +4,13 @@
 import io
 import logging
 import re
+import struct
 import subprocess
 import httpx
 import tempfile
+import wave
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +125,107 @@ def strip_stt_hallucinations(text: Optional[str]) -> str:
     return out
 
 
+def _tiny_silent_wav(duration_s: float = 0.2, sample_rate: int = 16000) -> bytes:
+    """Build a tiny silent WAV (16-bit mono PCM) in memory — used to probe a
+    candidate STT endpoint without shipping a fixture file."""
+    n_samples = int(duration_s * sample_rate)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(struct.pack("<%dh" % n_samples, *([0] * n_samples)))
+    return buf.getvalue()
+
+
+async def probe_endpoint(endpoint_id: str, model: str, timeout: float = 10.0) -> Tuple[bool, str]:
+    """Verify a ModelEndpoint actually implements OpenAI-compatible
+    transcription before the settings save persists it as the STT provider.
+
+    POSTs a tiny generated silent WAV to ``<base_url>/audio/transcriptions``.
+    Returns ``(True, "")`` when the response indicates the route exists and
+    was reachable, else ``(False, <reason>)`` — including for network errors
+    (timeout, connection refused, ...).
+
+    Only refuses on signals that unambiguously mean "not this route": 404/405
+    (no such route) and 401/403 (route exists, auth is wrong). Any other
+    response — including a 400/422 a real Whisper-compatible API can return
+    for a degenerate silent probe clip — still proves the endpoint parsed an
+    OpenAI-style multipart transcription request, so it passes; the probe is
+    a guard against clearly-wrong endpoints, not a full contract test, and a
+    stricter check would block legitimate configs on a false negative.
+
+    Guards against the 2026-09-02 incident: the STT settings card lists
+    every ModelEndpoint as a candidate STT provider, including chat-only
+    endpoints with no transcription route, which previously saved silently
+    and then 500'd every voice-mode turn.
+    """
+    from src.database import SessionLocal, ModelEndpoint
+
+    db = SessionLocal()
+    try:
+        ep = db.query(ModelEndpoint).filter(ModelEndpoint.id == endpoint_id).first()
+        if not ep:
+            return False, f"endpoint {endpoint_id} not found"
+        base_url = (ep.base_url or "").rstrip("/")
+        api_key = ep.api_key
+    finally:
+        db.close()
+
+    if not base_url:
+        return False, "endpoint has no base_url configured"
+
+    url = base_url + "/audio/transcriptions"
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    files = {"file": ("probe.wav", io.BytesIO(_tiny_silent_wav()), "audio/wav")}
+    data = {"model": model or "whisper-1"}
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, headers=headers, files=files, data=data)
+    except httpx.TimeoutException:
+        return False, f"endpoint timed out after {timeout:.0f}s — check base_url and network reachability"
+    except httpx.HTTPError as exc:
+        return False, f"could not reach endpoint: {exc}"
+
+    if resp.status_code == 404:
+        # OpenAI returns 404 with a JSON error body both when the route is
+        # genuinely missing AND when the route exists but the model name is
+        # wrong (e.g. {"error": {"code": "model_not_found", ...}}) — verified
+        # live 2026-09-03 against api.openai.com with stt_model=gpt-realtime-
+        # whisper. Conflating the two misled a maintainer into thinking a
+        # working endpoint had no transcription route.
+        try:
+            body = resp.json()
+            error = (body or {}).get("error") or {}
+            code = str(error.get("code") or "")
+            message = str(error.get("message") or "")
+            if code == "model_not_found" or "model" in message.lower():
+                return False, (
+                    f"model '{model}' not found on this endpoint (HTTP 404) — "
+                    "check the STT model name (OpenAI: gpt-transcribe, "
+                    "gpt-4o-mini-transcribe, whisper-1)"
+                )
+        except Exception:
+            pass
+        return False, (
+            f"endpoint returned {resp.status_code} — no /audio/transcriptions route "
+            "(not a transcription-capable API)"
+        )
+    if resp.status_code == 405:
+        return False, (
+            f"endpoint returned {resp.status_code} — no /audio/transcriptions route "
+            "(not a transcription-capable API)"
+        )
+    if resp.status_code in (401, 403):
+        return False, f"endpoint rejected the request (HTTP {resp.status_code}) — check the API key"
+
+    return True, ""
+
+
 class STTService:
     """Multi-provider STT service.
 
@@ -136,6 +239,12 @@ class STTService:
 
     def __init__(self):
         self._whisper_model = None  # lazy-init
+        # Reason the last transcribe() call returned None, if any — surfaced
+        # by routes/stt_routes.py so the frontend can show something more
+        # useful than a bare "Transcription failed" (2026-09-02 incident:
+        # an STT endpoint that didn't implement /audio/transcriptions 500'd
+        # silently on every voice-mode turn).
+        self.last_error: Optional[str] = None
 
     # ── Settings ──
 
@@ -199,14 +308,22 @@ class STTService:
                 return None
         return self._whisper_model
 
-    def _transcribe_local(self, audio_bytes: bytes, language: str = "") -> Optional[str]:
+    def _transcribe_local(
+        self,
+        audio_bytes: bytes,
+        language: str = "",
+        *,
+        prompt: Optional[str] = None,
+        filename: str = "audio.webm",
+    ) -> Optional[str]:
         model = self._get_whisper()
         if not model:
             return None
         tmp_path = None
         try:
             # Write to temp file (faster-whisper needs a file path or file-like)
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+            suffix = Path(filename).suffix or ".webm"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
@@ -216,6 +333,8 @@ class STTService:
             kwargs = {"vad_filter": True}
             if language:
                 kwargs["language"] = language
+            if prompt:
+                kwargs["initial_prompt"] = prompt
 
             segments, info = model.transcribe(tmp_path, **kwargs)
             raw = " ".join(seg.text.strip() for seg in segments)
@@ -234,7 +353,17 @@ class STTService:
 
     # ── API endpoint ──
 
-    def _transcribe_api(self, audio_bytes: bytes, endpoint_id: str, model: str, language: str = "") -> Optional[str]:
+    def _transcribe_api(
+        self,
+        audio_bytes: bytes,
+        endpoint_id: str,
+        model: str,
+        language: str = "",
+        *,
+        prompt: Optional[str] = None,
+        timeout: float = 60.0,
+        filename: str = "audio.webm",
+    ) -> Optional[str]:
         from src.database import SessionLocal, ModelEndpoint
 
         db = SessionLocal()
@@ -242,6 +371,7 @@ class STTService:
             ep = db.query(ModelEndpoint).filter(ModelEndpoint.id == endpoint_id).first()
             if not ep:
                 logger.error(f"STT endpoint {endpoint_id} not found")
+                self.last_error = f"STT endpoint {endpoint_id} not found"
                 return None
             base_url = ep.base_url.rstrip("/")
             api_key = ep.api_key
@@ -253,13 +383,25 @@ class STTService:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        files = {"file": ("audio.webm", io.BytesIO(audio_bytes), "audio/webm")}
+        suffix = Path(filename).suffix.lower()
+        if suffix == ".ogg":
+            mime = "audio/ogg"
+        elif suffix == ".mp3":
+            mime = "audio/mpeg"
+        elif suffix == ".wav":
+            mime = "audio/wav"
+        else:
+            mime = "audio/webm"
+
+        files = {"file": (filename, io.BytesIO(audio_bytes), mime)}
         data = {"model": model or "whisper-1"}
         if language:
             data["language"] = language
+        if prompt:
+            data["prompt"] = prompt
 
         try:
-            r = httpx.post(url, headers=headers, files=files, data=data, timeout=60)
+            r = httpx.post(url, headers=headers, files=files, data=data, timeout=timeout)
             r.raise_for_status()
             result = r.json()
             raw = result.get("text", "")
@@ -268,13 +410,26 @@ class STTService:
                 logger.info("STT hallucination filter stripped subtitle-credit artifact from transcript")
             logger.info(f"API STT: {len(text)} chars from {base_url}")
             return text
+        except httpx.HTTPStatusError as e:
+            self.last_error = f"endpoint returned HTTP {e.response.status_code}"
+            logger.error(f"API STT transcription failed: {e}")
+            return None
         except Exception as e:
+            self.last_error = f"endpoint request failed: {e}"
             logger.error(f"API STT transcription failed: {e}")
             return None
 
     # ── Public interface ──
 
-    def transcribe(self, audio_bytes: bytes) -> Optional[str]:
+    def transcribe(
+        self,
+        audio_bytes: bytes,
+        *,
+        prompt: Optional[str] = None,
+        timeout: float = 60.0,
+        filename: str = "audio.webm",
+    ) -> Optional[str]:
+        self.last_error = None
         settings = self._load_settings()
         if settings.get("stt_enabled") is False:
             return None
@@ -290,10 +445,13 @@ class STTService:
             return ""
 
         if provider == "local":
-            return self._transcribe_local(audio_bytes, language)
+            return self._transcribe_local(audio_bytes, language, prompt=prompt, filename=filename)
         elif provider.startswith("endpoint:"):
             endpoint_id = provider.split(":", 1)[1]
-            return self._transcribe_api(audio_bytes, endpoint_id, model, language)
+            return self._transcribe_api(
+                audio_bytes, endpoint_id, model, language,
+                prompt=prompt, timeout=timeout, filename=filename,
+            )
         else:
             logger.error(f"Unknown STT provider: {provider}")
             return None

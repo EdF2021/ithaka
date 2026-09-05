@@ -178,12 +178,8 @@ const VoiceMode = {
         },
         // showToast — keep quiet in voice mode to avoid noise
         null,
-        // showError — if the mic fails, deactivate
-        (msg) => {
-          console.error('VoiceMode: recording error:', msg)
-          this.deactivate()
-          if (window.uiModule?.showToast) window.uiModule.showToast(msg)
-        },
+        // showError
+        (msg) => this._onRecordingError(msg),
         {
           // End-of-speech detection: recording auto-stops after silence,
           // which triggers transcription and closes the loop.
@@ -195,6 +191,45 @@ const VoiceMode = {
       console.error('VoiceMode: failed to start recording:', e)
       this.deactivate()
     }
+  },
+
+  /**
+   * Called by the recorder on a recording-time error (voiceRecorder.js'
+   * showError callback). A failed STT transcription (bad endpoint,
+   * network error, server 500 — see the 2026-09-02 incident where this
+   * was only a console.error, invisible to the user) is recoverable: it
+   * is also reported via onDone('error') below, whose 3-strikes counter
+   * decides whether to deactivate. Any other error (no mic, permission
+   * denied, insecure context) has no matching onDone call, so it must
+   * deactivate immediately or voice mode would stay "armed" forever.
+   *
+   * @private
+   * @param {string} msg
+   */
+  _onRecordingError(msg) {
+    console.error('VoiceMode: recording error:', msg)
+    const isTranscriptionError = typeof msg === 'string' && msg.startsWith('Transcription failed')
+    if (isTranscriptionError) {
+      const httpMatch = msg.match(/HTTP (\d+)/)
+      const detail = httpMatch ? ` (HTTP ${httpMatch[1]})` : ''
+      this._showSttError(`Speech recognition failed${detail}: check STT settings`)
+      return
+    }
+    this.deactivate()
+    this._showSttError(msg)
+  },
+
+  /**
+   * Surface an STT failure visibly instead of only logging it. Reuses the
+   * app's existing error-toast mechanism (window.uiModule.showError —
+   * persistent with a dismiss button, unlike the quieter showToast).
+   *
+   * @private
+   * @param {string} msg
+   */
+  _showSttError(msg) {
+    if (window.uiModule?.showError) window.uiModule.showError(msg)
+    else if (window.uiModule?.showToast) window.uiModule.showToast(msg)
   },
 
   /**
@@ -218,7 +253,7 @@ const VoiceMode = {
       if (this._errStreak >= 3) {
         console.error('VoiceMode: 3 transcription errors in a row, deactivating')
         this.deactivate()
-        if (window.uiModule?.showToast) window.uiModule.showToast('Voice mode stopped: transcription keeps failing')
+        this._showSttError('Voice mode disabled after 3 speech recognition errors')
         return
       }
     }

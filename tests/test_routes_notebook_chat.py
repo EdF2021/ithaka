@@ -9,6 +9,7 @@ instruction instead of a silently context-free turn — which would otherwise
 let the model answer from general knowledge, exactly what a notebook forbids.
 """
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
@@ -69,6 +70,94 @@ def test_notebook_search_is_scoped_and_k8():
     assert "ONLY those sources" in _system_text(preface)
 
 
+def test_notebook_retrieval_log_carries_notebook_and_source_ids(caplog):
+    """#112 diagnosability: the RAG-above-threshold logline must carry
+    notebook_id, source_ids and the used query so a prod log alone can show
+    whether a turn was source-filtered, without reading request payloads."""
+    hits = [{"document": "chunk text", "similarity": 0.9,
+             "metadata": {"filename": "a.pdf", "document_id": "doc-1"}}]
+    proc, _ = _mk_processor(hits)
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(proc, notebook_id="nb-1", source_ids=["doc-1", "doc-2"])
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert "notebook_id='nb-1'" in rag_lines[0]
+    assert "source_ids=['doc-1', 'doc-2']" in rag_lines[0]
+    assert "query='what is X?'" in rag_lines[0]
+
+
+def test_search_hint_anchors_condensation_fallback_on_llm_failure(monkeypatch, caplog):
+    """#112 voorstel B: when condensation itself fails, the RAG query must
+    fall back to the bare search_hint (e.g. a clicked mindmap node's label),
+    not the raw templated message whose generic filler words ("bronnen",
+    "notebook", "samenvatting") would otherwise skew the keyword score."""
+    def failing_llm(*args, **kwargs):
+        raise ValueError("LLM down")
+    monkeypatch.setattr("src.llm_core.llm_call", failing_llm)
+
+    hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={}, history=[])
+    templated_msg = (
+        'Geef een samenvatting en uitleg over "Skills/integraties" op basis '
+        'van de bronnen van dit notebook.'
+    )
+
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(
+            proc, notebook_id="nb-1", session=session,
+            message=templated_msg, search_hint="Skills/integraties",
+        )
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert "query='Skills/integraties'" in rag_lines[0]
+
+
+def test_search_hint_anchors_condensation_fallback_on_empty_response(monkeypatch, caplog):
+    """Same as above, but condensation returns an empty string rather than
+    raising — the other failure mode _condense_notebook_query handles."""
+    monkeypatch.setattr("src.llm_core.llm_call", lambda *a, **k: "   ")
+
+    hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={}, history=[])
+    templated_msg = (
+        'Geef een samenvatting en uitleg over "Resultaten" op basis van de '
+        'bronnen van dit notebook.'
+    )
+
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(
+            proc, notebook_id="nb-1", session=session,
+            message=templated_msg, search_hint="Resultaten",
+        )
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert "query='Resultaten'" in rag_lines[0]
+
+
+def test_no_search_hint_falls_back_to_raw_message_unchanged(monkeypatch, caplog):
+    """Regression: without a search_hint, condensation failure must still
+    fall back to the raw message exactly as before #112."""
+    def failing_llm(*args, **kwargs):
+        raise ValueError("LLM down")
+    monkeypatch.setattr("src.llm_core.llm_call", failing_llm)
+
+    hits = [{"document": "chunk", "similarity": 0.9, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    session = SimpleNamespace(endpoint_url="http://local", model="test", headers={}, history=[])
+
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(proc, notebook_id="nb-1", session=session, message="what is X?")
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert "query='what is X?'" in rag_lines[0]
+
+
 def test_notebook_context_blocks_are_numbered_for_citation():
     """Citations only work if the injected blocks carry the same [n] numbers."""
     hits = [
@@ -110,6 +199,13 @@ def test_no_sources_prompt_carries_dutch_output_rule():
     assert DUTCH_OUTPUT_RULE in cp.NOTEBOOK_NO_SOURCES_PROMPT
 
 
+def test_grounding_prompt_tells_model_no_tools_are_available():
+    """#141: the model should be told up front that tools are off, so it is
+    less likely to hallucinate a fenced tool call (```python```/```bash```)
+    that the agent loop would then have to discard."""
+    assert "no tools" in cp.NOTEBOOK_GROUNDING_PROMPT.lower()
+
+
 def test_notebook_empty_results_injects_refusal_prompt():
     proc, _ = _mk_processor([])
     preface, rag_sources, _, _ = _preface(proc, notebook_id="nb-1")
@@ -127,6 +223,55 @@ def test_notebook_below_threshold_results_count_as_no_sources():
 
     assert rag_sources == []
     assert "No notebook source" in _system_text(preface)
+
+
+def test_notebook_uses_lower_similarity_threshold():
+    """#112: the FastEmbed fallback lane scores correct Dutch-notebook hits
+    at 0.22-0.27 hybrid similarity — below the general 0.35 floor, so
+    notebook chat surfaced 0 relevant chunks even though retrieval worked.
+    A hit at 0.2 must pass in notebook mode (NOTEBOOK_RAG_SIMILARITY_THRESHOLD
+    = 0.15) while still failing the general-chat 0.35 floor (see
+    test_general_chat_keeps_the_higher_threshold below)."""
+    hits = [{"document": "chunk", "similarity": 0.2, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    preface, rag_sources, _, _ = _preface(proc, notebook_id="nb-1")
+
+    assert len(rag_sources) == 1
+    assert "No notebook source" not in _system_text(preface)
+
+
+def test_general_chat_keeps_the_higher_threshold():
+    """Same 0.2 similarity, no notebook_id: the general RAG_SIMILARITY_THRESHOLD
+    (0.35) must still apply, unchanged by the notebook-only lower floor."""
+    hits = [{"document": "chunk", "similarity": 0.2, "metadata": {"filename": "a.pdf"}}]
+    proc, _ = _mk_processor(hits)
+    _, rag_sources, _, _ = _preface(proc, message="q")
+
+    assert rag_sources == []
+
+
+def test_empty_relevant_results_are_logged(caplog):
+    """#112 diagnosability: previously only the above-threshold branch
+    logged, so a turn that retrieved candidates but filtered every one of
+    them out below the threshold left no trace in production logs —
+    indistinguishable from retrieval itself returning nothing. The empty
+    branch must log the same fields (owner, notebook_id, source_ids, query)
+    plus the top-3 raw similarities."""
+    hits = [
+        {"document": "chunk", "similarity": 0.05, "metadata": {"filename": "a.pdf"}},
+        {"document": "chunk2", "similarity": 0.03, "metadata": {"filename": "b.pdf"}},
+    ]
+    proc, _ = _mk_processor(hits)
+    with caplog.at_level("INFO", logger="src.chat_processor"):
+        _preface(proc, notebook_id="nb-1", source_ids=["doc-1"])
+
+    rag_lines = [r.message for r in caplog.records if r.message.startswith("RAG:")]
+    assert len(rag_lines) == 1
+    assert rag_lines[0].startswith("RAG: 0/2 results above threshold 0.15")
+    assert "owner='ed'" in rag_lines[0]
+    assert "notebook_id='nb-1'" in rag_lines[0]
+    assert "source_ids=['doc-1']" in rag_lines[0]
+    assert "top3_similarities=[0.05, 0.03]" in rag_lines[0]
 
 
 def test_notebook_refusal_not_injected_when_sources_found():
@@ -196,6 +341,32 @@ def test_session_notebook_id_helper():
     assert _session_notebook_id(s) is None
     s.notebook_id = "nb-1"
     assert _session_notebook_id(s) == "nb-1"
+
+
+def test_session_notebook_id_rejects_stringified_undefined(caplog):
+    """#112: a broken client read (FormData.append() stringifying an actual
+    JS `undefined`, or a stray "null") must degrade to "no notebook", not
+    reach the RAG where-filter as a literal value that matches nothing and
+    silently zeroes out retrieval. Each rejection is logged so a bad binding
+    is diagnosable from prod logs alone."""
+    from routes.chat_helpers import _session_notebook_id
+
+    class _S:
+        id = "sess-1"
+
+    s = _S()
+    with caplog.at_level("WARNING", logger="routes.chat_helpers"):
+        for bad in ("undefined", "null", "UNDEFINED", "  undefined  ", "Null"):
+            s.notebook_id = bad
+            assert _session_notebook_id(s) is None, bad
+
+    warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 5
+    assert all("sess-1" in w for w in warnings)
+
+    # A real notebook id that merely contains the word must NOT be swallowed.
+    s.notebook_id = "undefined-behavior-notebook"
+    assert _session_notebook_id(s) == "undefined-behavior-notebook"
 
 
 def test_session_dataclass_carries_notebook_id():
@@ -365,7 +536,14 @@ def test_notebook_lockdown_is_a_noop_for_normal_sessions():
 
 def test_notebook_lockdown_does_not_claim_guide_only_mode():
     """guide_only injects a directive telling the model the USER forbade tools;
-    a notebook turn is not that, so the mode must stay untouched."""
+    a notebook turn is not that, so the mode must stay untouched.
+
+    #141: notebook lockdown gets its own dedicated
+    `discard_blocked_tool_calls` flag instead, so the agent loop can drop a
+    blocked fenced tool block outright (no pointless round 2) without
+    reusing/overloading `mode` or adopting guide_only's broader,
+    separately-tested special-casing.
+    """
     import routes.chat_routes as cr
     from src.tool_policy import build_effective_tool_policy
 
@@ -374,3 +552,4 @@ def test_notebook_lockdown_does_not_claim_guide_only_mode():
         build_effective_tool_policy(last_user_message="what is X?"),
     )
     assert policy.mode == "normal"
+    assert policy.discard_blocked_tool_calls is True

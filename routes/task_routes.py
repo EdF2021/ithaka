@@ -304,7 +304,8 @@ def setup_task_routes(task_scheduler) -> APIRouter:
     async def _generate_task_name(prompt: str, owner: Optional[str] = None) -> str:
         """Use LLM to generate a short task name from the prompt."""
         try:
-            from src.llm_core import llm_call_async
+            from src.endpoint_resolver import resolve_utility_fallback_candidates
+            from src.llm_core import llm_call_async_with_fallback
             from core.database import Session as DbSession
             db = SessionLocal()
             try:
@@ -322,19 +323,24 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             finally:
                 db.close()
 
-            result = await llm_call_async(
-                url=url, model=model,
+            # Chain the configured utility fallbacks behind the recent
+            # session's model so a down primary doesn't hard-fail naming
+            # (see #183 part B).
+            candidates = [(url, model, headers)]
+            candidates.extend(resolve_utility_fallback_candidates(owner=owner or None) or [])
+            result = await llm_call_async_with_fallback(
+                candidates,
                 messages=[
                     {"role": "system", "content": "Generate a short title (3-5 words, no quotes) for this scheduled task. Reply with ONLY the title, nothing else."},
                     {"role": "user", "content": prompt[:500]},
                 ],
                 max_tokens=20,
-                headers=headers,
                 timeout=15,
             )
             title = result.strip().strip('"\'').strip()
             return title[:60] if title else prompt[:50].strip()
-        except Exception:
+        except Exception as e:
+            logger.warning("Task name generation failed, falling back to prompt slice: %s", e)
             first = prompt.split('\n')[0].split('.')[0].strip()
             return first[:50] if first else "Untitled Task"
 
@@ -1092,8 +1098,8 @@ def setup_task_routes(task_scheduler) -> APIRouter:
         AI news and summarize it") into a structured task draft the frontend
         can pre-fill the form with. Returns a draft only — the user reviews and
         saves it, so a misread schedule never goes live unreviewed."""
-        from src.endpoint_resolver import resolve_endpoint
-        from src.llm_core import llm_call_async
+        from src.endpoint_resolver import resolve_endpoint, resolve_utility_fallback_candidates
+        from src.llm_core import llm_call_async_with_fallback
         from src.text_helpers import strip_think as _strip_think
         import json as _json, re as _re
         from datetime import datetime as _dt
@@ -1134,11 +1140,15 @@ def setup_task_routes(task_scheduler) -> APIRouter:
                 url, model, headers = resolve_endpoint("default", owner=user or None)
             if not (url and model):
                 return {"success": False, "message": "No model endpoint configured"}
-            raw = await llm_call_async(
-                url=url, model=model,
+            # Chain the configured utility fallbacks behind the primary pick
+            # so a down endpoint doesn't hard-fail the parse (see #183 part B).
+            candidates = [(url, model, headers)]
+            candidates.extend(resolve_utility_fallback_candidates(owner=user or None) or [])
+            raw = await llm_call_async_with_fallback(
+                candidates,
                 messages=[{"role": "system", "content": sys},
                           {"role": "user", "content": desc[:1000]}],
-                temperature=0.2, max_tokens=400, headers=headers, timeout=45,
+                temperature=0.2, max_tokens=400, timeout=45,
             )
             text = _strip_think(raw or "", prose=False, prompt_echo=False).strip()
             if text.startswith("```"):

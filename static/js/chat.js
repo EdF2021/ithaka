@@ -151,6 +151,81 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     if (body) chatRenderer.appendReportButton(body, sessionId);
   }
 
+  // Active generate_video job polls, keyed by job id, so a page/session
+  // switch (or a duplicate poll for the same job on reload) can stop them.
+  const _videoJobPolls = new Map();
+  const VIDEO_POLL_INTERVAL_MS = 5000;
+  const VIDEO_POLL_MAX_MS = 12 * 60 * 1000;
+
+  /**
+   * Poll GET /api/video/jobs/{id} every 5s (max 12 min) and swap the pending
+   * bubble for the finished <video> (or a red error line) in place.
+   */
+  function startVideoJobPoll(jobId, bubbleEl, opts = {}) {
+    if (!jobId || !bubbleEl) return;
+    // Avoid double-polling the same job (e.g. re-render on reload).
+    const existing = _videoJobPolls.get(jobId);
+    if (existing) { clearInterval(existing.intervalId); _videoJobPolls.delete(jobId); }
+
+    const startedSessionId = sessionModule && sessionModule.getCurrentSessionId ? sessionModule.getCurrentSessionId() : null;
+    const startTime = Date.now();
+
+    const stop = () => {
+      const entry = _videoJobPolls.get(jobId);
+      if (entry) { clearInterval(entry.intervalId); _videoJobPolls.delete(jobId); }
+    };
+
+    const tick = async () => {
+      // Stop polling if the user switched away from the session this job started in.
+      if (startedSessionId != null && sessionModule && sessionModule.getCurrentSessionId
+        && sessionModule.getCurrentSessionId() !== startedSessionId) {
+        stop();
+        return;
+      }
+      if (Date.now() - startTime > VIDEO_POLL_MAX_MS) {
+        stop();
+        chatRenderer.renderVideoError(bubbleEl, 'Video is taking too long; check back later');
+        return;
+      }
+      try {
+        const res = await fetch(`${API_BASE}/api/video/jobs/${encodeURIComponent(jobId)}`, { credentials: 'same-origin' });
+        if (res.status === 404) {
+          stop();
+          chatRenderer.renderVideoError(bubbleEl, 'Video job no longer known');
+          return;
+        }
+        if (!res.ok) return; // transient error — keep polling
+        const job = await res.json();
+        if (job.status === 'done') {
+          stop();
+          // The bubble may have been removed from the DOM (chat cleared,
+          // session switched away without a still-running-job guard, ...)
+          // while this fetch was in flight — don't resurrect it.
+          if (bubbleEl.isConnected) {
+            const rendered = chatRenderer.buildVideoBubble(job);
+            bubbleEl.replaceWith(rendered);
+            uiModule.scrollHistory();
+          }
+        } else if (job.status === 'error') {
+          stop();
+          if (bubbleEl.isConnected) chatRenderer.renderVideoError(bubbleEl, job.error || 'Video generation failed');
+        }
+        // status === 'running' — keep polling
+      } catch (e) {
+        console.warn('[chat] video job poll failed', e);
+        // transient network error — keep polling until timeout
+      }
+    };
+
+    const intervalId = setInterval(tick, VIDEO_POLL_INTERVAL_MS);
+    _videoJobPolls.set(jobId, { intervalId, sessionId: startedSessionId });
+    // Fire the first check immediately rather than waiting a full interval —
+    // a job that already finished (page reload landing after completion, or
+    // one that's since vanished) resolves right away instead of showing a
+    // spinner for up to 5s first.
+    tick();
+  }
+
   function _stripDocumentFenceForChat(text, { final = false } = {}) {
     let s = String(text || '').replace(/<?\|end\|>?/g, '');
     const markerMatch = /```(?:create_document|documen(?:t)?)\s*\n/i.exec(s);
@@ -616,6 +691,26 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
    */
   export async function handleChatSubmit(e) {
     e.preventDefault();
+    // search_hint (#112): read-and-clear notebookWorkspace.js's one-shot
+    // pending hint (a bare mindmap-node label) as the very first thing in
+    // this handler, unconditionally — before ANY early-return path below
+    // (isStreaming cancel/stop, compare mode, the setup-mode intercept, the
+    // _sendInFlight race guard, ...). Those paths never reach the
+    // workspace-open gate further down, which used to be the only place
+    // that consumed the hint; a mindmap-node click while a previous answer
+    // is still streaming hits the isStreaming branch (treated as "cancel
+    // the stream", not "submit") and returned before that gate, leaving the
+    // hint sitting in notebookWorkspace.js's module state — where it would
+    // resurface on a LATER, unrelated message once the workspace was
+    // reopened (review finding, #112 fix-round). getSearchHintForChat()
+    // clears its module-level value on every call, so calling it exactly
+    // once here — always, regardless of which path this invocation takes —
+    // guarantees no stale hint can survive past this call. The raw value is
+    // reused (not re-fetched) at the workspace-open gate below to decide
+    // whether it's actually forwarded.
+    const _nbwsSearchHintRaw = window.notebookWorkspace && window.notebookWorkspace.getSearchHintForChat
+      ? window.notebookWorkspace.getSearchHintForChat()
+      : null;
     // Cancel research clarification timeout if active
     if (window._researchTimeoutTimer) {
       clearTimeout(window._researchTimeoutTimer);
@@ -835,8 +930,38 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     // Computed once here and reused unchanged at the fd.append site below —
     // not recomputed, so a mid-send checkbox change can't desync the guard
     // from what actually gets sent.
+    //
+    // isNotebookWorkspaceOpen() is also snapshotted here into
+    // _nbwsWorkspaceOpenAtSubmit, synchronously and before any await below.
+    // The issue-#22 fail-closed guard further down reuses this snapshot
+    // instead of re-reading live state after an await, because a caller
+    // (e.g. notebookWorkspace.js's mindmap-node-click handler) may
+    // legitimately close the workspace between dispatching this submit and
+    // that guard's await-resume — which would otherwise make the guard
+    // silently see "closed" and skip its check for an entry point where the
+    // workspace genuinely was open at submit time.
+    const _nbwsWorkspaceOpenAtSubmit = !!(window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen());
+    // notebook_id (#112): read at the exact same synchronous snapshot moment
+    // as _nbwsWorkspaceOpenAtSubmit above — not later, inside whatever
+    // eventually materializes the session — so a caller that legitimately
+    // closes the workspace mid-await (the mindmap-node-click entry point)
+    // can never leave a materialize call reading post-close state. Passed
+    // through to materializePendingSession(), which still falls back to its
+    // own live read for callers that have no such snapshot (document
+    // panel/library sends never go through this handler).
+    const _nbwsNotebookIdAtSubmit = _nbwsWorkspaceOpenAtSubmit
+      ? ((window.notebookWorkspace.getCurrentNotebookId && window.notebookWorkspace.getCurrentNotebookId()) || null)
+      : null;
     let _nbwsSourceIds = null;
-    if (window.notebookWorkspace && window.notebookWorkspace.isNotebookWorkspaceOpen && window.notebookWorkspace.isNotebookWorkspaceOpen()) {
+    // search_hint: _nbwsSearchHintRaw was already read-and-cleared at the
+    // very top of this handler (see the comment there for why it must be
+    // consumed unconditionally, before any early return). Only forwarded to
+    // the backend when the workspace was open at submit time, mirroring the
+    // source_ids gate below (#112).
+    const _nbwsSearchHint = (_nbwsWorkspaceOpenAtSubmit && typeof _nbwsSearchHintRaw === 'string' && _nbwsSearchHintRaw.trim())
+      ? _nbwsSearchHintRaw.trim()
+      : null;
+    if (_nbwsWorkspaceOpenAtSubmit) {
       _nbwsSourceIds = window.notebookWorkspace.getSourceIdsForChat ? window.notebookWorkspace.getSourceIdsForChat() : null;
       if (Array.isArray(_nbwsSourceIds) && _nbwsSourceIds.length === 0) {
         uiModule.showError(window.notebookWorkspace.EMPTY_SELECTION_MESSAGE || 'Select at least one source');
@@ -848,17 +973,20 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     // Materialize pending session (deferred from model click) on first message
     if (sessionModule.hasPendingChat && sessionModule.hasPendingChat()) {
       _sendPerf.mark('pending_session_begin');
-      const ok = await sessionModule.materializePendingSession();
+      const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
       _sendPerf.mark('pending_session_done');
       if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
 
-      // Fail-closed vangnet (issue #22): the notebook workspace is open right
-      // now, but the session just materialized without a notebook binding —
-      // sending would let RAG grounding silently drop while the notebook UI
-      // still implies grounded answers. The primary fix is
-      // materializePendingSession reading the open workspace's notebook id
-      // live at materialize time; this only catches a bypassed path.
-      if (window.notebookWorkspace?.isNotebookWorkspaceOpen?.() &&
+      // Fail-closed vangnet (issue #22): the notebook workspace was open at
+      // submit time (see the synchronous _nbwsWorkspaceOpenAtSubmit snapshot
+      // above — not re-read live here, since a caller may have closed the
+      // workspace during the await above), but the session just materialized
+      // without a notebook binding — sending would let RAG grounding
+      // silently drop while the notebook UI still implies grounded answers.
+      // The primary fix is materializePendingSession reading the open
+      // workspace's notebook id live at materialize time; this only catches
+      // a bypassed path.
+      if (_nbwsWorkspaceOpenAtSubmit &&
           !(sessionModule.getLastMaterializedNotebookId && sessionModule.getLastMaterializedNotebookId())) {
         const box = document.getElementById('chat-history');
         if (box) {
@@ -880,7 +1008,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       try {
         const pending = sessionModule.getPendingChat && sessionModule.getPendingChat();
         if (pending && pending.url && pending.modelId) {
-          const ok = await sessionModule.materializePendingSession();
+          const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         }
       } catch (_) {}
@@ -906,7 +1034,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
           _sendPerf.mark('direct_chat_create_begin');
           await sessionModule.createDirectChat(dc.endpoint_url, dc.model, dc.endpoint_id);
           _sendPerf.mark('direct_chat_create_done');
-          const ok = await sessionModule.materializePendingSession();
+          const ok = await sessionModule.materializePendingSession(_nbwsNotebookIdAtSubmit);
           _sendPerf.mark('direct_chat_materialize_done');
           if (!ok || !sessionModule.getCurrentSessionId()) { _releaseSendFlag(); return; }
         } else {
@@ -967,6 +1095,18 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     let finalMeta = null;
     let spinner = null;
     let timedOut = false;
+    // Declared here, at handleChatSubmit's top level, instead of at their
+    // original point of use further down inside the try — `try`/`catch` are
+    // sibling block scopes, so a `const`/`let` declared inside the try is
+    // NOT visible inside the catch at all (this is plain lexical scoping,
+    // not a temporal-dead-zone timing issue). The catch block below reads
+    // both of these unconditionally, so leaving them declared inside the
+    // try makes the catch throw its own `ReferenceError: X is not defined`
+    // on every foreground error it handles (timeouts, aborts, stream
+    // errors), masking the real error and escaping as a second unhandled
+    // promise rejection (issue #135).
+    let streamingTTS = false;
+    let _isAgent = false;
     let processingProbeTimer = null;
     let processingProbeAbort = null;
     let _renderStream = () => {};
@@ -1238,6 +1378,10 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       // not a JSON body. `_nbwsSourceIds` was computed once at the top of
       // this handler (see the send guard there); null means no filter.
       if (Array.isArray(_nbwsSourceIds)) fd.append('source_ids', JSON.stringify(_nbwsSourceIds));
+      // search_hint: bare mindmap-node label, captured once at the top of
+      // this handler (see the gate there) — best-effort condensation-fallback
+      // anchor server-side, never required (#112).
+      if (_nbwsSearchHint) fd.append('search_hint', _nbwsSearchHint);
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && activeDocIdForSend) {
         try {
@@ -1314,7 +1458,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       currentAbort = abortCtrl;
 
       const _tState = Storage.loadToggleState();
-      const _isAgent = (_tState.mode || 'chat') === 'agent';
+      _isAgent = (_tState.mode || 'chat') === 'agent';
 
       // Timeout: 6 min for research and agent mode, 3 min otherwise
       const timeoutMs = el('research-toggle').checked || _isAgent ? RESEARCH_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
@@ -1483,7 +1627,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
       let isThinking = false;
       let thinkingStartTime = null;
       // Streaming TTS: synthesize sentence-by-sentence during streaming
-      const streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
+      streamingTTS = !!(window.aiTTSManager && window.aiTTSManager.autoPlay && window.aiTTSManager.available);
       if (streamingTTS) window.aiTTSManager.streamingStart();
       if (window.voiceMode && window.voiceMode.isActive) window.voiceMode.onStreamStart();
       // Multi-bubble agent tracking
@@ -2744,6 +2888,14 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
                   uiModule.scrollHistory();
                   // Notify gallery to refresh if open
                   window.dispatchEvent(new CustomEvent('gallery-refresh'));
+                }
+                // --- Video generation started: show a pending bubble and poll for it ---
+                if (json.video_job_id) {
+                  const chatBox = document.getElementById('chat-history');
+                  const videoBubble = chatRenderer.buildVideoPendingBubble(json.video_job_id, json.video_model, json.video_cost_estimate);
+                  chatBox.appendChild(videoBubble);
+                  uiModule.scrollHistory();
+                  startVideoJobPoll(json.video_job_id, videoBubble, { model: json.video_model, cost: json.video_cost_estimate });
                 }
                 // --- Render browser screenshots in tool output ---
                 if (json.screenshot && currentToolBubble) {
@@ -4115,6 +4267,35 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     if (!root || !root.querySelectorAll) return;
     root.querySelectorAll('pre').forEach(_markCompactPre);
   }
+  // Mutation callback, factored out (named, not inlined) so it's unit
+  // testable without a real MutationObserver — see
+  // tests/test_chat_compact_pre_streaming_js.py.
+  //
+  // The characterData branch matters for issue #145: streamingRenderer.js's
+  // append-mode fence streaming (appendOpenFence) grows an open code block by
+  // calling Text.appendData() on an existing text node instead of inserting
+  // new DOM nodes. A childList-only observer never sees that, so a <pre>
+  // classified .pre-compact while its first streamed line was still short
+  // (and single-line) stayed stuck compact — with its slim-button-row 200px
+  // right padding — even once the block grew to many lines, squeezing the
+  // code down to a couple of characters per line on narrow viewports.
+  // Re-running _markCompactPre on every characterData mutation inside a
+  // <pre> keeps the classification live as the block grows.
+  function _handleCompactPreMutations(muts) {
+    for (const m of muts) {
+      if (m.type === 'characterData') {
+        const host = m.target.parentElement;
+        const pre = host && host.closest && host.closest('pre');
+        if (pre) _markCompactPre(pre);
+        continue;
+      }
+      for (const n of m.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === 'PRE') _markCompactPre(n);
+        if (n.querySelectorAll) _scanCompactPres(n);
+      }
+    }
+  }
   // Global observer so any <pre> added anywhere in the app (chat stream,
   // chat re-renders, document library chat previews, slash commands,
   // research previews, etc.) gets tagged without each call site needing
@@ -4123,16 +4304,8 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     if (window._cmpPreObserverWired) return;
     window._cmpPreObserverWired = true;
     _scanCompactPres(document.body);
-    const obs = new MutationObserver((muts) => {
-      for (const m of muts) {
-        for (const n of m.addedNodes) {
-          if (n.nodeType !== 1) continue;
-          if (n.tagName === 'PRE') _markCompactPre(n);
-          if (n.querySelectorAll) _scanCompactPres(n);
-        }
-      }
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
+    const obs = new MutationObserver(_handleCompactPreMutations);
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
   })();
 
   /**
@@ -5520,6 +5693,7 @@ import { wireArrowUpRecall, getLastUserMessageFromChatHistory } from './composer
     showWelcomeScreen: chatRenderer.showWelcomeScreen,
     checkPendingResearch,
     getImageCost: chatRenderer.getImageCost,
+    startVideoJobPoll,
     setDisplayOverride,
     setHideUserBubble,
     setPendingContinue,

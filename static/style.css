@@ -14254,7 +14254,8 @@ body:has(.compare-active) .hamburger-btn { display: none !important; }
    hamburger sticking out over them is just clutter / mis-tap bait. */
 @media (max-width: 768px) {
   body.doc-view .hamburger-btn,
-  body:has(#notes-pane) .hamburger-btn { display: none !important; }
+  body:has(#notes-pane) .hamburger-btn,
+  body:has(#meetings-pane) .hamburger-btn { display: none !important; }
 }
   /* Make room for hamburger button alongside the tab/header bars (fallback if shown) */
   body.doc-view.sidebar-collapsed.hamburger-left .doc-tab-bar,
@@ -27869,6 +27870,11 @@ details.hwfit-serve-advanced > .hwfit-serve-checks:last-of-type {
   margin: 0;
   min-width: 0;
   line-height: 1;
+  /* Positioned ancestor for the absolutely-positioned chip-edit input
+     (slider-ux.js) — without this the input positions against the next
+     positioned ancestor up the tree (.ge-fx-popup, position:fixed),
+     landing 15-100px off. Mirrors .ge-eraser-row's existing rule. */
+  position: relative;
 }
 .ge-adj-row > label {
   flex: 0 0 96px;
@@ -33142,11 +33148,13 @@ body.doc-find-active mark.doc-find-mark.current {
 
 /* ── Notes ── */
 /* Notes panel — body-level flex sibling of chat-container */
-body.notes-view .chat-container { flex: 1; min-width: 0; }
+body.notes-view .chat-container,
+body.meetings-view .chat-container { flex: 1; min-width: 0; }
 
 /* Mobile: notes panel takes over full screen */
 @media (max-width: 768px) {
-  body.notes-view .notes-pane {
+  body.notes-view .notes-pane,
+  body.meetings-view .notes-pane {
     position: fixed;
     inset: 0;
     max-width: 100%;
@@ -33172,7 +33180,8 @@ body.notes-view .chat-container { flex: 1; min-width: 0; }
      height instead of expanding to its content (default min-height:auto on
      flex items). Without this both grid and list views overflow the viewport
      bottom on phones. */
-  body.notes-view .notes-pane-body {
+  body.notes-view .notes-pane-body,
+  body.meetings-view .notes-pane-body {
     min-height: 0;
     -webkit-overflow-scrolling: touch;
   }
@@ -33200,11 +33209,14 @@ body.notes-view .chat-container { flex: 1; min-width: 0; }
     opacity: 0.25;
     border-radius: 2px;
   }
-  body.notes-view .chat-container {
+  body.notes-view .chat-container,
+  body.meetings-view .chat-container {
     display: none;
   }
   body.notes-view .mobile-new-chat-btn,
-  body.notes-view .hamburger-btn {
+  body.notes-view .hamburger-btn,
+  body.meetings-view .mobile-new-chat-btn,
+  body.meetings-view .hamburger-btn {
     display: none !important;
   }
 }
@@ -41181,6 +41193,147 @@ body.dageraad-intro-reveal .chat-container { animation-delay: 140ms; }
 .nbws-tile--podcast { --nbws-tile-accent: var(--color-brand-blue); }
 .nbws-tile--slide_deck { --nbws-tile-accent: var(--green); }
 .nbws-tile--video { --nbws-tile-accent: var(--color-recording, var(--red)); }
+.nbws-tile--report { --nbws-tile-accent: var(--accent-warm); }
+
+/* Rapporten: "Rapport maken" modal — layout-picker grid + one shared
+   edit-and-generate step. Existing .modal/.modal-content/.modal-header/
+   .modal-body chrome; only the grid/card/editor internals are new. */
+.nbrp-modal-content { max-width: 720px; width: 92vw; }
+.nbrp-body { display: flex; flex-direction: column; gap: 4px; }
+.nbrp-section-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-subheader);
+  margin: 12px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.nbrp-section-head:first-child { margin-top: 0; }
+.nbrp-recommended-head svg { flex-shrink: 0; }
+.nbrp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .nbrp-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.nbrp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: 96px;
+  /* Global button rules fix a height; cards must grow with their text. */
+  height: auto;
+}
+.nbrp-card:hover {
+  background: color-mix(in srgb, var(--red) 8%, var(--panel));
+  border-color: color-mix(in srgb, var(--red) 30%, var(--border));
+}
+.nbrp-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.nbrp-card-title svg { flex-shrink: 0; opacity: 0.6; }
+.nbrp-card-desc {
+  font-size: 11px;
+  opacity: 0.75;
+  line-height: 1.4;
+}
+.nbrp-back {
+  background: none;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 10px;
+  align-self: flex-start;
+}
+.nbrp-editor-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.nbrp-editor-textarea {
+  width: 100%;
+  background: var(--panel);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.nbrp-editor-error { color: var(--red); font-size: 12px; min-height: 16px; margin: 6px 0; }
+.nbrp-generate-btn { align-self: flex-end; }
+/* Podcast customize modal (notebookWorkspace.js _openPodcastModal) — reuses
+   the report modal's cards/grid/textarea; only the selected state, the
+   length toggle and the footer row are its own. */
+.nbrp-card.is-selected {
+  border-color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, var(--panel));
+}
+.nbrp-card.is-selected .nbrp-card-title::after {
+  content: "";
+  margin-left: auto;
+  width: 10px;
+  height: 6px;
+  border-left: 2px solid var(--fg);
+  border-bottom: 2px solid var(--fg);
+  transform: rotate(-45deg) translateY(-2px);
+  flex-shrink: 0;
+}
+.nbpc-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 640px) {
+  .nbpc-row { grid-template-columns: 1fr; gap: 4px; }
+}
+.nbpc-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.nbpc-toggle button {
+  background: var(--panel);
+  color: var(--fg);
+  border: none;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.nbpc-toggle button + button { border-left: 1px solid var(--border); }
+.nbpc-toggle button.is-selected {
+  background: color-mix(in srgb, var(--fg) 12%, var(--panel));
+  font-weight: 600;
+}
+.nbpc-sources {
+  font-size: 13px;
+  padding: 6px 0;
+  opacity: 0.85;
+}
+.nbpc-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
 /* Web-source search (fase 4d) — input + button row above the upload zone,
    results as .list-item rows with an inline add button. Existing tokens and
    classes only. */
@@ -41745,6 +41898,20 @@ body.notebook-workspace-open.nbws-studio-collapsed #nbws-chips { right: 32px; }
    width, so the class-combo specificity (3 classes) clears #nbws-root's
    10005 without needing !important. */
 body.notebook-workspace-open.doc-view .doc-editor-pane { z-index: 10010; }
+
+/* #nbrp-modal (Rapport maken — _openReportModal, notebookWorkspace.js) is a
+   plain .modal (base z-index 250, not routed through modalManager.js), so it
+   normally renders behind #nbws-root's 10005 whenever it's opened from the
+   Studio tab. Desktop hides this by luck (#nbws-root's own middle column is
+   transparent there), but on mobile the active tab panel is opaque and
+   fills the viewport, so the modal is fully invisible until switching tabs
+   (#115). Same fix and value as .doc-editor-pane above: lift it just past
+   #nbws-root's 10005. */
+body.notebook-workspace-open #nbrp-modal { z-index: 10010; }
+/* Same for the podcast customize modal (_openPodcastModal) — same cause,
+   same fix; without it the sheet is invisible behind the Studio tab on
+   mobile. */
+body.notebook-workspace-open #nbpc-modal { z-index: 10010; }
 
 /* ── Mobile tabs (Task 7, <=700px) — replaces the side-by-side
    sources/chat/studio columns with ONE full-width "page" at a time, switched

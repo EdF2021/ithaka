@@ -160,7 +160,6 @@ def test_dominant_token_window_trips_without_long_same_run():
 
 
 def test_dominant_token_just_below_count_does_not_trip():
-    guard = _make_guard()
     # 12 groups of (4 "loop" + ~1 "other"x2) shaped to land count just under 60
     # while keeping the window at 72 tokens total.
     groups = []

@@ -549,7 +549,7 @@ def test_update_token_with_null_body_does_not_500(monkeypatch, token_routes_mod)
     invalidator = MagicMock()
     req = _patch_request(invalidator, None)
     update_token = _get_handler(mod, "PATCH", "/tokens/{token_id}")
-    resp = asyncio.run(update_token(request=req, token_id="tok123"))
+    asyncio.run(update_token(request=req, token_id="tok123"))
 
     assert token.name == "original"
     assert token.scopes == "chat"

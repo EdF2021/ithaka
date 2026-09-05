@@ -9,6 +9,9 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("ITHAKA_DATA_DIR", "/tmp/ithaka-test-notebook-suggest")
 
+import asyncio
+import logging
+
 import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
@@ -18,6 +21,15 @@ import routes.notebook_routes as nbr
 import src.notebook_suggest as ns
 from src.notebook_suggest import parse_questions
 from tests.helpers.sqlite_db import make_temp_sqlite
+
+
+# ---- timeout budget (issue #56) ----
+
+def test_suggest_timeout_is_at_least_30s():
+    """Qwen3-14B (Background Tasks reasoning model) routinely needs more
+    than a few seconds even warm — the old 8s budget made suggestions
+    silently empty in practice."""
+    assert ns._SUGGEST_TIMEOUT_S >= 30
 
 
 # ---- _PROMPT language ----
@@ -101,6 +113,10 @@ async def _fake_suggest_boom(question, answer, owner):
     raise RuntimeError("LLM down")
 
 
+async def _fake_suggest_timeout(question, answer, owner):
+    raise asyncio.TimeoutError()
+
+
 def test_suggest_questions_ok(monkeypatch, ts):
     monkeypatch.setattr(nbr, "suggest_questions", _fake_suggest_ok)
     c = _client(monkeypatch)
@@ -141,6 +157,27 @@ def test_suggest_questions_llm_failure_is_empty_200(monkeypatch, ts):
                json={"question": "Q?", "answer": "A."})
     assert r.status_code == 200
     assert r.json() == {"questions": []}
+
+
+def test_suggest_questions_timeout_is_empty_200_with_warning(monkeypatch, ts, caplog):
+    """A TimeoutError must not be a silent failure (issue #56): the route
+    still returns an empty list (never a 5xx), but logs a warning that
+    names the notebook and the timeout budget used."""
+    monkeypatch.setattr(nbr, "suggest_questions", _fake_suggest_timeout)
+    c = _client(monkeypatch)
+    nb_id = _make_notebook(c)
+
+    with caplog.at_level(logging.WARNING, logger="routes.notebook_routes"):
+        r = c.post(f"/api/notebooks/{nb_id}/suggest_questions",
+                   json={"question": "Q?", "answer": "A."})
+    assert r.status_code == 200
+    assert r.json() == {"questions": []}
+    warnings = [rec for rec in caplog.records
+                if rec.levelno == logging.WARNING and rec.name == "routes.notebook_routes"]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert nb_id in msg
+    assert f"after {ns._SUGGEST_TIMEOUT_S}s" in msg
 
 
 @pytest.mark.parametrize("body", [

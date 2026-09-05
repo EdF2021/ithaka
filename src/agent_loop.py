@@ -22,8 +22,10 @@ from src.llm_core import (
     _is_ollama_native_url,
 )
 from src.model_context import estimate_tokens
-from src.settings import get_setting
+from src.settings import get_setting, get_user_setting
 from src.prompt_security import untrusted_context_message
+# Pure stdlib module (re/dataclasses/typing only) — no circular-import risk.
+from src.action_intents import media_intent
 from src.tool_security import (
     PLAN_MODE_READONLY_TOOLS,
     blocked_tools_for_owner,
@@ -327,6 +329,10 @@ _DOMAIN_RULES = {
 ## Integration/API rules
 - To query or control a configured service integration (Home Assistant, Miniflux, Gitea, Linkding, Jellyfin, or any other registered service), use `api_call` with the integration name, HTTP method, path, and optional JSON body.
 - Do not use shell, curl, or `app_api` to reach a user's connected integration when `api_call` is available.""",
+    "media": """\
+## Image/video generation rules
+- To make/generate/create an image, illustration, photo, logo, poster, or drawing, use `generate_image`.
+- To make/generate/create a video, clip, or animation, use `generate_video`. It runs as a background job and renders inline in the chat when ready — do not wait for it or report the video as already made.""",
 }
 
 _DOMAIN_TOOL_MAP = {
@@ -341,6 +347,7 @@ _DOMAIN_TOOL_MAP = {
     "settings": {"manage_settings", "manage_endpoints", "manage_mcp", "manage_webhooks", "manage_tokens", "app_api"},
     "contacts": {"resolve_contact", "manage_contact"},
     "integrations": {"api_call"},
+    "media": {"generate_image", "generate_video"},
 }
 
 def _domain_rules_for_tools(tool_names: set) -> list[str]:
@@ -1132,6 +1139,21 @@ def _classify_agent_request(messages: List[Dict], last_user: str) -> Dict[str, o
     if has(r"\bapi[ _]call\b", r"\bintegrations?\b",
            r"\b(?:home ?assistant|miniflux|gitea|linkding|jellyfin)\b"):
         domains.add("integrations")
+    # Image/video generation intent — mirrors the #3794 fix above for
+    # integrations. classify_tool_intent() already promotes chat->agent for
+    # these requests (category=image/video), but without a matching domain
+    # here the request had no domain, was classified low_signal, and hit the
+    # direct low-signal reply path (no tools at all — the model just answered
+    # "Hey." instead of calling generate_image/generate_video). Shares
+    # media_intent() with action_intents.classify_tool_intent so the two
+    # classifiers cannot drift on what counts as a generation request. Checks
+    # both `text` (this turn) and `retrieval_query` (recent context on an
+    # explicit continuation, e.g. "maak een video van golven" -> assistant
+    # asks a clarifying question -> user replies "ja doe maar") so a
+    # confirmation reply doesn't drop the seeded media tools, matching how
+    # every other `has(...)` detector above already reads `q`.
+    if media_intent(text) or media_intent(retrieval_query):
+        domains.add("media")
 
     low_signal = not continuation and not domains
     return {
@@ -2267,7 +2289,7 @@ def _build_base_prompt(
     from src.tool_index import ALWAYS_AVAILABLE
 
     disabled = set(disabled_tools or [])
-    if not get_setting("image_gen_enabled", False):
+    if not get_user_setting("image_gen_enabled", owner or "", False):
         disabled.add("generate_image")
 
     if relevant_tools is not None:
@@ -3597,6 +3619,10 @@ async def _execute_round_tool_blocks(
         for k in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
             if k in result:
                 tool_output_data[k] = result[k]
+        # Forward video job data from generate_video tool
+        for k in ("video_job_id", "video_model", "video_status", "video_cost_estimate", "video_url"):
+            if k in result:
+                tool_output_data[k] = result[k]
         # Forward screenshots from browser tools (base64 images)
         if result.get("images"):
             img = result["images"][0]
@@ -3698,6 +3724,10 @@ async def _execute_round_tool_blocks(
             for ik in ("image_url", "image_prompt", "image_model", "image_size", "image_quality"):
                 if result.get(ik):
                     tool_event[ik] = result[ik]
+        if result.get("video_job_id"):
+            for vk in ("video_job_id", "video_model", "video_status", "video_cost_estimate", "video_url"):
+                if vk in result:
+                    tool_event[vk] = result[vk]
         if result.get("doc_id"):
             tool_event["doc_id"] = result["doc_id"]
             tool_event["doc_title"] = result.get("title", "")
@@ -4537,6 +4567,74 @@ async def stream_agent_loop(
             is_api_model=(_is_api_model and not guide_only),
             allow_fenced_for_api=_ody_doc_finetune_mode,
         )
+
+        # Notebook tool lockdown (#141): the model has no tool this turn and
+        # never will, so a detected fenced/native tool call is never a real
+        # action -- it's the model hallucinating a call it can't make (e.g. a
+        # weaker/unrecognized model not classified as native-tool-capable, so
+        # its illustrative fence gets parsed as Pattern-1, or a native call
+        # the model emitted despite no schemas being offered). Executing it
+        # just yields a canned "blocked by policy" result, and looping that
+        # result back to the model produces a spurious, confusing round-2
+        # reply ("Referentiecontext ontvangen...") on top of the already-
+        # correct round-1 answer. Discard it here and let this round finish
+        # as a normal no-tool-call turn instead. Gated on the dedicated
+        # `discard_blocked_tool_calls` flag (set only by notebook lockdown),
+        # not on block_all_tool_calls in general, so guide-only mode keeps
+        # its existing, separately-tested round-2 behavior.
+        #
+        # Guard: only discard when prose survives -- if the model wrote
+        # *nothing* but the (blocked) tool call, silently finishing the turn
+        # would hand the user an empty bubble, which is worse than today's
+        # confusing-but-non-empty round 2. That's the same "did the model
+        # actually produce an answer" check the force_answer branch below
+        # uses before falling back to synthesis/apology text.
+        if (
+            tool_policy
+            and tool_policy.discard_blocked_tool_calls
+            and tool_blocks
+        ):
+            # Apply the discard tentatively so `used_native` here already
+            # equals what it will be if we keep it -- that keeps this
+            # skip_fenced expression textually identical to (and never able
+            # to drift from) the persisted-text one at `cleaned_round` below,
+            # instead of duplicating a second, independently-maintained
+            # formula. Rolled back below if no prose survives.
+            _blocked_tool_blocks = tool_blocks
+            _blocked_converted_calls = converted_calls
+            _blocked_native_tool_calls = native_tool_calls
+            _blocked_used_native = used_native
+            tool_blocks = []
+            converted_calls = []
+            if used_native:
+                native_tool_calls = []
+            used_native = False
+            _prose_survives_discard = bool(
+                strip_tool_blocks(
+                    round_response,
+                    skip_fenced=(_is_api_model and not used_native and not guide_only),
+                ).strip()
+            )
+            if _prose_survives_discard:
+                logger.info(
+                    "Agent round %s: discarding %d tool block(s) - notebook lockdown blocks all tools this turn",
+                    round_num, len(_blocked_tool_blocks),
+                )
+            else:
+                # No prose would survive -- roll back and keep the existing
+                # blocked-tool round-trip so the model still gets a chance
+                # at a real answer instead of an empty turn.
+                tool_blocks = _blocked_tool_blocks
+                converted_calls = _blocked_converted_calls
+                native_tool_calls = _blocked_native_tool_calls
+                used_native = _blocked_used_native
+                logger.info(
+                    "Agent round %s: notebook lockdown blocked %d tool block(s) but no prose "
+                    "survives discarding them; keeping the blocked-tool round-trip so the "
+                    "model still gets a chance at a real answer",
+                    round_num, len(_blocked_tool_blocks),
+                )
+
         if _ody_doc_stream_create_mode and tool_blocks:
             create_idx = next(
                 (idx for idx, block in enumerate(tool_blocks) if block.tool_type == "create_document"),

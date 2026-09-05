@@ -37,6 +37,7 @@ const PRIV_LABELS = {
   can_use_documents: 'Document editor',
   can_use_research: 'Deep research',
   can_generate_images: 'Image generation',
+  can_generate_videos: 'Video generation',
   can_manage_memory: 'Memory & skills',
 };
 

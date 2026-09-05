@@ -26,6 +26,7 @@ import { state } from './emailLibrary/state.js';
 import { collapseSidebarToRail } from './modalSnap.js';
 import { emailApiUrl } from './emailShared.js';
 import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 
 const API_BASE = window.location.origin;
 let _emailUnreadChipClickWired = false;
@@ -305,13 +306,19 @@ function _showRecipientChipPopover(chip) {
   `;
   document.body.appendChild(pop);
 
+  // UI text-scale zoom (:root.ui-scale-125) — convert each viewport-space
+  // rect/window term individually; pop.offsetWidth/Height are already
+  // local (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = chip.getBoundingClientRect();
   const margin = 10;
-  const maxLeft = Math.max(margin, window.innerWidth - pop.offsetWidth - margin);
-  let left = Math.min(Math.max(margin, rect.left), maxLeft);
-  let top = rect.bottom + 6;
-  if (top + pop.offsetHeight + margin > window.innerHeight) {
-    top = Math.max(margin, rect.top - pop.offsetHeight - 6);
+  const vw = toLocalPx(window.innerWidth, _z);
+  const vh = toLocalPx(window.innerHeight, _z);
+  const maxLeft = Math.max(margin, vw - pop.offsetWidth - margin);
+  let left = Math.min(Math.max(margin, toLocalPx(rect.left, _z)), maxLeft);
+  let top = toLocalPx(rect.bottom, _z) + 6;
+  if (top + pop.offsetHeight + margin > vh) {
+    top = Math.max(margin, toLocalPx(rect.top, _z) - pop.offsetHeight - 6);
   }
   pop.style.left = `${Math.round(left)}px`;
   pop.style.top = `${Math.round(top)}px`;
@@ -1373,10 +1380,15 @@ export function openEmailLibrary(opts = {}) {
       // while the email list is still loading and put the window ~1/3 down
       // (then it grew off the bottom as the list filled in).
       requestAnimationFrame(() => {
+        // UI text-scale zoom (:root.ui-scale-125) — w (offsetWidth) is local;
+        // window.innerWidth is converted individually before combining with
+        // it. The top calc has no local term, so it's computed fully in
+        // viewport space and divided once (see uiZoom.js, PR #76/#77).
+        const _z = zoomOf(document.documentElement);
         const w = content.offsetWidth;
         const refH = window.innerHeight * 0.85;
-        content.style.left = Math.max(20, (window.innerWidth - w) / 2) + 'px';
-        content.style.top = Math.max(20, (window.innerHeight - refH) / 2) + 'px';
+        content.style.left = Math.max(20, (toLocalPx(window.innerWidth, _z) - w) / 2) + 'px';
+        content.style.top = toLocalPx(Math.max(20, (window.innerHeight - refH) / 2), _z) + 'px';
         content.style.transform = 'none';
       });
     }
@@ -1589,7 +1601,15 @@ export function openEmailLibrary(opts = {}) {
       }
       const card = _fab.parentElement;            // .admin-card (positioned)
       const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-      const overflowBelow = card ? Math.max(0, Math.round(card.getBoundingClientRect().bottom - vh)) : 0;
+      // UI text-scale zoom (:root.ui-scale-125) — `_fab` is position:absolute
+      // inside `.admin-card` (position:relative), both inside the zoomed
+      // root, so this getBoundingClientRect()/viewport-height delta is
+      // viewport-space; divide once before folding into the calc() string.
+      // The `18px`/`env(...)` base offset stays as-is — a local design
+      // constant that already scales with zoom like any CSS-declared value
+      // (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
+      const overflowBelow = card ? Math.max(0, Math.round(toLocalPx(card.getBoundingClientRect().bottom - vh, _z))) : 0;
       _fab.style.bottom = `calc(18px + env(safe-area-inset-bottom, 0px) + ${overflowBelow}px)`;
     }
     if (window.visualViewport) {
@@ -1972,9 +1992,13 @@ function _makeDraggable(content, modal, fsClass) {
     content.style.borderRadius = '';
     content.style.right = '';
     content.style.bottom = '';
+    // UI text-scale zoom (:root.ui-scale-125) — cx/cy (the exit-gesture
+    // point) and w are viewport-space; divide before assigning as local px
+    // (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const w = Math.min(720, window.innerWidth * 0.92);
-    content.style.left = Math.max(8, cx - w / 2) + 'px';
-    content.style.top = Math.max(8, cy - 20) + 'px';
+    content.style.left = toLocalPx(Math.max(8, cx - w / 2), _z) + 'px';
+    content.style.top = toLocalPx(Math.max(8, cy - 20), _z) + 'px';
   };
   makeWindowDraggable(modal, {
     content,
@@ -1986,9 +2010,13 @@ function _makeDraggable(content, modal, fsClass) {
       if (!modal.classList.contains('email-snap-left')) return;
       modal.classList.remove('email-snap-left');
       _clearEmailDocumentSplit();
+      // UI text-scale zoom (:root.ui-scale-125) — rect (from
+      // getBoundingClientRect()) is viewport-space; divide before assigning
+      // as local px (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       content.style.position = 'fixed';
-      content.style.left = `${Math.round(rect.left)}px`;
-      content.style.top = `${Math.round(rect.top)}px`;
+      content.style.left = `${Math.round(toLocalPx(rect.left, _z))}px`;
+      content.style.top = `${Math.round(toLocalPx(rect.top, _z))}px`;
       content.style.right = '';
       content.style.bottom = '';
       content.style.width = `${Math.max(420, Math.round(rect.width || 560))}px`;
@@ -5033,10 +5061,14 @@ async function _toggleFromSenderPanel(reader, data, btn) {
     const content = modal?.querySelector('.modal-content');
     if (!content) return;
     requestAnimationFrame(() => {
+      // UI text-scale zoom (:root.ui-scale-125) — w/h (offsetWidth/Height)
+      // are local; window.innerWidth/Height are converted individually
+      // before combining with them (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const w = content.offsetWidth;
       const h = content.offsetHeight;
-      const newLeft = Math.max(20, (window.innerWidth - w) / 2);
-      const newTop  = Math.max(20, (window.innerHeight - h) / 2);
+      const newLeft = Math.max(20, (toLocalPx(window.innerWidth, _z) - w) / 2);
+      const newTop  = Math.max(20, (toLocalPx(window.innerHeight, _z) - h) / 2);
       content.style.left = newLeft + 'px';
       content.style.top  = newTop + 'px';
     });
@@ -6013,16 +6045,24 @@ async function _openEmailAsTab(em, folder) {
       dragging = true;
       const rect = content.getBoundingClientRect();
       dragX = clientX; dragY = clientY;
+      // startLeft/startTop stay viewport-space (like dragX/dragY) — the
+      // whole expression in onDrag below is converted once at assignment
+      // (see uiZoom.js, PR #76/#77).
       startLeft = rect.left; startTop = rect.top;
       content.style.position = 'fixed';
-      content.style.left = startLeft + 'px';
-      content.style.top = startTop + 'px';
+      const _z0 = zoomOf(document.documentElement);
+      content.style.left = toLocalPx(startLeft, _z0) + 'px';
+      content.style.top = toLocalPx(startTop, _z0) + 'px';
       content.style.margin = '0';
     };
     const onDrag = (e) => {
       if (!dragging) return;
-      content.style.left = (startLeft + e.clientX - dragX) + 'px';
-      content.style.top = (startTop + e.clientY - dragY) + 'px';
+      // UI text-scale zoom (:root.ui-scale-125) — the whole expression stays
+      // viewport-space (startLeft/startTop + a clientX/Y delta); divide once
+      // at assignment (see uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
+      content.style.left = toLocalPx(startLeft + e.clientX - dragX, _z) + 'px';
+      content.style.top = toLocalPx(startTop + e.clientY - dragY, _z) + 'px';
     };
     const stopDrag = () => {
       dragging = false;
@@ -6206,10 +6246,15 @@ async function _openEmailWindow(em, folder) {
     content.style.position = 'fixed';
     content.style.pointerEvents = 'auto';
     requestAnimationFrame(() => {
+      // UI text-scale zoom (:root.ui-scale-125) — w/h (offsetWidth/Height)
+      // and off (a local cascade offset) are already local; window.innerWidth/
+      // Height are converted individually before combining with them (see
+      // uiZoom.js, PR #76/#77).
+      const _z = zoomOf(document.documentElement);
       const w = content.offsetWidth, h = content.offsetHeight;
       const off = (_emailWindowSeq % 6) * 28;
-      content.style.left = Math.max(20, (window.innerWidth  - w) / 2 + off) + 'px';
-      content.style.top  = Math.max(20, (window.innerHeight - h) / 3 + off) + 'px';
+      content.style.left = Math.max(20, (toLocalPx(window.innerWidth, _z)  - w) / 2 + off) + 'px';
+      content.style.top  = Math.max(20, (toLocalPx(window.innerHeight, _z) - h) / 3 + off) + 'px';
     });
   }
   modal.querySelector('.close-btn')?.addEventListener('click', () => modal.remove());
@@ -6614,6 +6659,10 @@ async function _maybeAutoTranslateEmail(reader) {
 // there's more room up there, and cap height + scroll if it still overflows.
 function _fitEmailDropdown(dropdown, rect) {
   requestAnimationFrame(() => {
+    // UI text-scale zoom (:root.ui-scale-125) — dw/dh (offsetWidth/Height)
+    // are local; window.innerWidth/Height and rect terms are converted
+    // individually before combining with them (see uiZoom.js, PR #76/#77).
+    const _z = zoomOf(document.documentElement);
     const margin = 8;
     // Horizontal clamp — keep the dropdown inside the viewport regardless of
     // whether it was anchored via left or right. Needed now that some
@@ -6622,10 +6671,10 @@ function _fitEmailDropdown(dropdown, rect) {
     const dw = dropdown.offsetWidth;
     const curLeft = dropdown.getBoundingClientRect().left;
     if (curLeft + dw > window.innerWidth - margin) {
-      dropdown.style.left = Math.max(margin, window.innerWidth - margin - dw) + 'px';
+      dropdown.style.left = Math.max(margin, toLocalPx(window.innerWidth, _z) - margin - dw) + 'px';
       dropdown.style.right = 'auto';
     } else if (curLeft < margin) {
-      dropdown.style.left = margin + 'px';
+      dropdown.style.left = toLocalPx(margin, _z) + 'px';
       dropdown.style.right = 'auto';
     }
     // Vertical fit — flip up or cap+scroll if it doesn't fit below.
@@ -6635,7 +6684,7 @@ function _fitEmailDropdown(dropdown, rect) {
     if (dh <= below) return;                 // fits below as-is
     if (above > below) {                     // flip upward
       dropdown.style.top = 'auto';
-      dropdown.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+      dropdown.style.bottom = toLocalPx(window.innerHeight - rect.top + 4, _z) + 'px';
       if (dh > above) { dropdown.style.maxHeight = above + 'px'; dropdown.style.overflowY = 'auto'; }
     } else {                                 // keep below, cap + scroll
       dropdown.style.maxHeight = below + 'px';
@@ -6659,8 +6708,11 @@ function _showReaderMoreMenu(em, card, reader, anchor) {
   dropdown.className = 'email-card-dropdown';
   dropdown._anchor = anchor;
   anchor.classList.add('reader-more-active');
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+  // rect/window terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = anchor.getBoundingClientRect();
-  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:180px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${rect.bottom + 4}px;right:${window.innerWidth - rect.right}px;`;
+  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:180px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${toLocalPx(rect.bottom + 4, _z)}px;right:${toLocalPx(window.innerWidth - rect.right, _z)}px;`;
 
   const _icon = (svg) => `<span class="dropdown-icon">${svg}</span>`;
   const _unreadIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
@@ -6925,8 +6977,11 @@ function _showCardMenu(em, anchor) {
 
   const dropdown = document.createElement('div');
   dropdown.className = 'email-card-dropdown';
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space
+  // rect/window terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = anchor.getBoundingClientRect();
-  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:140px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${rect.bottom + 4}px;right:${window.innerWidth - rect.right}px;`;
+  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:140px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${toLocalPx(rect.bottom + 4, _z)}px;right:${toLocalPx(window.innerWidth - rect.right, _z)}px;`;
 
   const _icon = (svg) => `<span class="dropdown-icon">${svg}</span>`;
   const _replyIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>';
@@ -7132,8 +7187,11 @@ function _showBulkActionsMenu(anchor) {
   document.querySelectorAll('.email-card-dropdown').forEach(dismissOrRemove);
   const dropdown = document.createElement('div');
   dropdown.className = 'email-card-dropdown email-bulk-menu';
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+  // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const rect = anchor.getBoundingClientRect();
-  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:160px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${rect.bottom + 4}px;left:${rect.left}px;`;
+  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:160px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${toLocalPx(rect.bottom + 4, _z)}px;left:${toLocalPx(rect.left, _z)}px;`;
   const _readIco = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>';
   const _unreadIco = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
   const _doneIco = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -7413,6 +7471,11 @@ function _closeAiReplyChoice() {
 
 function _showAiReplyChoice(btn, em, data) {
   _closeAiReplyChoice();
+  // UI text-scale zoom (:root.ui-scale-125) — left/top are computed fully
+  // in viewport space below, then divided once at final assignment (see
+  // uiZoom.js, PR #76/#77). menuMaxW/max-height stay as-is (sizing, not
+  // covered by the top/left/right/bottom pattern).
+  const _z = zoomOf(document.documentElement);
   const rect = btn.getBoundingClientRect();
   const menu = document.createElement('div');
   menu.className = 'email-ai-reply-choice';
@@ -7435,8 +7498,8 @@ function _showAiReplyChoice(btn, em, data) {
   }
   menu.style.cssText = [
     'position:fixed',
-    `left:${left}px`,
-    `top:${top}px`,
+    `left:${toLocalPx(left, _z)}px`,
+    `top:${toLocalPx(top, _z)}px`,
     `max-width:${menuMaxW}px`,
     `max-height:${window.innerHeight - 16}px`,
     'overflow:auto',

@@ -9,6 +9,7 @@ import { topPortalZ } from './toolWindowZOrder.js';
 import { makeWindowDraggable } from './windowDrag.js';
 import { attachColorPicker } from './colorPicker.js';
 import { bindMenuDismiss } from './escMenuStack.js';
+import { zoomOf, toLocalPx } from './uiZoom.js';
 import {
   WEEKDAYS, WEEKDAYS_SUN, MONTHS, MON_SHORT,
   CAL_PALETTE, CAL_COLORS, _CAL_CUSTOM_GRADIENT, _TYPE_PALETTE,
@@ -512,6 +513,10 @@ function _wireQuickDelete(body) {
 }
 
 function _clampDropdown(dropdown, anchorRect) {
+  // UI text-scale zoom (:root.ui-scale-125) — the clamp math stays in
+  // viewport space (r is a real getBoundingClientRect() measurement);
+  // divide only the final assignment (see uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
   const margin = 8;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -527,8 +532,8 @@ function _clampDropdown(dropdown, anchorRect) {
     const above = anchorRect.top - 4 - h;
     top = above >= margin ? above : Math.max(margin, vh - margin - h);
   }
-  dropdown.style.left = `${left}px`;
-  dropdown.style.top = `${top}px`;
+  dropdown.style.left = `${toLocalPx(left, _z)}px`;
+  dropdown.style.top = `${toLocalPx(top, _z)}px`;
   dropdown.style.right = 'auto';
 }
 
@@ -537,8 +542,13 @@ function _showEventMoreMenu(ev, anchor) {
   const dropdown = document.createElement('div');
   dropdown.className = 'cal-event-dropdown';
   let closeMenu = () => dropdown.remove();
+  // UI text-scale zoom (:root.ui-scale-125) — divide viewport-space rect
+  // terms before assigning as local px (see uiZoom.js, PR #76/#77).
+  // (This initial top is immediately overwritten by _clampDropdown below,
+  // but keep it consistent with the rest of the pattern.)
+  const _z = zoomOf(document.documentElement);
   const rect = anchor.getBoundingClientRect();
-  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:180px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${rect.bottom + 4}px;left:0px;visibility:hidden;`;
+  dropdown.style.cssText = `position:fixed;z-index:${topPortalZ()};min-width:180px;background:var(--panel,var(--bg));border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.3);padding:4px;font-size:12px;top:${toLocalPx(rect.bottom + 4, _z)}px;left:0px;visibility:hidden;`;
 
   const _item = (icon, label, onClick, danger) => {
     const it = document.createElement('div');

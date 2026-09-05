@@ -16,7 +16,17 @@ class ChatRequest(BaseModel):
         default=None,
         description="Restrict notebook retrieval to these document ids (notebook sessions only)",
     )
-    
+    search_hint: Optional[str] = Field(
+        default=None,
+        description=(
+            "Best-effort anchor for the notebook RAG-condensation fallback "
+            "(notebook sessions only) — e.g. a mindmap node's bare label. "
+            "Never required; the route ignores it (rather than 400ing) when "
+            "it's longer than 300 characters, so no length constraint is "
+            "enforced at this model level."
+        ),
+    )
+
     @field_validator('message')
     @classmethod
     def clean_message(cls, v):

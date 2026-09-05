@@ -1255,7 +1255,6 @@ def test_visual_report_escapes_request_category():
 # to the resolved IP via a custom httpcore.NetworkBackend, while the
 # URL / Host header / SNI stay on the original hostname.
 
-import ipaddress as _ipaddr
 import socket as _socket
 import threading as _threading
 

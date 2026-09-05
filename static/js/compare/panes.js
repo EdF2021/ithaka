@@ -11,6 +11,7 @@ import Storage from '../storage.js';
 import uiModule from '../ui.js';
 import spinnerModule from '../spinner.js';
 import { bindMenuDismiss } from '../escMenuStack.js';
+import { zoomOf, toLocalPx } from '../uiZoom.js';
 
 var escapeHtml = uiModule.esc;
 
@@ -367,8 +368,12 @@ async function _addPane(anchorBtn) {
   } else {
     top = Math.max(margin, btnRect.top - 4 - ddH);
   }
-  dropdown.style.left = left + 'px';
-  dropdown.style.top = top + 'px';
+  // UI text-scale zoom (:root.ui-scale-125) — the clamp math above stays in
+  // viewport space; divide only the final top/left assignments (see
+  // uiZoom.js, PR #76/#77).
+  const _z = zoomOf(document.documentElement);
+  dropdown.style.left = toLocalPx(left, _z) + 'px';
+  dropdown.style.top = toLocalPx(top, _z) + 'px';
   dropdown.style.right = 'auto';
   dropdown.style.bottom = 'auto';
   dropdown.style.maxHeight = Math.min(ddH, vh - margin * 2) + 'px';
@@ -647,8 +652,10 @@ function _showModelSwapDropdown(paneIdx, titleBtn) {
   } else {
     top = Math.max(margin, rect.top - 4 - ddH);
   }
-  dropdown.style.left = left + 'px';
-  dropdown.style.top = top + 'px';
+  // UI text-scale zoom (:root.ui-scale-125) — see the sibling picker above.
+  const _z = zoomOf(document.documentElement);
+  dropdown.style.left = toLocalPx(left, _z) + 'px';
+  dropdown.style.top = toLocalPx(top, _z) + 'px';
   dropdown.style.maxHeight = Math.min(ddH, vh - margin * 2) + 'px';
 
   // Close on outside click or Escape (the latter via the registry).

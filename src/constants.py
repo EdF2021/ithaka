@@ -51,6 +51,14 @@ GENERATED_IMAGES_DIR = os.path.join(DATA_DIR, "generated_images")
 NOTEBOOK_AUDIO_DIR = os.path.join(DATA_DIR, "notebook_audio")
 NOTEBOOK_VIDEO_DIR = os.path.join(DATA_DIR, "notebook_video")
 NOTEBOOK_COVERS_DIR = os.path.join(DATA_DIR, "notebook_covers")
+# Infographic v2 illustrations (src/notebook_illustrations.py): one PNG per
+# block, named "<artifact_id>-<block_id>-<hex8>.png".
+NOTEBOOK_INFOGRAPHICS_DIR = os.path.join(DATA_DIR, "notebook_infographics")
+# Chat/agent-generated Veo clips (src/video_gen.py) — distinct from
+# NOTEBOOK_VIDEO_DIR, which holds the notebook-studio slide-deck videos.
+VIDEO_DIR = os.path.join(DATA_DIR, "videos")
+# Meeting-recorder audio chunks/final recordings (services/meetings/).
+MEETING_AUDIO_DIR = os.path.join(DATA_DIR, "meeting_audio")
 TTS_CACHE_DIR = os.path.join(DATA_DIR, "tts_cache")
 EMAIL_URGENCY_CACHE_DIR = os.path.join(DATA_DIR, "email_urgency_cache")
 SKILLS_DIR = os.path.join(DATA_DIR, "skills")
@@ -71,6 +79,18 @@ except OSError:
     pass
 try:
     os.makedirs(NOTEBOOK_VIDEO_DIR, exist_ok=True)
+except OSError:
+    pass
+try:
+    os.makedirs(NOTEBOOK_INFOGRAPHICS_DIR, exist_ok=True)
+except OSError:
+    pass
+try:
+    os.makedirs(VIDEO_DIR, exist_ok=True)
+except OSError:
+    pass
+try:
+    os.makedirs(MEETING_AUDIO_DIR, exist_ok=True)
 except OSError:
     pass
 

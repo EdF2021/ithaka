@@ -107,8 +107,20 @@ def _skill_test_task(skill: dict) -> str:
     )
 
 
+def _utility_candidates(url: str, model: str, headers: Optional[dict], owner: Optional[str]) -> list:
+    """Primary (url, model, headers) plus the configured utility fallback
+    chain behind it, so a down primary doesn't hard-fail these judge/fixer
+    calls (see #183 part B). llm_call_async_with_fallback dedupes repeats of
+    the same (url, model) itself, so no need to filter here."""
+    from src.endpoint_resolver import resolve_utility_fallback_candidates
+    candidates = [(url, model, headers)]
+    candidates.extend(resolve_utility_fallback_candidates(owner=owner) or [])
+    return candidates
+
+
 async def _eval_skill_run(skill_md: str, task: str, transcript: str,
-                          url: str, model: str, headers: Optional[dict]) -> dict:
+                          url: str, model: str, headers: Optional[dict],
+                          owner: Optional[str] = None) -> dict:
     """LLM-as-judge: grade a skill test run from its transcript. Advisory only.
 
     Robust against local reasoning models (strips <think>, lenient JSON,
@@ -116,7 +128,9 @@ async def _eval_skill_run(skill_md: str, task: str, transcript: str,
     """
     import json as _json
     import re as _re
-    from src.llm_core import llm_call_async
+    from src.llm_core import llm_call_async_with_fallback
+
+    candidates = _utility_candidates(url, model, headers, owner)
 
     sys_prompt = (
         "You are a strict QA reviewer judging whether an AI 'skill' (a reusable "
@@ -226,7 +240,13 @@ async def _eval_skill_run(skill_md: str, task: str, transcript: str,
 
     # Two attempts: the first lets the judge reason; if a heavy reasoning model
     # burns its budget inside <think> and never emits the JSON, the second
-    # forbids thinking and demands the JSON immediately.
+    # forbids thinking and demands the JSON immediately. The retry exists for
+    # an unparseable verdict, NOT for a transport failure: llm_call_async_with_
+    # fallback already tries every candidate in the chain before raising, so an
+    # exception here means the WHOLE chain is down — retrying would just walk
+    # the same (now possibly longer) candidate list a second time. Break
+    # instead, bounding the worst case to one full pass over the chain
+    # (at most (1 + len(fallbacks)) * 180s) instead of two.
     last_text = ""
     last_err = None
     for attempt in range(2):
@@ -238,18 +258,18 @@ async def _eval_skill_run(skill_md: str, task: str, transcript: str,
                 "must START with '{' and be ONLY the JSON object, nothing else."
             )
         try:
-            raw = await llm_call_async(
+            raw = await llm_call_async_with_fallback(
+                candidates, msgs,
                 # Generous budget so a heavy reasoner can think AND still have
                 # room to emit the JSON afterwards (reasoning tokens come out of
                 # this same cap; the server clamps to its own max).
-                url, model, msgs,
-                temperature=0.1, max_tokens=32768, headers=headers, timeout=180,
+                temperature=0.1, max_tokens=32768, timeout=180,
             )
         except Exception as e:
-            # Don't give up on a transient first-attempt error — let the second
-            # (no-think) attempt run before reporting failure.
+            # Every candidate in the chain just failed — a second attempt
+            # would only repeat the same doomed calls. Stop here.
             last_err = e
-            continue
+            break
         last_text = (raw or '')
         parsed = _parse(raw)
         if parsed is not None:
@@ -262,14 +282,14 @@ async def _eval_skill_run(skill_md: str, task: str, transcript: str,
 
 
 async def _eval_skill_necessity(skill_md: str, others: list, url: str, model: str,
-                                headers: Optional[dict]) -> Optional[dict]:
+                                headers: Optional[dict], owner: Optional[str] = None) -> Optional[dict]:
     """Advisory judge: is this skill worth keeping, or is it redundant / trivially
     unnecessary? Sees the OTHER skills' names+descriptions so it can spot
     duplicates. Returns {necessary, redundant_with, reason} or None. Never acts —
     purely a flag the UI surfaces."""
     import json as _json
     import re as _re
-    from src.llm_core import llm_call_async
+    from src.llm_core import llm_call_async_with_fallback
 
     catalog = "\n".join(f"- {o.get('name')}: {o.get('description', '')}" for o in others) or "(no other skills)"
     sys_prompt = (
@@ -288,10 +308,10 @@ async def _eval_skill_necessity(skill_md: str, others: list, url: str, model: st
         f"=== OTHER SKILLS IN THE LIBRARY ===\n{catalog[:4000]}"
     )
     try:
-        raw = await llm_call_async(
-            url, model,
+        raw = await llm_call_async_with_fallback(
+            _utility_candidates(url, model, headers, owner),
             [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}],
-            temperature=0.1, max_tokens=8192, headers=headers, timeout=120,
+            temperature=0.1, max_tokens=8192, timeout=120,
         )
     except Exception as e:
         logger.warning(f"Necessity check failed: {e}")
@@ -343,7 +363,8 @@ def _should_check_retrieval_precision(skill: dict) -> bool:
 
 async def _eval_skill_retrieval_precision(skill_md: str, others: list,
                                           url: str, model: str,
-                                          headers: Optional[dict]) -> Optional[dict]:
+                                          headers: Optional[dict],
+                                          owner: Optional[str] = None) -> Optional[dict]:
     """Advisory judge: would this skill's metadata make retrieval over-select it?
 
     This is distinct from "does the procedure work?". It asks whether tags,
@@ -352,7 +373,7 @@ async def _eval_skill_retrieval_precision(skill_md: str, others: list,
     """
     import json as _json
     import re as _re
-    from src.llm_core import llm_call_async
+    from src.llm_core import llm_call_async_with_fallback
 
     catalog = "\n".join(f"- {o.get('name')}: {o.get('description', '')}" for o in others[:80]) or "(no other skills)"
     sys_prompt = (
@@ -376,10 +397,10 @@ async def _eval_skill_retrieval_precision(skill_md: str, others: list,
         "fires for its intended scenario and not for adjacent skills above."
     )
     try:
-        raw = await llm_call_async(
-            url, model,
+        raw = await llm_call_async_with_fallback(
+            _utility_candidates(url, model, headers, owner),
             [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}],
-            temperature=0.1, max_tokens=4096, headers=headers, timeout=90,
+            temperature=0.1, max_tokens=4096, timeout=90,
         )
     except Exception as e:
         logger.warning(f"Retrieval precision check failed: {e}")
@@ -473,7 +494,7 @@ async def _run_skill_test_job(key, name, md, task, url, model, headers, owner, s
 
     log.append({"type": "evaluating"})
     try:
-        job["verdict"] = await _eval_skill_run(md, task, "".join(transcript), url, model, headers)
+        job["verdict"] = await _eval_skill_run(md, task, "".join(transcript), url, model, headers, owner=owner)
     except Exception as e:
         job["verdict"] = {"verdict": "unknown", "confidence": 0, "summary": f"Eval failed: {e}", "issues": []}
     # Record the result so the card shows a 'verified' check (a manual test
@@ -724,15 +745,25 @@ async def _run_skill_test_once(md: str, task: str, url, model, headers, owner) -
     except Exception as e:
         transcript.append(f"\n[run error] {e}\n")
     text = "".join(transcript)
-    verdict = await _eval_skill_run(md, task, text, url, model, headers)
+    verdict = await _eval_skill_run(md, task, text, url, model, headers, owner=owner)
     return text, verdict
 
 
-async def _improve_skill_md(skill_md: str, verdict: dict, transcript: str, url, model, headers):
+async def _improve_skill_md(skill_md: str, verdict: dict, transcript: str, url, model, headers,
+                            owner: Optional[str] = None, *, pin_model: bool = False):
     """Have a model rewrite SKILL.md to fix the reviewer's issues. Returns the
-    corrected markdown, or None if it couldn't produce a usable change."""
+    corrected markdown, or None if it couldn't produce a usable change.
+
+    By default this chains the configured utility fallbacks behind (url, model)
+    (#183 part B) — `owner` is passed straight to that chain resolver, which
+    accepts None just fine. Pass `pin_model=True` to call ONLY (url, model,
+    headers) with no fallback: the teacher-escalation call deliberately wants
+    ONLY the configured teacher model — the audit record stamps
+    `by_teacher=True, teacher_model=...` on the result, so silently falling
+    back to a utility model would misattribute the rewrite.
+    """
     import re as _re
-    from src.llm_core import llm_call_async
+    from src.llm_core import llm_call_async, llm_call_async_with_fallback
     issues = "\n".join("- " + str(i) for i in (verdict.get("issues") or []))
     sys_prompt = (
         "You are improving a reusable AI SKILL written in Markdown (frontmatter + body). "
@@ -753,11 +784,18 @@ async def _improve_skill_md(skill_md: str, verdict: dict, transcript: str, url, 
         f"=== REVIEWER VERDICT ===\n{verdict.get('summary', '')}\nIssues:\n{issues}\n\n"
         f"=== TEST TRANSCRIPT ===\n{(transcript or '')[:6000]}"
     )
+    messages = [{"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_msg}]
     try:
-        raw = await llm_call_async(url, model,
-                                   [{"role": "system", "content": sys_prompt},
-                                    {"role": "user", "content": user_msg}],
-                                   temperature=0.2, max_tokens=16384, headers=headers, timeout=180)
+        if pin_model:
+            raw = await llm_call_async(url, model, messages,
+                                       temperature=0.2, max_tokens=16384, headers=headers, timeout=180)
+        else:
+            raw = await llm_call_async_with_fallback(
+                _utility_candidates(url, model, headers, owner),
+                messages,
+                temperature=0.2, max_tokens=16384, timeout=180,
+            )
     except Exception as e:
         logger.warning(f"Audit: improve call failed: {e}")
         return None
@@ -810,7 +848,7 @@ async def _audit_one_skill(skills_manager, skill, url, model, headers,
             if s.get("name") and s.get("name") != name
             and (not sk_owner or not s.get("owner") or s.get("owner") == sk_owner)
         ]
-        nec = await _eval_skill_necessity(md, others, url, model, headers)
+        nec = await _eval_skill_necessity(md, others, url, model, headers, owner=owner)
         if nec is not None:
             skills_manager.set_necessity(name, nec.get("necessary", True),
                                          nec.get("redundant_with"), nec.get("reason"),
@@ -840,7 +878,7 @@ async def _audit_one_skill(skills_manager, skill, url, model, headers,
     # narrow skill over-inject, fix only metadata before the functional test.
     try:
         if _should_check_retrieval_precision(skill):
-            rp = await _eval_skill_retrieval_precision(md, others, url, model, headers)
+            rp = await _eval_skill_retrieval_precision(md, others, url, model, headers, owner=owner)
             if rp and not rp.get("ok"):
                 issues = rp.get("issues") or ["metadata: retrieval: narrow tags and when_to_use to the intended trigger"]
                 log(f"{name}: narrowing retrieval metadata — {(rp.get('summary') or issues[0])[:80]}")
@@ -849,7 +887,8 @@ async def _audit_one_skill(skills_manager, skill, url, model, headers,
                     "confidence": 1.0,
                     "summary": rp.get("summary") or "Retrieval metadata is too broad.",
                     "issues": issues,
-                }, "Retrieval audit only: the procedure may work, but matching metadata is too broad.", url, model, headers)
+                }, "Retrieval audit only: the procedure may work, but matching metadata is too broad.", url, model, headers,
+                    owner=owner)
                 if fixed and fixed.strip() != md.strip() and _apply_skill_md(skills_manager, name, fixed, owner):
                     md = fixed
                     refreshed = next((s for s in skills_manager.load(owner=owner) if s.get("name") == name), None)
@@ -870,7 +909,7 @@ async def _audit_one_skill(skills_manager, skill, url, model, headers,
         meta_issues = [i for i in (verdict.get("issues") or []) if str(i).lower().lstrip().startswith("metadata:")]
         if meta_issues:
             log(f"{name}: pass, but fixing {len(meta_issues)} metadata issue(s)…")
-            fixed = await _improve_skill_md(md, verdict, transcript, url, model, headers)
+            fixed = await _improve_skill_md(md, verdict, transcript, url, model, headers, owner=owner)
             if fixed and fixed.strip() != md.strip():
                 _apply_skill_md(skills_manager, name, fixed, owner)
         _set_conf(0.95)
@@ -887,7 +926,7 @@ async def _audit_one_skill(skills_manager, skill, url, model, headers,
 
     # Self-edit + retry.
     log(f"{name}: self-editing to fix issues…")
-    new_md = await _improve_skill_md(md, verdict, transcript, url, model, headers)
+    new_md = await _improve_skill_md(md, verdict, transcript, url, model, headers, owner=owner)
     if new_md and new_md.strip() != md.strip() and _apply_skill_md(skills_manager, name, new_md, owner):
         md = new_md
         transcript, verdict = await _run_skill_test_once(md, task, url, model, headers, owner)
@@ -910,7 +949,12 @@ async def _audit_one_skill(skills_manager, skill, url, model, headers,
         teacher_ran = True
         t_url, t_model, t_headers = teacher
         log(f"{name}: teacher {t_model} rewriting the skill…")
-        t_md = await _improve_skill_md(md, verdict, transcript, t_url, t_model, t_headers)
+        # pin_model=True here on purpose (#183 part B, twelve-rules review of
+        # #187): this must run on the TEACHER model specifically —
+        # set_audit() below stamps by_teacher=True, teacher_model=t_model, so
+        # a silent utility fallback would misattribute the rewrite.
+        t_md = await _improve_skill_md(md, verdict, transcript, t_url, t_model, t_headers,
+                                       owner=owner, pin_model=True)
         if t_md and t_md.strip() != md.strip() and _apply_skill_md(skills_manager, name, t_md, owner):
             md = t_md
         # Re-test with the STUDENT model (the model the skill runs under in use).

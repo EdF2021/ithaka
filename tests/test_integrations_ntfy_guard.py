@@ -127,7 +127,7 @@ class _JsonRequest(SimpleNamespace):
             _body=body,
         )
 
-    async def json(self):
+    async def json(self):  # noqa: F811 - mimics Request.json(), not the module-level `json` import
         return self._body
 
 

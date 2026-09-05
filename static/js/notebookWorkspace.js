@@ -371,6 +371,26 @@ export function getSourceIdsForChat() {
   return selectable.filter(id => _state.selection.has(id));
 }
 
+// One-shot search-hint channel for the *next* chat submit only (#112). Unlike
+// getSourceIdsForChat() above (a live read of persistent selection state),
+// this is a single-use handoff: a caller (currently only
+// _handleMindmapNodeClick) sets it right before dispatching the chat form
+// submit, and getSearchHintForChat() below both returns and clears it in the
+// same call, so it can never leak into a later, unrelated turn.
+let _pendingSearchHint = null;
+
+/**
+ * Read-and-clear the pending search hint (a bare label such as a clicked
+ * mindmap node's text) for the chat request about to be sent. Returns null
+ * when nothing is pending. Always clears the pending value, whether or not
+ * the caller ends up using it.
+ */
+export function getSearchHintForChat() {
+  const hint = _pendingSearchHint;
+  _pendingSearchHint = null;
+  return hint;
+}
+
 /** The id of the notebook bound to the currently open workspace, or null
  *  when the workspace is closed / no notebook is loaded yet. */
 export function getCurrentNotebookId() {
@@ -927,6 +947,17 @@ const KIND_LABELS = {
   data_table: 'Data table',
   podcast: 'Podcast',
   video: 'Video',
+  // Deliberately English, not "Rapporten" — this object is the English-only
+  // studio-chrome map (see the "no more Dutch strings" comment above) and
+  // also feeds the Files-list kind pill (_artifactRow's `label`) and the
+  // in-panel viewer's kind pill (_showArtifactViewer's `kindLabel`), both
+  // unconditional lookups with no per-kind override. A Dutch value here
+  // would show as a lone "Rapporten" pill next to "Briefing"/"FAQ"/etc.
+  // Matches the backend's own English mirror, ENGLISH_KIND_LABELS["report"]
+  // in src/notebook_report.py. The tile itself still reads "Rapporten" —
+  // hardcoded literally in _studioPanelSkeleton, same as the podcast tile's
+  // literal "Audio" label diverging from KIND_LABELS.podcast.
+  report: 'Report',
 };
 
 // Per-kind studio-tile icons — 14px monochrome outline SVGs (stroke:
@@ -945,6 +976,7 @@ const _KIND_ICONS = {
   data_table: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="10" x2="9" y2="20"/><line x1="15" y1="10" x2="15" y2="20"/></svg>',
   study_guide: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
   faq: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12" y2="17.01"/></svg>',
+  report: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/></svg>',
 };
 
 // Small inline monochrome icons (no Unicode emoji, per repo convention) used
@@ -1337,15 +1369,27 @@ async function _pollPodcast() {
   _podcastPoll.timer = setTimeout(_pollPodcast, 2000);
 }
 
-async function _generatePodcast(btn) {
+async function _generatePodcast(btn, options) {
   if (!_state.notebook || _podcastPoll) return;
   _showArtifactError('');
   if (btn) btn.disabled = true;
 
+  // Customize-modal payload (see _openPodcastModal). source_ids reuses the
+  // chat's selection contract: null = every source (key omitted server-side
+  // semantics), string[] = the checked subset. The empty-selection case is
+  // blocked in the modal before we get here.
+  const opts = options || _podcastOpts;
+  const payload = {
+    format: opts.format,
+    length: opts.length,
+    focus: opts.focus || '',
+    source_ids: getSourceIdsForChat(),
+  };
   let jobId;
   try {
     const data = await _fetchJson(
-      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/podcast`, { method: 'POST' });
+      `${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/podcast`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     jobId = data.job_id;
   } catch (e) {
     _showArtifactError(`Could not generate (${e.message})`);
@@ -1363,6 +1407,148 @@ async function _generatePodcast(btn) {
 // Registered once at module load (this module is a persistent singleton, not
 // re-instantiated per open), so no matching unregister call is needed.
 registerCloseHook(_stopPodcastPoll);
+
+// ---- Podcast customize modal ("Audio-overzicht aanpassen") -----------------
+//
+// NotebookLM-style second screen between the Audio tile and the job start:
+// format cards, length toggle, source count (from the sources-panel
+// checkboxes — no second picker), an optional focus prompt, then "Nu
+// genereren". Built on the report modal's markup/classes (.nbrp-*) so there
+// is no parallel card component; only the selected state and the length
+// toggle are new CSS (.nbpc-*). The chosen options are remembered for the
+// rest of the session (module state, deliberately not localStorage).
+
+const _PODCAST_FORMATS = [
+  { key: 'deep', title: 'Gedetailleerd',
+    desc: 'Een levendig gesprek tussen 2 hosts die onderwerpen in je bronnen uitpakken en aan elkaar koppelen.' },
+  { key: 'overview', title: 'Overzicht',
+    desc: 'Een kort overzicht waarmee je snel de kernideeën uit je bronnen kunt begrijpen.' },
+  { key: 'critique', title: 'Kritiek',
+    desc: 'Een review door een expert van je bronnen, met constructieve feedback om je materiaal te verbeteren.' },
+  { key: 'debate', title: 'Debat',
+    desc: 'Een doordacht debat tussen 2 hosts, waarin verschillende perspectieven op je bronnen worden belicht.' },
+];
+const _PODCAST_LENGTHS = [
+  { key: 'short', label: 'Kort' },
+  { key: 'standard', label: 'Standaard' },
+];
+const _PODCAST_FOCUS_MAX = 500;
+
+const _podcastOpts = { format: 'deep', length: 'standard', focus: '' };
+let _podcastEscHandler = null;
+
+function _podcastSourceCountText() {
+  const total = _selectableIds().length;
+  const ids = getSourceIdsForChat();
+  const selected = ids === null ? total : ids.length;
+  if (!total) return 'Geen bronnen';
+  return selected === total ? `${total} bronnen (alle)` : `${selected} van ${total} bronnen`;
+}
+
+function _podcastModalBodyHtml() {
+  const cards = _PODCAST_FORMATS.map(f => `
+    <button type="button" class="nbrp-card nbpc-format-card${_podcastOpts.format === f.key ? ' is-selected' : ''}"
+            data-format="${f.key}" role="radio" aria-checked="${_podcastOpts.format === f.key}">
+      <div class="nbrp-card-title">${_esc(f.title)}</div>
+      <div class="nbrp-card-desc">${_esc(f.desc)}</div>
+    </button>`).join('');
+  const lengths = _PODCAST_LENGTHS.map(l => `
+    <button type="button" class="${_podcastOpts.length === l.key ? 'is-selected' : ''}"
+            data-length="${l.key}" role="radio" aria-checked="${_podcastOpts.length === l.key}">${_esc(l.label)}</button>`).join('');
+  return `
+    <div class="nbrp-section-head">Indeling</div>
+    <div class="nbrp-grid" id="nbpc-format-grid" role="radiogroup" aria-label="Indeling">${cards}</div>
+    <div class="nbpc-row">
+      <div>
+        <div class="nbrp-section-head">Lengte</div>
+        <div class="nbpc-toggle" id="nbpc-length" role="radiogroup" aria-label="Lengte">${lengths}</div>
+      </div>
+      <div>
+        <div class="nbrp-section-head">Bronnen</div>
+        <div class="nbpc-sources" id="nbpc-sources">${_esc(_podcastSourceCountText())}</div>
+      </div>
+    </div>
+    <div class="nbrp-section-head">Waarop moet de host zich richten in deze aflevering?</div>
+    <textarea id="nbpc-focus" class="nbrp-editor-textarea" rows="3" maxlength="500"
+              placeholder="Optioneel, bijv. beschrijf de stappen van fase 1 naar fase 3.">${_esc(_podcastOpts.focus)}</textarea>
+    <div class="nbrp-editor-error" id="nbpc-error"></div>
+    <div class="nbpc-footer">
+      <button type="button" class="dashboard-action-btn" id="nbpc-cancel">Annuleren</button>
+      <button type="button" class="dashboard-action-btn nbrp-generate-btn" id="nbpc-generate">Nu genereren</button>
+    </div>`;
+}
+
+function _openPodcastModal() {
+  if (!_state.notebook || _podcastPoll) return;
+  if (document.getElementById('nbpc-modal')) return;
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'nbpc-modal';
+  modal.innerHTML = `
+    <div class="modal-content nbrp-modal-content" role="dialog" aria-label="Audio-overzicht aanpassen">
+      <div class="modal-header">
+        <h4 style="position:relative;top:-2px;">${_KIND_ICONS.podcast}Audio-overzicht aanpassen</h4>
+        <span style="flex:1"></span>
+        <button class="close-btn" id="nbpc-close" aria-label="Close">&#10006;</button>
+      </div>
+      <div class="modal-body nbrp-body" id="nbpc-body">${_podcastModalBodyHtml()}</div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const errEl = document.getElementById('nbpc-error');
+  const genBtn = document.getElementById('nbpc-generate');
+  const ids = getSourceIdsForChat();
+  if (ids !== null && ids.length === 0) {
+    if (errEl) errEl.textContent = EMPTY_SELECTION_MESSAGE;
+    if (genBtn) genBtn.disabled = true;
+  }
+
+  modal.querySelectorAll('.nbpc-format-card').forEach(card => {
+    card.addEventListener('click', () => {
+      _podcastOpts.format = card.dataset.format;
+      modal.querySelectorAll('.nbpc-format-card').forEach(c => {
+        const on = c === card;
+        c.classList.toggle('is-selected', on);
+        c.setAttribute('aria-checked', String(on));
+      });
+    });
+  });
+  modal.querySelectorAll('#nbpc-length button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _podcastOpts.length = btn.dataset.length;
+      modal.querySelectorAll('#nbpc-length button').forEach(b => {
+        const on = b === btn;
+        b.classList.toggle('is-selected', on);
+        b.setAttribute('aria-checked', String(on));
+      });
+    });
+  });
+  document.getElementById('nbpc-focus')?.addEventListener('input', (e) => {
+    _podcastOpts.focus = e.target.value.slice(0, _PODCAST_FOCUS_MAX);
+  });
+  document.getElementById('nbpc-close')?.addEventListener('click', _closePodcastModal);
+  document.getElementById('nbpc-cancel')?.addEventListener('click', _closePodcastModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) _closePodcastModal(); });
+  _podcastEscHandler = (e) => { if (e.key === 'Escape') _closePodcastModal(); };
+  document.addEventListener('keydown', _podcastEscHandler);
+  genBtn?.addEventListener('click', () => {
+    const tile = document.getElementById('nbws-podcast-btn');
+    _closePodcastModal();
+    _generatePodcast(tile, { ..._podcastOpts });
+  });
+}
+
+function _closePodcastModal() {
+  const modal = document.getElementById('nbpc-modal');
+  if (modal) modal.remove();
+  if (_podcastEscHandler) {
+    document.removeEventListener('keydown', _podcastEscHandler);
+    _podcastEscHandler = null;
+  }
+}
+
+// The modal must not outlive the workspace (same rule as the podcast poll).
+registerCloseHook(_closePodcastModal);
 
 // ---- Video: separate job/polling flow (own endpoint, not /artifacts) ----
 
@@ -1472,6 +1658,11 @@ registerCloseHook(_stopVideoPoll);
 // Same reasoning: close the in-panel artifact viewer so no stale iframe
 // persists across a workspace close/reopen.
 registerCloseHook(_closeArtifactViewer);
+// Same reasoning again: the report layout-picker modal is appended straight
+// to document.body (not the studio panel), so nothing else tears it down —
+// without this it would survive a workspace close and keep showing layout
+// choices for a notebook that's no longer open.
+registerCloseHook(_closeReportModal);
 
 /**
  * Open a generated artifact in the document viewer, as an overlay ABOVE the
@@ -1582,6 +1773,13 @@ function _closeArtifactViewer() {
 // that still renders all 6 visibly; splitting it into two slots would need
 // every call site to know which section it's reporting for, for no real
 // benefit since these errors are rare and never fire concurrently.
+// Tooltips for the generic artifact tiles — the only place a tile says more
+// than its label. Infographic v2 (2026-09-03) generates AI illustrations
+// per block when image generation is enabled in Settings.
+const _KIND_TITLES = {
+  infographic: 'Infographic met AI-illustraties (als beeldgeneratie aan staat)',
+};
+
 function _studioPanelSkeleton() {
   return `
     <div class="nbws-studio-section nbws-studio-generate">
@@ -1591,8 +1789,10 @@ function _studioPanelSkeleton() {
                 data-kind="podcast"><span class="nbws-tile-icon">${_KIND_ICONS.podcast}</span><span class="nbws-tile-label">Audio</span></button>
         <button type="button" class="nbws-tile notebook-video-gen-btn nbws-tile--video" id="nbws-video-btn"
                 data-kind="video"><span class="nbws-tile-icon">${_KIND_ICONS.video}</span><span class="nbws-tile-label">${_esc(KIND_LABELS.video)}</span></button>
+        <button type="button" class="nbws-tile notebook-report-open-btn nbws-tile--report" id="nbws-report-btn"
+                data-kind="report"><span class="nbws-tile-icon">${_KIND_ICONS.report}</span><span class="nbws-tile-label">Rapporten</span></button>
         ${ARTIFACT_KINDS.map(kind => `<button type="button" class="nbws-tile notebook-artifact-gen-btn nbws-tile--${_esc(kind)}"
-                data-kind="${_esc(kind)}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
+                data-kind="${_esc(kind)}" title="${_esc(_KIND_TITLES[kind] || KIND_LABELS[kind])}"><span class="nbws-tile-icon">${_KIND_ICONS[kind] || _PLUS_ICON}</span><span class="nbws-tile-label">${_esc(KIND_LABELS[kind])}</span></button>`).join('')}
       </div>
       <div class="nbws-mindmap-focus-wrap" id="nbws-mindmap-focus-wrap">
         <input type="text" id="nbws-mindmap-focus" class="nbws-mindmap-focus-input"
@@ -1621,8 +1821,9 @@ function _wireStudioPanel() {
   body.querySelectorAll('.notebook-artifact-gen-btn').forEach(btn => {
     btn.addEventListener('click', () => _generateArtifact(btn.dataset.kind, btn));
   });
-  document.getElementById('nbws-podcast-btn')?.addEventListener('click', (e) => _generatePodcast(e.currentTarget));
+  document.getElementById('nbws-podcast-btn')?.addEventListener('click', _openPodcastModal);
   document.getElementById('nbws-video-btn')?.addEventListener('click', (e) => _generateVideo(e.currentTarget));
+  document.getElementById('nbws-report-btn')?.addEventListener('click', _openReportModal);
 
   window.addEventListener('message', _handleMindmapNodeClick);
 }
@@ -1632,14 +1833,27 @@ function _handleMindmapNodeClick(e) {
   const label = e.data.label;
   if (!label) return;
   _closeArtifactViewer();
-  closeNotebookWorkspace();
   const msg = `Geef een samenvatting en uitleg over "${label}" op basis van de bronnen van dit notebook.`;
   const msgInput = document.getElementById('message');
   if (!msgInput) return;
   msgInput.value = msg;
   msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+  // Bare node label as the one-shot search-hint for this submit only — used
+  // server-side to anchor the RAG-condensation fallback instead of the full
+  // templated sentence above, whose generic filler words ("bronnen",
+  // "notebook", "samenvatting") otherwise weigh into the keyword score
+  // (#112). Set right before dispatch so getSearchHintForChat()'s
+  // synchronous read in chat.js's send gate sees it.
+  _pendingSearchHint = label;
   const form = document.getElementById('chat-form');
+  // Dispatch submit before closing the workspace: chat.js's handleChatSubmit
+  // source_ids gate (and, since the #22 fix there, its snapshot of
+  // isNotebookWorkspaceOpen() for the fail-closed guard) reads
+  // isNotebookWorkspaceOpen() synchronously before its first await, so the
+  // workspace must still read as open at dispatch time or source_ids/the
+  // guard silently miss this entry point (#112).
   if (form) form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+  closeNotebookWorkspace();
 }
 
 // notebooks.js carries no <script> tag of its own (see app.js's rail-notebooks
@@ -1709,6 +1923,17 @@ async function _openImpl(nb) {
   // Re-opening the SAME notebook keeps the poll: _loadArtifacts below repaints
   // the list and the next tick restores the pending row, so progress survives.
   if (_state.notebook && _state.notebook.id !== nb.id) _stopPodcastPoll();
+
+  // Same open()-not-close() gap for the report modal: it's an independent
+  // document.body overlay, unaffected by _wireStudioPanel/_loadArtifacts
+  // repainting the studio panel below it. Unlike the podcast poll this isn't
+  // just cosmetic — _generateReport reads _state.notebook.id fresh at POST
+  // time, so a still-open modal left over from the notebook being switched
+  // away from would silently generate a report against the *new* notebook
+  // using layout choices picked for the old one. Close it outright rather
+  // than leaving it to the registerCloseHook(_closeReportModal) above, which
+  // only fires on an actual closeNotebookWorkspace() call.
+  if (_state.notebook && _state.notebook.id !== nb.id) _closeReportModal();
 
   _state.notebook = nb;
   _state.sources = [];
@@ -1812,6 +2037,179 @@ export function closeNotebookWorkspace() {
   }
 }
 
+// ---- Reports: "Rapport maken" layout-picker modal --------------------------
+//
+// "Rapporten" is a separate tile (not part of ARTIFACT_KINDS) because unlike
+// every other kind, it needs a configuration step before generating: pick a
+// fixed template, an AI-recommended layout, or write a free-text instruction,
+// then POST /artifacts with kind="report" + layout_instruction. See
+// docs/superpowers/specs/2026-09-01-notebooks-rapporten-design.md.
+
+const _MAGIC_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg>';
+
+// "Zelf rapport maken" is client-side only — it never comes from the
+// backend, so it is prepended to whatever /report-layouts returns for the
+// Indeling grid. instruction: null is the signal _reportCardHtml uses to
+// omit the pencil (edit) icon and _openReportEditor uses to start from a
+// blank textarea.
+const _REPORT_CUSTOM_CARD = {
+  title: 'Zelf rapport maken',
+  description: 'Maak rapporten volgens jouw wensen door onder meer de structuur, stijl en toon aan te passen.',
+  instruction: null,
+};
+
+let _reportModalEpoch = 0;
+let _reportEscHandler = null;
+
+function _reportCardHtml(item, idx) {
+  const editable = item.instruction != null;
+  return `
+    <button type="button" class="nbrp-card" data-idx="${idx}">
+      <div class="nbrp-card-title">${_esc(item.title)}${editable ? _RENAME_ICON : ''}</div>
+      <div class="nbrp-card-desc">${_esc(item.description)}</div>
+    </button>`;
+}
+
+function _wireReportTemplateCard(item, grid, idx) {
+  const btn = document.querySelector(`#nbrp-${grid}-grid [data-idx="${idx}"]`);
+  if (btn) btn.addEventListener('click', () => _openReportEditor(item));
+}
+
+function _reportGridsSkeletonHtml() {
+  return `
+    <div class="nbrp-section-head">Indeling</div>
+    <div class="nbrp-grid" id="nbrp-templates-grid">
+      ${_reportCardHtml(_REPORT_CUSTOM_CARD, 0)}
+    </div>
+    <div class="nbrp-section-head nbrp-recommended-head">${_MAGIC_ICON}Aanbevolen indeling</div>
+    <div class="nbrp-grid" id="nbrp-recommended-grid">
+      <div class="dashboard-empty">Laden&hellip;</div>
+    </div>`;
+}
+
+// Dutch message per GET /report-layouts recommended_status — distinguishes
+// "no sources yet" from "suggestions unavailable" (LLM error/timeout) so the
+// modal doesn't blame missing sources for what's actually an LLM failure.
+const _REPORT_STATUS_MESSAGES = {
+  no_sources: 'Voeg bronnen toe om aanbevelingen te krijgen.',
+  unavailable: 'Aanbevelingen zijn nu niet beschikbaar.',
+};
+
+async function _loadReportLayouts(epoch) {
+  if (!_state.notebook) return;
+  const nbId = _state.notebook.id;
+  let data;
+  try {
+    data = await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(nbId)}/report-layouts`);
+  } catch (e) {
+    if (epoch !== _reportModalEpoch) return;
+    const recGrid = document.getElementById('nbrp-recommended-grid');
+    if (recGrid) recGrid.innerHTML = `<div class="dashboard-empty">Suggesties konden niet geladen worden (${_esc(e.message)})</div>`;
+    return;
+  }
+  if (epoch !== _reportModalEpoch) return;
+
+  const templates = [_REPORT_CUSTOM_CARD, ...(data.templates || [])];
+  const templatesGrid = document.getElementById('nbrp-templates-grid');
+  if (templatesGrid) {
+    templatesGrid.innerHTML = templates.map((item, idx) => _reportCardHtml(item, idx)).join('');
+    templates.forEach((item, idx) => _wireReportTemplateCard(item, 'templates', idx));
+  }
+
+  const recommended = data.recommended || [];
+  const recGrid = document.getElementById('nbrp-recommended-grid');
+  if (recGrid) {
+    if (!recommended.length) {
+      const msg = _REPORT_STATUS_MESSAGES[data.recommended_status] || _REPORT_STATUS_MESSAGES.unavailable;
+      recGrid.innerHTML = `<div class="dashboard-empty">${_esc(msg)}</div>`;
+    } else {
+      recGrid.innerHTML = recommended.map((item, idx) => _reportCardHtml(item, idx)).join('');
+      recommended.forEach((item, idx) => _wireReportTemplateCard(item, 'recommended', idx));
+    }
+  }
+}
+
+function _openReportEditor(item) {
+  const body = document.getElementById('nbrp-body');
+  if (!body) return;
+  body.innerHTML = `
+    <button type="button" class="nbrp-back" id="nbrp-editor-back">&larr; Terug</button>
+    <div class="nbrp-editor-title">${_esc(item.title)}</div>
+    <textarea id="nbrp-editor-instruction" class="nbrp-editor-textarea" rows="6" maxlength="2000"
+      placeholder="Beschrijf structuur, stijl en toon in eigen woorden…">${_esc(item.instruction || '')}</textarea>
+    <div class="nbrp-editor-error" id="nbrp-editor-error"></div>
+    <button type="button" class="dashboard-action-btn nbrp-generate-btn" id="nbrp-generate-btn">Genereer</button>`;
+  document.getElementById('nbrp-editor-back')?.addEventListener('click', () => {
+    if (!body) return;
+    body.innerHTML = _reportGridsSkeletonHtml();
+    _wireReportTemplateCard(_REPORT_CUSTOM_CARD, 'templates', 0);
+    _loadReportLayouts(_reportModalEpoch);
+  });
+  document.getElementById('nbrp-generate-btn')?.addEventListener('click', _generateReport);
+}
+
+async function _generateReport() {
+  if (!_state.notebook) return;
+  const btn = document.getElementById('nbrp-generate-btn');
+  const errEl = document.getElementById('nbrp-editor-error');
+  const textarea = document.getElementById('nbrp-editor-instruction');
+  const instruction = textarea ? textarea.value.trim() : '';
+  if (errEl) errEl.textContent = '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Bezig met genereren…'; }
+  const epoch = _openEpoch;
+  const payload = { kind: 'report' };
+  if (instruction) payload.layout_instruction = instruction;
+  try {
+    await _fetchJson(`${API_BASE}/api/notebooks/${encodeURIComponent(_state.notebook.id)}/artifacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    _closeReportModal();
+    if (epoch === _openEpoch) await _loadArtifacts();
+  } catch (e) {
+    if (errEl) errEl.textContent = `Genereren mislukt (${e.message})`;
+    if (btn) { btn.disabled = false; btn.textContent = 'Genereer'; }
+  }
+}
+
+function _openReportModal() {
+  if (!_state.notebook) return;
+  if (document.getElementById('nbrp-modal')) return;
+  const epoch = ++_reportModalEpoch;
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'nbrp-modal';
+  modal.innerHTML = `
+    <div class="modal-content nbrp-modal-content" role="dialog" aria-label="Rapport maken">
+      <div class="modal-header">
+        <h4 style="position:relative;top:-2px;">${_KIND_ICONS.report}Rapport maken</h4>
+        <span style="flex:1"></span>
+        <button class="close-btn" id="nbrp-close" aria-label="Close">&#10006;</button>
+      </div>
+      <div class="modal-body nbrp-body" id="nbrp-body">${_reportGridsSkeletonHtml()}</div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  document.getElementById('nbrp-close')?.addEventListener('click', _closeReportModal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) _closeReportModal(); });
+  _reportEscHandler = (e) => { if (e.key === 'Escape') _closeReportModal(); };
+  document.addEventListener('keydown', _reportEscHandler);
+  _wireReportTemplateCard(_REPORT_CUSTOM_CARD, 'templates', 0);
+
+  _loadReportLayouts(epoch);
+}
+
+function _closeReportModal() {
+  const modal = document.getElementById('nbrp-modal');
+  if (modal) modal.remove();
+  if (_reportEscHandler) {
+    document.removeEventListener('keydown', _reportEscHandler);
+    _reportEscHandler = null;
+  }
+  _reportModalEpoch++;
+}
+
 export function isNotebookWorkspaceOpen() {
   return _open;
 }
@@ -1822,6 +2220,7 @@ const notebookWorkspace = {
   isNotebookWorkspaceOpen,
   registerCloseHook,
   getSourceIdsForChat,
+  getSearchHintForChat,
   getCurrentNotebookId,
   EMPTY_SELECTION_MESSAGE,
   _state,

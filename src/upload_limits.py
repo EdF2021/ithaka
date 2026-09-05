@@ -59,6 +59,12 @@ STT_MAX_AUDIO_BYTES = read_byte_limit_env(
 ICS_MAX_BYTES = read_byte_limit_env(
     "ITHAKA_ICS_MAX_BYTES", 10 * 1024 * 1024
 )
+MEETING_CHUNK_MAX_BYTES = read_byte_limit_env(
+    "ITHAKA_MEETING_CHUNK_MAX_BYTES", 10 * 1024 * 1024
+)
+MEETING_AUDIO_MAX_BYTES = read_byte_limit_env(
+    "ITHAKA_MEETING_AUDIO_MAX_BYTES", 500 * 1024 * 1024
+)
 
 
 async def read_upload_limited(upload: UploadFile, limit: int, label: str = "Upload") -> bytes:
