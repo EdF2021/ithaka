@@ -1009,8 +1009,8 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             raise HTTPException(400, "Nothing old enough to compact")
 
         from src.context_compactor import SELF_SUMMARY_SYSTEM_PROMPT
-        from src.endpoint_resolver import resolve_endpoint
-        from src.llm_core import llm_call_async
+        from src.endpoint_resolver import resolve_endpoint, resolve_utility_fallback_candidates
+        from src.llm_core import llm_call_async_with_fallback
 
         owner = getattr(session, "owner", None) or effective_user(request)
         url, model, headers = resolve_endpoint("utility", owner=owner)
@@ -1032,14 +1032,18 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
             f"{_message_role(m).upper()}: {_message_text(m)[:2000]}"
             for m in older
         )
+        # Chain the configured utility fallbacks behind the primary pick
+        # (utility model, or the session's own model when utility isn't
+        # configured) so a down endpoint doesn't hard-fail compaction
+        # (see #183 part B).
+        candidates = [(url, model, headers)]
+        candidates.extend(resolve_utility_fallback_candidates(owner=owner or None) or [])
         try:
-            summary = await llm_call_async(
-                url,
-                model,
+            summary = await llm_call_async_with_fallback(
+                candidates,
                 [{"role": "system", "content": prompt}, {"role": "user", "content": convo_text}],
                 temperature=0.2,
                 max_tokens=1024,
-                headers=headers,
                 timeout=60,
             )
         except Exception as e:

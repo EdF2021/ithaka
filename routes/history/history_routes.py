@@ -644,8 +644,8 @@ def setup_history_routes(session_manager) -> APIRouter:
 
         try:
             from src.model_context import estimate_tokens, get_context_length
-            from src.llm_core import llm_call_async
-            from src.endpoint_resolver import resolve_endpoint
+            from src.llm_core import llm_call_async_with_fallback
+            from src.endpoint_resolver import resolve_endpoint, resolve_utility_fallback_candidates
 
             if len(session.history) < 6:
                 return {"status": "ok", "message": "Not enough messages to compact"}
@@ -673,18 +673,25 @@ def setup_history_routes(session_manager) -> APIRouter:
             compact_url = util_url or session.endpoint_url
             compact_model = util_model or session.model
             compact_headers = util_headers if util_url else session.headers
+            if not compact_url or not compact_model:
+                raise HTTPException(400, "No model configured for compaction")
 
             from src.context_compactor import SELF_SUMMARY_SYSTEM_PROMPT
             compaction_count = sum(1 for m in session.history if isinstance(m, ChatMessage) and "[Conversation summary" in (m.content or ""))
             sys_prompt = SELF_SUMMARY_SYSTEM_PROMPT.replace("{count}", str(len(older))).replace("{n}", str(compaction_count + 1))
-            summary = await llm_call_async(
-                compact_url, compact_model,
+            # Chain the configured utility fallbacks behind the primary pick
+            # (utility model, or the session's own model when utility isn't
+            # configured) so a down endpoint doesn't hard-fail compaction
+            # (see #183 part B).
+            candidates = [(compact_url, compact_model, compact_headers)]
+            candidates.extend(resolve_utility_fallback_candidates(owner=owner or None) or [])
+            summary = await llm_call_async_with_fallback(
+                candidates,
                 [
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": convo_text},
                 ],
-                temperature=0.2, max_tokens=1024,
-                headers=compact_headers, timeout=30,
+                temperature=0.2, max_tokens=1024, timeout=30,
             )
 
             # Replace session history: summary as system message + recent messages
@@ -761,6 +768,8 @@ def setup_history_routes(session_manager) -> APIRouter:
                 "after": pct_after,
             }
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Manual compact error {session_id}: {e}")
             raise HTTPException(500, str(e))
