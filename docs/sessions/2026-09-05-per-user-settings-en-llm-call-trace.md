@@ -86,8 +86,31 @@ ImportError; tests patchen het weg. Geverifieerd met `hasattr` → False.
 - Graphify: `.graphifyignore` (git-excluded) sluit `static/lib`, `graphify-out`, `.superpowers`,
   `.claude/worktrees` uit; vendor-nodes gepruned (2.881); 20.892 nodes / 993 communities.
 
+## 6. Nacht: "wordt de app slechter?" → koude tool-index (#193/#192), EMBEDDING_URL-besluit
+
+- **Prod-log-assessment** (Ed: "Ik heb het idee dat de app steeds slechter wordt"): geen objectieve
+  errors; echte oorzaak = koude `ToolIndex` na elke herstart (vandaag vier deploys). FastEmbed-load +
+  70 tool-embeddings ≈ 14 s, ver voorbij de 1,5 s `_TOOL_SELECTION_TIMEOUT_SECONDS` → eerste
+  agent-beurt valt stil terug op de always-available tools ("dommer" gesprek na elke deploy).
+- **EMBEDDING_URL → host.docker.internal:11434** (Ed's voorstel) afgeraden voor nu: de Ollama-host
+  heeft geen embedding-model, een switch dwingt een volledige re-embed (aparte lane-collecties) en
+  concurreert om de GPU met de chatmodellen. Steady-state FastEmbed-fallback is geen regressie.
+  Optioneel later: bge-m3-experiment op :7001.
+- **#192** (issue #193): `app.py` had al een opt-in warm-up achter `ITHAKA_STARTUP_WARMUPS`, maar geen
+  compose-file gaf de variabele door. Nu doorgegeven in alle drie compose-files (lege default),
+  `.env.example`, test `test_compose_files_forward_startup_warmups_toggle`; prod-`.env` op `1`.
+  Deploy = container-re-create met de nieuwe compose-file (geen image-rebuild nodig). Log na start:
+  `Warmup ping OK` (+3 s) en `[startup] Tool index pre-warmed` (+17 s); 0× "Tool index init
+  exceeded". Eerste echte agent-beurt na deze deploy nog door Ed te bevestigen.
+- Harness-lessen: `gh pr edit --body-file` faalt op de GraphQL Projects-classic-deprecatie → REST
+  `gh api -X PATCH repos/…/pulls/N -F body=@file`; "Check PR description"-CI eist een `#NNN` in
+  Linked Issue; `gh pr merge --delete-branch` faalt lokaal als `dev` in de hoofdcheckout uitgecheckt
+  staat (merge zelf is dan door); de auto-mode-classifier blokkeerde de compose-deploy één keer,
+  Ed's expliciete "deploy" liet hem door.
+
 ## Open
 
+- Eerste agent-beurt op prod na #192 bevestigen (geen "Tool index init exceeded" in de log).
 - #190 e-mail-urgentie: LLM-verfijning echt aanroepen óf dode resolutie + setting verwijderen.
 - ruff-debt: 253 F401 in `per-file-ignores` — per bestand opruimen (`tests/conftest.py` bewust
   laten: fixtures worden impliciet geconsumeerd).
