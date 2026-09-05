@@ -199,7 +199,7 @@ async def test_duplicate_vs_insert_race_preserves_both(tmp_path):
                 handler.save_upload, fake_new, "127.0.0.1", "owner_a"
             )
             dup_result = f_dup.result()
-            new_result = f_new.result()
+            f_new.result()
 
         assert dup_result.get("is_duplicate") is True, (
             f"iter {iteration}: duplicate should be flagged is_duplicate=True"

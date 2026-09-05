@@ -297,7 +297,6 @@ def run_script_argv(script_path) -> List[str]:
 
 def is_wsl() -> bool:
     """True if running inside Windows Subsystem for Linux (WSL)."""
-    import sys
     if sys.platform.startswith("linux") or os.name == "posix":
         try:
             with open("/proc/version", "r", encoding="utf-8", errors="ignore") as f:

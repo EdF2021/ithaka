@@ -1864,7 +1864,6 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
         if not accounts:
             raise TaskNoop("no email accounts configured")
 
-        urgency_prompt = settings.get("urgent_email_prompt", "")
         per_uid_scores = {}   # key = "<acc_id>:<uid>" → {"score": 0-3, "reason": "..."}
         all_unread_keys = set()
         saved_classifications = 0

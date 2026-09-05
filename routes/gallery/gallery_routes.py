@@ -111,7 +111,6 @@ def _join_checked_gallery_endpoint(base: str, path: str) -> str:
 
 
 def _visible_image_endpoint_query(db, owner: str | None):
-    from src.auth_helpers import owner_filter
     q = db.query(ModelEndpoint).filter(
         ModelEndpoint.model_type == "image",
         ModelEndpoint.is_enabled == True,  # noqa: E712
@@ -1413,7 +1412,6 @@ def setup_gallery_routes() -> APIRouter:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        last_err = None
         # Cold-start SDXL inpaint can take 60-90s on first request (loading
         # weights to GPU). 240s gives headroom for both that and a full
         # 1024×1024 inference pass on slower setups.
@@ -1424,11 +1422,9 @@ def setup_gallery_routes() -> APIRouter:
                 try:
                     r = await client.post(target, json=payload, headers=headers)
                     if r.status_code == 404:
-                        last_err = f"{path}: 404"
                         continue  # try next variant
                     if r.status_code != 200:
                         logger.warning("harmonize: %s returned %s", path, r.status_code)
-                        last_err = f"{path}: {r.status_code}"
                         continue
                     data = r.json()
                     # Normalise return shape.
@@ -1457,7 +1453,6 @@ def setup_gallery_routes() -> APIRouter:
                                 img_b64 = await _fetch_result_image_b64(item["url"])
                                 if img_b64:
                                     return {"image": img_b64}
-                    last_err = f"{path}: server returned no image"
                 except httpx.ConnectError:
                     logger.warning("harmonize: can't reach diffusion server at %s", base)
                     raise HTTPException(502, "Can't reach diffusion server")

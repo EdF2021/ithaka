@@ -132,7 +132,7 @@ def test_max_bytes_override_raises_budget(monkeypatch, no_cache):
 
 def test_override_is_clamped_to_hard_cap(monkeypatch, no_cache):
     # Ask for more than the ceiling; the effective budget must be the ceiling.
-    fake = _patch_stream(monkeypatch, _FakeStream(b"z" * 10, chunk=4))
+    _patch_stream(monkeypatch, _FakeStream(b"z" * 10, chunk=4))
     r = content_mod.fetch_webpage_content(
         "https://example.com/a.txt", max_bytes=WEB_FETCH_HARD_MAX_BYTES * 10
     )

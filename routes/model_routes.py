@@ -1442,7 +1442,6 @@ def setup_model_routes(model_discovery):
 
         for ep in endpoints:
             base = _normalize_base(ep.base_url)
-            provider = _safe_detect_provider(base)
             # Merge cached + pinned models, then filter out hidden ones
             ep_model_type = getattr(ep, "model_type", None) or "llm"
             model_ids = _visible_models(
@@ -1450,7 +1449,6 @@ def setup_model_routes(model_discovery):
                 ep.hidden_models,
                 getattr(ep, "pinned_models", None),
             )
-            # Build correct URL based on provider
             chat_url = build_chat_url(base)
             kind = _effective_endpoint_kind(ep, base)
             category = _classify_endpoint(base, kind)

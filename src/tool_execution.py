@@ -30,7 +30,7 @@ from src.tool_security import (
 )
 from src.tool_policy import ToolPolicy
 from src.constants import MAX_OUTPUT_CHARS, MAX_READ_CHARS, MAX_DIFF_LINES, DATA_DIR
-from src.tool_utils import _truncate, get_mcp_manager
+from src.tool_utils import _truncate
 
 # Persistent working directory for agent subprocesses.
 # Resolves to <repo_root>/data, which is the bind-mounted volume in Docker

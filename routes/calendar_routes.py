@@ -1504,8 +1504,6 @@ def setup_calendar_routes() -> APIRouter:
             clear_user_time_context,
             current_datetime_prompt,
             now_user_local,
-            set_user_tz_name,
-            set_user_tz_offset,
         )
 
         clear_user_time_context()

@@ -425,7 +425,6 @@ class GrepTool:
 
         def _grep():
             import re as _re
-            import shutil
             rg = shutil.which("rg")
             if rg:
                 cmd = [rg, "--line-number", "--no-heading", "--color=never",

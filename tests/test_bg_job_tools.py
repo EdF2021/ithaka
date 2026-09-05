@@ -74,7 +74,7 @@ def test_kill_finished_job_is_noop(store):
 
 
 def test_result_text_reports_killed(store):
-    rec = _seed(job_id="job0001")
+    _seed(job_id="job0001")
     bg_jobs.kill("job0001")
     assert "killed" in bg_jobs.result_text(bg_jobs.get("job0001")).lower()
 
