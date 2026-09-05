@@ -35,8 +35,8 @@ def _patch_backend(monkeypatch, fake, enabled=True):
     import src.agent_tools.video_tools as video_tools_mod
     monkeypatch.setattr(video_tools_mod, "video_gen", fake)
     monkeypatch.setattr(
-        video_tools_mod, "get_setting",
-        lambda k, d=None: {"video_gen_enabled": enabled}.get(k, d),
+        video_tools_mod, "get_user_setting",
+        lambda k, owner="", d=None: {"video_gen_enabled": enabled}.get(k, d),
     )
 
 

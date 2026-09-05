@@ -402,24 +402,24 @@ def start_video_job(
     (checked eagerly, before the job is registered, so a misconfigured
     install fails fast instead of after minutes of polling).
     """
-    from src.settings import get_setting
+    from src.settings import get_user_setting
 
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("Prompt mag niet leeg zijn")
 
-    model = model or get_setting("video_model", "veo-3.1-generate-preview")
+    model = model or get_user_setting("video_model", owner or "", "veo-3.1-generate-preview")
     if model not in VEO_MODELS:
         raise ValueError(f"Onbekend video-model: {model}")
 
-    aspect_ratio = aspect_ratio or get_setting("video_aspect_ratio", "16:9")
+    aspect_ratio = aspect_ratio or get_user_setting("video_aspect_ratio", owner or "", "16:9")
     if aspect_ratio not in ("16:9", "9:16"):
         raise ValueError(f"Ongeldige aspect ratio: {aspect_ratio}")
 
-    resolution = resolution or get_setting("video_resolution", "720p")
+    resolution = resolution or get_user_setting("video_resolution", owner or "", "720p")
 
     if duration_seconds is None:
-        duration_seconds = get_setting("video_duration_seconds", 8)
+        duration_seconds = get_user_setting("video_duration_seconds", owner or "", 8)
     try:
         duration_seconds = int(duration_seconds)
     except (TypeError, ValueError):

@@ -53,7 +53,7 @@ from src.notebook_slides import generate_slide_deck
 from src.notebook_ingest import ingest_notebook_file, ingest_notebook_url
 from src.notebook_report import generate_notebook_artifact_report
 from src.notebook_suggest import suggest_questions, _SUGGEST_TIMEOUT_S
-from src.settings import get_setting, load_settings
+from src.settings import get_user_setting, load_settings
 from src.upload_limits import PERSONAL_UPLOAD_MAX_BYTES, format_byte_limit
 
 logger = logging.getLogger(__name__)
@@ -503,7 +503,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
                     "Artifact generation failed for notebook %s (kind=%s)", notebook_id, kind
                 )
                 raise HTTPException(status_code=502, detail=str(exc))
-            if kind == "infographic" and get_setting("image_gen_enabled", False):
+            if kind == "infographic" and get_user_setting("image_gen_enabled", user or "", False):
                 # Fire-and-forget: the viewer polls for illustrations. A
                 # failure to start must never turn a successfully stored
                 # artifact into an error response.
@@ -994,7 +994,7 @@ def setup_notebook_routes(rag_manager, tts_service=None) -> APIRouter:
             content = document.current_content
         finally:
             db_session.close()
-        if not get_setting("image_gen_enabled", False):
+        if not get_user_setting("image_gen_enabled", user or "", False):
             return {"status": "none", "illustrations": {}}
         job = get_artifact_job(artifact_id, user)
         status = "none"

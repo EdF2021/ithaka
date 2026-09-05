@@ -22,7 +22,7 @@ from src.llm_core import (
     _is_ollama_native_url,
 )
 from src.model_context import estimate_tokens
-from src.settings import get_setting
+from src.settings import get_setting, get_user_setting
 from src.prompt_security import untrusted_context_message
 # Pure stdlib module (re/dataclasses/typing only) — no circular-import risk.
 from src.action_intents import media_intent
@@ -2289,7 +2289,7 @@ def _build_base_prompt(
     from src.tool_index import ALWAYS_AVAILABLE
 
     disabled = set(disabled_tools or [])
-    if not get_setting("image_gen_enabled", False):
+    if not get_user_setting("image_gen_enabled", owner or "", False):
         disabled.add("generate_image")
 
     if relevant_tools is not None:

@@ -22,10 +22,13 @@ def test_can_generate_videos_privilege_disables_tool():
 
 def test_video_gen_enabled_global_setting_disables_tool():
     source = _source()
-    assert 'get_setting("video_gen_enabled", False)' in source
+    # Per-user override (get_user_setting, see src/settings.py _PER_USER_KEYS)
+    # so a user who enabled video generation for themselves isn't blocked by
+    # a global default-off admin setting.
+    assert 'get_user_setting("video_gen_enabled", _user or "", False)' in source
     # Must appear near the global-disable gate and add generate_video, mirroring
     # how image_gen_enabled gates generate_image.
-    idx = source.index('get_setting("video_gen_enabled", False)')
+    idx = source.index('get_user_setting("video_gen_enabled", _user or "", False)')
     tail = source[idx:idx + 300]
     assert 'disabled_tools.add("generate_video")' in tail
 

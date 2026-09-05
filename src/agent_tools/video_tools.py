@@ -15,7 +15,7 @@ clear error dict instead of raising ImportError at module load time.
 import json
 from typing import Any, Dict
 
-from src.settings import get_setting
+from src.settings import get_user_setting
 
 try:
     from src import video_gen
@@ -68,7 +68,7 @@ class GenerateVideoTool:
                 "exit_code": 1,
             }
 
-        if not get_setting("video_gen_enabled", False):
+        if not get_user_setting("video_gen_enabled", owner or "", False):
             return {
                 "error": "Video generation is disabled by the administrator.",
                 "exit_code": 1,
@@ -80,9 +80,9 @@ class GenerateVideoTool:
                 "exit_code": 1,
             }
 
-        model = get_setting("video_model", DEFAULT_VIDEO_MODEL)
-        resolution = get_setting("video_resolution", DEFAULT_VIDEO_RESOLUTION)
-        effective_aspect_ratio = aspect_ratio or get_setting("video_aspect_ratio", DEFAULT_VIDEO_ASPECT_RATIO)
+        model = get_user_setting("video_model", owner or "", DEFAULT_VIDEO_MODEL)
+        resolution = get_user_setting("video_resolution", owner or "", DEFAULT_VIDEO_RESOLUTION)
+        effective_aspect_ratio = aspect_ratio or get_user_setting("video_aspect_ratio", owner or "", DEFAULT_VIDEO_ASPECT_RATIO)
         if duration_seconds is not None:
             effective_duration = duration_seconds
         else:
@@ -90,7 +90,7 @@ class GenerateVideoTool:
             # POST /api/auth/settings) and may round-trip as a string; the
             # backend documents ValueError on invalid params, so normalize here
             # rather than pass an unvalidated str/other type through.
-            _setting_duration = get_setting("video_duration_seconds", DEFAULT_VIDEO_DURATION_SECONDS)
+            _setting_duration = get_user_setting("video_duration_seconds", owner or "", DEFAULT_VIDEO_DURATION_SECONDS)
             try:
                 effective_duration = int(_setting_duration)
             except (TypeError, ValueError):
