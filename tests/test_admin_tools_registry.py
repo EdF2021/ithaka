@@ -26,7 +26,7 @@ def test_all_registered_in_tool_handlers():
 def test_re_exported_from_agent_tools():
     # Back-compat: importers that used `from src.agent_tools import do_manage_*`
     # keep working after the move.
-    from src.agent_tools import (  # noqa: F401
+    from src.agent_tools import (  # noqa: F401,F811
         do_manage_endpoints, do_manage_mcp, do_manage_webhooks,
         do_manage_tokens, do_manage_settings,
     )

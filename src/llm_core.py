@@ -1312,7 +1312,6 @@ def _provider_label(url: str) -> str:
     try:
         _parsed_local = urlparse(url)
         host = (_parsed_local.hostname or "").lower()
-        port = _parsed_local.port
     except Exception:
         return "provider"
     if host in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:

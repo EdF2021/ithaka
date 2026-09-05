@@ -14,7 +14,9 @@ def _between(src: str, start: str, end: str) -> str:
 
 
 def test_setup_guide_lists_account_sign_in_providers():
-    guide_block = _between(_SLASH, "function _showSetupEndpointChoices", "async function _hasConfiguredModels")
+    # Calling _between (not just checking its return) also pins that both
+    # marker functions still exist in the source.
+    _between(_SLASH, "function _showSetupEndpointChoices", "async function _hasConfiguredModels")
 
     assert 'data-setup-provider="' in _SLASH
     assert "provider.key" in _SLASH

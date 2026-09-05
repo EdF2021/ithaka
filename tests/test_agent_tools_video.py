@@ -96,7 +96,7 @@ async def test_settings_duration_unparseable_falls_back_to_default(monkeypatch):
     fake = FakeVG()
     monkeypatch.setattr(video_tools_mod, "video_gen", fake)
     monkeypatch.setattr(video_tools_mod, "get_user_setting", _settings({"video_duration_seconds": "not-a-number"}))
-    r = await GenerateVideoTool().execute("a dog surfing", {"owner": "ed"})
+    await GenerateVideoTool().execute("a dog surfing", {"owner": "ed"})
     assert fake.calls[0][2]["duration_seconds"] == 8
 
 
