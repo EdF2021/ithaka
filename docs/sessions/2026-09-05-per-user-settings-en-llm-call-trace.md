@@ -107,6 +107,10 @@ ImportError; tests patchen het weg. Geverifieerd met `hasattr` → False.
   Linked Issue; `gh pr merge --delete-branch` faalt lokaal als `dev` in de hoofdcheckout uitgecheckt
   staat (merge zelf is dan door); de auto-mode-classifier blokkeerde de compose-deploy één keer,
   Ed's expliciete "deploy" liet hem door.
+- **Promotie dev → main: PR #194** (`b358fda`, gewone merge-commit, 167 commits sinds #91 van 1 sept;
+  CI 28 pass / 3 skipping). main- en dev-tree identiek. Branch-inventaris: 0 open PRs, 35 remote
+  feature-branches allemaal van gemergde (squash-)PRs, lokaal 7 gemergde branches + 10
+  `worktree-agent-*` + verweesde agent-worktree (stt-probe, #166) → opruimen is een aparte stap.
 
 ## Open
 
