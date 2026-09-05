@@ -339,7 +339,8 @@ def setup_task_routes(task_scheduler) -> APIRouter:
             )
             title = result.strip().strip('"\'').strip()
             return title[:60] if title else prompt[:50].strip()
-        except Exception:
+        except Exception as e:
+            logger.warning("Task name generation failed, falling back to prompt slice: %s", e)
             first = prompt.split('\n')[0].split('.')[0].strip()
             return first[:50] if first else "Untitled Task"
 
