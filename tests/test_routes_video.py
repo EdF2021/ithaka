@@ -1,7 +1,7 @@
 """routes/video_routes.py: privilege/enabled gates, owner checks, path safety.
 
 Pattern mirrors tests/test_routes_notebook_audio.py: the route module's
-imported names (get_current_user, require_privilege, get_setting,
+imported names (get_current_user, require_privilege, get_user_setting,
 video_gen.*) are monkeypatched directly rather than wiring a real
 AuthManager/settings file, so these tests never touch real auth or the real
 Veo job runner.
@@ -32,11 +32,11 @@ def _client(
         return user
     monkeypatch.setattr(vr, "require_privilege", _require_privilege)
 
-    def _get_setting(key, default=None):
+    def _get_user_setting(key, owner="", default=None):
         if key == "video_gen_enabled":
             return video_gen_enabled
         return default
-    monkeypatch.setattr(vr, "get_setting", _get_setting)
+    monkeypatch.setattr(vr, "get_user_setting", _get_user_setting)
 
     if start_job is not None:
         monkeypatch.setattr(vr.video_gen, "start_video_job", start_job)
@@ -62,6 +62,44 @@ def test_generate_disabled_is_400(monkeypatch):
     c = _client(monkeypatch, video_gen_enabled=False)
     r = c.post("/api/video/generate", json={"prompt": "a cat"})
     assert r.status_code == 400
+
+
+def test_generate_per_user_pref_overrides_global_disabled(monkeypatch):
+    """video_gen_enabled is in _PER_USER_KEYS: the real get_user_setting
+    (not the test-fixture stub) reads routes.prefs_routes._load_for_user
+    first. A global default-off admin setting must not block a user who
+    explicitly enabled it for themselves, and must still block a different
+    user with no such pref."""
+    monkeypatch.setattr(vr, "get_current_user", lambda request: "ed")
+    monkeypatch.setattr(vr, "require_privilege", lambda request, key: "ed")
+    import src.settings as settings_mod
+    monkeypatch.setattr(settings_mod, "get_setting", lambda key, default=None: False if key == "video_gen_enabled" else default)
+
+    def fake_load_for_user(owner=None):
+        return {"video_gen_enabled": True} if owner == "ed" else {}
+    monkeypatch.setattr("routes.prefs_routes._load_for_user", fake_load_for_user)
+
+    monkeypatch.setattr(vr.video_gen, "start_video_job", lambda prompt, owner, **kw: "job-x")
+    monkeypatch.setattr(vr.video_gen, "get_job", lambda job_id, owner: {"cost_estimate": 1.0})
+
+    app_client = _real_client()
+    r = app_client.post("/api/video/generate", json={"prompt": "a cat"})
+    assert r.status_code == 202
+
+    # A different user with no per-user pref falls back to the disabled global.
+    monkeypatch.setattr(vr, "get_current_user", lambda request: "other")
+    monkeypatch.setattr(vr, "require_privilege", lambda request, key: "other")
+    app_client2 = _real_client()
+    r2 = app_client2.post("/api/video/generate", json={"prompt": "a cat"})
+    assert r2.status_code == 400
+
+
+def _real_client():
+    from fastapi import FastAPI as _FastAPI
+    from starlette.testclient import TestClient as _TestClient
+    app = _FastAPI()
+    app.include_router(vr.setup_video_routes())
+    return _TestClient(app, raise_server_exceptions=False)
 
 
 def test_generate_empty_prompt_is_400(monkeypatch):

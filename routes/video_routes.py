@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 
 from src import video_gen
 from src.auth_helpers import get_current_user, require_privilege
-from src.settings import get_setting
+from src.settings import get_user_setting
 
 
 def setup_video_routes() -> APIRouter:
@@ -29,7 +29,7 @@ def setup_video_routes() -> APIRouter:
     async def generate_video(request: Request):
         user = require_privilege(request, "can_generate_videos")
 
-        if not get_setting("video_gen_enabled", False):
+        if not get_user_setting("video_gen_enabled", user or "", False):
             raise HTTPException(status_code=400, detail="Video generation is not enabled")
 
         try:

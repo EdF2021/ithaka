@@ -216,8 +216,8 @@ class ChatHandler:
         vision_enabled = False
         main_is_vision = False
         if effective_att_ids:
-            from src.settings import get_setting
-            vision_enabled = get_setting("vision_enabled", True)
+            from src.settings import get_user_setting
+            vision_enabled = get_user_setting("vision_enabled", owner or "", True)
             if vision_enabled:
                 main_is_vision = await asyncio.to_thread(
                     model_supports_vision,
@@ -263,7 +263,7 @@ class ChatHandler:
                         # so a manual correction (via the chat attachment dropdown's
                         # editable textarea) overrides what the vision model would say.
                         vl_desc = None
-                        vl_model = get_setting("vision_model", "") or ""
+                        vl_model = get_user_setting("vision_model", owner or "", "") or ""
                         try:
                             cached_desc = _load_vision_cache(att_id)
                         except Exception:

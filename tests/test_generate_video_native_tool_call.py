@@ -50,8 +50,8 @@ async def test_native_function_call_content_round_trips_through_the_tool(monkeyp
     monkeypatch.setattr(video_tools_mod, "video_gen", fake)
     monkeypatch.setattr(
         video_tools_mod,
-        "get_setting",
-        lambda k, d=None: {"video_gen_enabled": True}.get(k, d),
+        "get_user_setting",
+        lambda k, owner="", d=None: {"video_gen_enabled": True}.get(k, d),
     )
 
     block = function_call_to_tool_block(

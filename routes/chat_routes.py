@@ -1134,12 +1134,14 @@ def setup_chat_routes(
                 _effective_mode = 'chat'
                 chat_mode = 'chat'
         # Global admin disabled tools
-        from src.settings import get_setting
+        from src.settings import get_setting, get_user_setting
         # video_gen_enabled mirrors image_gen_enabled's per-session gate
         # (routes/chat_routes.py, generate-image session branch) but as a
         # global default-off admin flag, since generate_video is a regular
-        # agent tool rather than a dedicated session type.
-        if not get_setting("video_gen_enabled", False):
+        # agent tool rather than a dedicated session type. Per-user override
+        # (see _PER_USER_KEYS) so a user who enabled it for themselves isn't
+        # blocked by a global default-off admin setting.
+        if not get_user_setting("video_gen_enabled", _user or "", False):
             disabled_tools.add("generate_video")
         _global_disabled = get_setting("disabled_tools", [])
         if _global_disabled and isinstance(_global_disabled, list):
@@ -1414,14 +1416,14 @@ def setup_chat_routes(
             yield f'data: {json.dumps(_model_info)}\n\n'
 
             if _is_image_generation_session(sess, owner=_user):
-                from src.settings import get_setting
+                from src.settings import get_user_setting
                 if tool_policy.blocks("generate_image"):
                     _blocked_msg = tool_policy.reason_for("generate_image")
                     yield f'data: {json.dumps({"delta": _blocked_msg})}\n\n'
                     yield "data: [DONE]\n\n"
                     _active_streams.pop(session, None)
                     return
-                if not get_setting("image_gen_enabled", True):
+                if not get_user_setting("image_gen_enabled", _user or "", True):
                     yield f'data: {json.dumps({"delta": "Image generation is disabled by the administrator."})}\n\n'
                     yield "data: [DONE]\n\n"
                     _active_streams.pop(session, None)

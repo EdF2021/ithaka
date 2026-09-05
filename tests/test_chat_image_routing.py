@@ -86,3 +86,15 @@ def test_matching_image_endpoint_routes_selected_image_model(monkeypatch):
     monkeypatch.setattr(chat_routes, "SessionLocal", lambda: db)
 
     assert chat_routes._is_image_generation_session(_session(model="sdxl-local"))
+
+
+def test_image_gen_enabled_gate_reads_per_user_setting():
+    """The image-generation-session branch's admin-disabled gate must resolve
+    image_gen_enabled per the caller (_user), not the global admin default
+    (image_gen_enabled is in src.settings._PER_USER_KEYS) — pinned as source
+    text, mirroring test_chat_routes_video_privilege.py's technique for the
+    streaming handler this lives in (not practically invokable in a unit
+    test — huge function wired to live session/db/model state)."""
+    from pathlib import Path
+    source = Path("routes/chat_routes.py").read_text(encoding="utf-8")
+    assert 'get_user_setting("image_gen_enabled", _user or "", True)' in source

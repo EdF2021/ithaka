@@ -110,7 +110,7 @@ def _fake_generate(content):
 
 def test_post_infographic_starts_job_when_image_gen_enabled(ts, monkeypatch):
     monkeypatch.setattr(nbr, "generate_artifact", _fake_generate(_v2_json()))
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True if key == "image_gen_enabled" else default)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True if key == "image_gen_enabled" else default)
     started = []
     monkeypatch.setattr(nbr, "start_illustration_job",
                         lambda notebook_id, artifact_id, owner: started.append((notebook_id, artifact_id, owner)) or "job1")
@@ -122,9 +122,32 @@ def test_post_infographic_starts_job_when_image_gen_enabled(ts, monkeypatch):
     assert started == [(nb_id, r.json()["id"], "ed")]
 
 
+def test_post_infographic_uses_owner_pref_over_disabled_global(ts, monkeypatch):
+    """image_gen_enabled is in src.settings._PER_USER_KEYS: the real
+    get_user_setting (not the test-fixture stub above) must read the caller's
+    per-user pref via routes.prefs_routes._load_for_user before falling back
+    to the global admin default."""
+    monkeypatch.setattr(nbr, "generate_artifact", _fake_generate(_v2_json()))
+    import src.settings as settings_mod
+    monkeypatch.setattr(settings_mod, "get_setting", lambda key, default=None: False if key == "image_gen_enabled" else default)
+
+    def fake_load_for_user(owner=None):
+        return {"image_gen_enabled": True} if owner == "ed" else {}
+    monkeypatch.setattr("routes.prefs_routes._load_for_user", fake_load_for_user)
+
+    started = []
+    monkeypatch.setattr(nbr, "start_illustration_job",
+                        lambda notebook_id, artifact_id, owner: started.append((notebook_id, artifact_id, owner)) or "job1")
+    client = _client(monkeypatch, user="ed")
+    nb_id, _ = _rows(ts, "# whatever")
+    r = client.post(f"/api/notebooks/{nb_id}/artifacts", json={"kind": "infographic"})
+    assert r.status_code == 200, r.text
+    assert started == [(nb_id, r.json()["id"], "ed")]
+
+
 def test_post_infographic_skips_job_when_image_gen_disabled(ts, monkeypatch):
     monkeypatch.setattr(nbr, "generate_artifact", _fake_generate(_v2_json()))
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: default)
     monkeypatch.setattr(nbr, "start_illustration_job", lambda *a, **k: pytest.fail("must not start"))
     client = _client(monkeypatch)
     nb_id, _ = _rows(ts, "# whatever")
@@ -134,7 +157,7 @@ def test_post_infographic_skips_job_when_image_gen_disabled(ts, monkeypatch):
 
 def test_post_infographic_job_start_failure_does_not_fail_request(ts, monkeypatch):
     monkeypatch.setattr(nbr, "generate_artifact", _fake_generate(_v2_json()))
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True)
 
     def boom(*a, **k):
         raise ValueError("nope")
@@ -147,7 +170,7 @@ def test_post_infographic_job_start_failure_does_not_fail_request(ts, monkeypatc
 
 def test_post_other_kind_never_starts_job(ts, monkeypatch):
     monkeypatch.setattr(nbr, "generate_artifact", _fake_generate("# faq"))
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True)
     monkeypatch.setattr(nbr, "start_illustration_job", lambda *a, **k: pytest.fail("must not start"))
     client = _client(monkeypatch)
     nb_id, _ = _rows(ts, "# whatever")
@@ -157,7 +180,7 @@ def test_post_other_kind_never_starts_job(ts, monkeypatch):
 # ---- status endpoint --------------------------------------------------------
 
 def test_status_none_when_image_gen_disabled(ts, monkeypatch):
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: default)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: default)
     client = _client(monkeypatch)
     nb_id, art_id = _rows(ts, _v2_json({"hero": f"{_UUID}-hero-0123abcd.png"}))
     r = client.get(f"/api/notebooks/{nb_id}/artifacts/{art_id}/illustrations")
@@ -166,7 +189,7 @@ def test_status_none_when_image_gen_disabled(ts, monkeypatch):
 
 
 def test_status_none_without_job_but_returns_stored_map(ts, monkeypatch):
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True)
     client = _client(monkeypatch)
     nb_id, art_id = _rows(ts, _v2_json())
     # store a map on the doc for this artifact id
@@ -184,7 +207,7 @@ def test_status_none_without_job_but_returns_stored_map(ts, monkeypatch):
 
 
 def test_status_running_and_done_follow_job_registry(ts, monkeypatch):
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True)
     client = _client(monkeypatch)
     nb_id, art_id = _rows(ts, _v2_json())
     ill._active_jobs["j"] = {"status": "running", "owner": "ed", "artifact_id": art_id,
@@ -198,7 +221,7 @@ def test_status_running_and_done_follow_job_registry(ts, monkeypatch):
 
 
 def test_status_404_for_foreign_notebook_or_unknown_artifact(ts, monkeypatch):
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True)
     nb_id, art_id = _rows(ts, _v2_json(), owner="someone-else")
     client = _client(monkeypatch, user="ed")
     assert client.get(f"/api/notebooks/{nb_id}/artifacts/{art_id}/illustrations").status_code == 404
@@ -209,7 +232,7 @@ def test_status_404_for_foreign_notebook_or_unknown_artifact(ts, monkeypatch):
 # ---- report route -------------------------------------------------------------
 
 def test_report_renders_v2_with_poll_url_while_running(ts, monkeypatch):
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True)
     client = _client(monkeypatch)
     nb_id, art_id = _rows(ts, _v2_json())
     ill._active_jobs["j"] = {"status": "running", "owner": "ed", "artifact_id": art_id,
@@ -221,7 +244,7 @@ def test_report_renders_v2_with_poll_url_while_running(ts, monkeypatch):
 
 
 def test_report_renders_v2_without_poll_when_no_job(ts, monkeypatch):
-    monkeypatch.setattr(nbr, "get_setting", lambda key, default=None: True)
+    monkeypatch.setattr(nbr, "get_user_setting", lambda key, owner="", default=None: True)
     client = _client(monkeypatch)
     nb_id, art_id = _rows(ts, _v2_json())
     r = client.get(f"/api/notebooks/{nb_id}/artifacts/{art_id}/report")

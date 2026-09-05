@@ -550,6 +550,57 @@ def test_start_video_job_rejects_bad_duration(monkeypatch):
         video_gen.start_video_job("a cat", "ed", model="veo-3.1-generate-preview", duration_seconds=99)
 
 
+async def test_start_video_job_uses_owner_pref_over_global_default(monkeypatch):
+    """model/aspect_ratio/resolution/duration are all in _PER_USER_KEYS — a
+    per-user pref (routes.prefs_routes._load_for_user) must win over the
+    global admin default for the job's owner, and NOT leak to a different
+    owner with no such pref."""
+    monkeypatch.setattr(video_gen, "resolve_gemini_endpoint", lambda db_session_factory=None: ("https://g/v1beta", "K"))
+
+    async def _noop_run_job(job_id, db_session_factory):
+        pass
+    monkeypatch.setattr(video_gen, "_run_job", _noop_run_job)
+    import src.settings as settings_mod
+    monkeypatch.setattr(
+        settings_mod, "get_setting",
+        lambda key, default=None: {
+            "video_model": "veo-3.1-generate-preview",
+            "video_aspect_ratio": "16:9",
+            "video_resolution": "720p",
+            "video_duration_seconds": 8,
+        }.get(key, default),
+    )
+
+    def fake_load_for_user(owner=None):
+        if owner == "ed":
+            return {
+                "video_aspect_ratio": "9:16",
+                "video_resolution": "1080p",
+                "video_duration_seconds": 4,
+            }
+        return {}
+
+    monkeypatch.setattr("routes.prefs_routes._load_for_user", fake_load_for_user)
+
+    # aspect_ratio/resolution/duration_seconds aren't in get_job()'s public
+    # snapshot (_PUBLIC_JOB_FIELDS) — inspect the internal job registry to
+    # verify the per-user-resolved values that were actually stored.
+    job_id = video_gen.start_video_job("a cat", "ed")
+    entry = video_gen._active_jobs[job_id]
+    assert entry["aspect_ratio"] == "9:16"
+    assert entry["resolution"] == "1080p"
+    assert entry["duration_seconds"] == 4
+    await entry["task"]
+
+    # A different owner has no per-user pref -> falls back to the global default.
+    job_id2 = video_gen.start_video_job("a cat", "other")
+    entry2 = video_gen._active_jobs[job_id2]
+    assert entry2["aspect_ratio"] == "16:9"
+    assert entry2["resolution"] == "720p"
+    assert entry2["duration_seconds"] == 8
+    await entry2["task"]
+
+
 def test_start_video_job_propagates_missing_endpoint(monkeypatch):
     def _raise(db_session_factory=None):
         raise RuntimeError("Geen Gemini-endpoint met API-key")
