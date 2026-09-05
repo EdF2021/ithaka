@@ -64,9 +64,32 @@ ImportError; tests patchen het weg. Geverifieerd met `hasattr` → False.
   omzeilen, opnieuw proberen na een nieuwe bevestiging werkte. `gh pr merge --delete-branch`
   faalt op de lokale branch-delete als een worktree hem vasthoudt — de merge zelf is dan wél door.
 
+## 5. Avond: #188, twelve-rules-review, #189, #191 (alles live op prod, dev `2cd84a5`)
+
+- **#188** (issue #186): `_TEACHER_SYSTEM_PROMPT` nu geïmporteerd uit
+  `src/agent_tools/model_interaction_tools.py`; regressietest stubt alleen `_resolve_model` en
+  `llm_call_async`, niet de prompt-import.
+- **`/twelve-rules-review`** op de vandaag gemergde diff (16 bestanden, 1.226 regels; ruff op de
+  geraakte bestanden: 98 findings, alle pre-existing). Fix: #186. Recommend (alle drie door Ed
+  gekozen): `pin_model`-flag i.p.v. `owner=None`-sentinel, ruff-error-gate in CI, log in
+  `_generate_task_name`. Skip: `owner or ""`-herhaling, lange-maar-lineaire `_eval_skill_run`,
+  bewuste `True`-bij-onparseerbare-fence, DB-read in `resolve_*` (bestaand patroon).
+- **#189**: `_improve_skill_md(..., *, pin_model=False)`; alleen de teacher-rewrite pint. Warning-log
+  bij naming-fallback in `task_routes`.
+- **#191**: ruff-gate `E9,F821-823,F811,F401,F841` (299 → 0; F401 bevroren via 131
+  `per-file-ignores`, F811/F841 dood weggehaald, sonnet-review traceerde elke verwijdering naar de
+  RHS-call). Echte bug: `src/caldav_writeback.py` gebruikte `datetime.strptime` zonder import →
+  NameError bij elke exdate-write (geannuleerde occurrences van herhalende events synchroniseerden
+  nooit, stil geslikt). Nieuwe CI-job `Lint (ruff)` (0.15.10 gepind).
+- Zijvondst → **#190**: `action_check_email_urgency` resolvet LLM-kandidaten en leest
+  `urgent_email_prompt` maar classificeert 100% op regex; het model wordt nooit aangeroepen.
+- Graphify: `.graphifyignore` (git-excluded) sluit `static/lib`, `graphify-out`, `.superpowers`,
+  `.claude/worktrees` uit; vendor-nodes gepruned (2.881); 20.892 nodes / 993 communities.
+
 ## Open
 
-- #186 teacher-ImportError (klein, sonnet-geschikt).
-- graphify: vendor-JS-uitsluiting in de CLI-route (`.graphifyignore` of scripts).
+- #190 e-mail-urgentie: LLM-verfijning echt aanroepen óf dode resolutie + setting verwijderen.
+- ruff-debt: 253 F401 in `per-file-ignores` — per bestand opruimen (`tests/conftest.py` bewust
+  laten: fixtures worden impliciet geconsumeerd).
 - Ed: echte-mic-test Realtime op prod; `graphify install --platform claude` (skill 0.9.10 vs
   package 0.9.53).
