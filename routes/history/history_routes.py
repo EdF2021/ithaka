@@ -673,6 +673,8 @@ def setup_history_routes(session_manager) -> APIRouter:
             compact_url = util_url or session.endpoint_url
             compact_model = util_model or session.model
             compact_headers = util_headers if util_url else session.headers
+            if not compact_url or not compact_model:
+                raise HTTPException(400, "No model configured for compaction")
 
             from src.context_compactor import SELF_SUMMARY_SYSTEM_PROMPT
             compaction_count = sum(1 for m in session.history if isinstance(m, ChatMessage) and "[Conversation summary" in (m.content or ""))
@@ -766,6 +768,8 @@ def setup_history_routes(session_manager) -> APIRouter:
                 "after": pct_after,
             }
 
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Manual compact error {session_id}: {e}")
             raise HTTPException(500, str(e))

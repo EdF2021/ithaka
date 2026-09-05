@@ -23,6 +23,8 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
@@ -253,6 +255,36 @@ async def test_eval_skill_run_owner_reaches_candidates_and_falls_back(monkeypatc
     assert result["verdict"] == "pass"
 
 
+async def test_eval_skill_run_chain_wide_failure_calls_chain_exactly_once(monkeypatch):
+    """Fix-round-1 regression: a fully-down chain (every candidate raises)
+    must stop after ONE pass over the candidate list, not retry the whole
+    chain a second time. The 2-attempt loop exists to re-ask an unparseable
+    verdict, not to re-dial a dead transport — retrying transport failure
+    turned a fully-down chain with F fallbacks into a 2*(1+F)*180s stall
+    (~18 min at F=2) instead of the intended single ~(1+F)*180s pass."""
+    import routes.skills_routes as sr
+
+    llm_calls = []
+
+    def fake_candidates(*a, **kw):
+        return [("http://fallback", "fallback-model", {})]
+
+    async def fake_llm_call_async(url, model, messages, **kwargs):
+        llm_calls.append(url)
+        raise RuntimeError(f"endpoint down: {url}")
+
+    monkeypatch.setattr(endpoint_resolver, "resolve_utility_fallback_candidates", fake_candidates)
+    monkeypatch.setattr(llm_core, "llm_call_async", fake_llm_call_async)
+
+    result = await sr._eval_skill_run(
+        "skill md", "task", "transcript", "http://primary", "primary-model", {}, owner="alice"
+    )
+
+    # Exactly one pass over [primary, fallback] — NOT two.
+    assert llm_calls == ["http://primary", "http://fallback"]
+    assert result["verdict"] == "unknown"
+
+
 async def test_eval_skill_necessity_owner_reaches_candidates_and_falls_back(monkeypatch):
     import routes.skills_routes as sr
 
@@ -385,6 +417,41 @@ async def test_history_compact_session_owner_reaches_candidates_and_falls_back(m
     assert owner_calls == ["alice"]
     assert llm_calls == ["http://primary", "http://fallback"]
     assert result["status"] == "ok"
+
+
+async def test_history_compact_session_with_no_model_raises_400_not_500(monkeypatch):
+    """Fix-round-1 minor: history_routes.py's compact_session must guard an
+    empty (url, model) pick the same way session_routes.py's sibling already
+    does — a clear 400 "No model configured for compaction", not a 500 from
+    llm_call_async_with_fallback's "No model endpoint configured" bubbling up
+    through the function's broad `except Exception`."""
+    import routes.history.history_routes as hroutes
+    from core.models import ChatMessage
+
+    monkeypatch.setattr(endpoint_resolver, "resolve_endpoint", lambda *a, **kw: (None, None, {}))
+    monkeypatch.setattr(endpoint_resolver, "resolve_utility_fallback_candidates", lambda *a, **kw: [])
+
+    monkeypatch.setattr(hroutes, "_verify_session_owner", lambda *a, **kw: None)
+    monkeypatch.setattr(hroutes, "_reject_compact_during_active_run", lambda *a, **kw: None)
+
+    session = SimpleNamespace(
+        history=[ChatMessage(role="user", content=f"msg {i}") for i in range(8)],
+        endpoint_url="", model="", headers={},
+        message_count=0,
+        get_context_messages=lambda: [],
+    )
+    session_manager = SimpleNamespace(get_session=lambda sid: session, save_sessions=lambda: None)
+
+    router = hroutes.setup_history_routes(session_manager)
+    compact_session = _endpoint(router, "POST", "/api/session/{session_id}/compact")
+
+    request = _req("alice")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await compact_session(request, "sess-1")
+
+    assert exc_info.value.status_code == 400
+    assert "No model configured" in exc_info.value.detail
 
 
 # ───────────────────────── routes/session_routes.py:~1036 ──────────────────

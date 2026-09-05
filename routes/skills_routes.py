@@ -240,7 +240,13 @@ async def _eval_skill_run(skill_md: str, task: str, transcript: str,
 
     # Two attempts: the first lets the judge reason; if a heavy reasoning model
     # burns its budget inside <think> and never emits the JSON, the second
-    # forbids thinking and demands the JSON immediately.
+    # forbids thinking and demands the JSON immediately. The retry exists for
+    # an unparseable verdict, NOT for a transport failure: llm_call_async_with_
+    # fallback already tries every candidate in the chain before raising, so an
+    # exception here means the WHOLE chain is down — retrying would just walk
+    # the same (now possibly longer) candidate list a second time. Break
+    # instead, bounding the worst case to one full pass over the chain
+    # (at most (1 + len(fallbacks)) * 180s) instead of two.
     last_text = ""
     last_err = None
     for attempt in range(2):
@@ -260,10 +266,10 @@ async def _eval_skill_run(skill_md: str, task: str, transcript: str,
                 temperature=0.1, max_tokens=32768, timeout=180,
             )
         except Exception as e:
-            # Don't give up on a transient first-attempt error — let the second
-            # (no-think) attempt run before reporting failure.
+            # Every candidate in the chain just failed — a second attempt
+            # would only repeat the same doomed calls. Stop here.
             last_err = e
-            continue
+            break
         last_text = (raw or '')
         parsed = _parse(raw)
         if parsed is not None:
