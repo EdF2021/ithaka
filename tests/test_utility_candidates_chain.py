@@ -14,10 +14,10 @@ Each site is checked for two properties:
 
 routes/chat_routes.py:~620 is out of scope (session-chosen model, deliberately
 no fallback) and src/teacher_escalation.py's _call_teacher / the teacher-only
-_improve_skill_md call are deliberately NOT wrapped (see comments at those
-call sites) — both keep the caller pinned to one specific model whose spec
-is stamped into an audit/skill record, so a silent fallback would misattribute
-the result to a model that never produced it.
+_improve_skill_md(pin_model=True) call are deliberately NOT wrapped (see
+comments at those call sites) — both keep the caller pinned to one specific
+model whose spec is stamped into an audit/skill record, so a silent fallback
+would misattribute the result to a model that never produced it.
 """
 import tempfile
 from types import SimpleNamespace
@@ -175,6 +175,56 @@ async def test_task_generate_task_name_owner_reaches_candidates_and_falls_back(m
     assert owner_calls == ["alice"]
     assert llm_calls == ["http://primary", "http://fallback"]
     assert result["name"] == "Daily News Digest"
+
+
+async def test_task_generate_task_name_logs_swallowed_exception(monkeypatch, caplog):
+    """When the whole fallback chain raises, _generate_task_name falls back to
+    a prompt slice silently to the caller — but it must log the swallowed
+    exception (twelve-rules review of #187) instead of dropping it."""
+    import logging
+    import routes.task_routes as troutes
+
+    tmpdb = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    engine = create_engine(
+        f"sqlite:///{tmpdb.name}", connect_args={"check_same_thread": False}, poolclass=NullPool,
+    )
+    cdb.Base.metadata.create_all(engine)
+    TS = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr(troutes, "SessionLocal", TS)
+
+    db = TS()
+    try:
+        db.add(DbSession(
+            id="sess-1", name="s", owner="alice",
+            endpoint_url="http://primary", model="primary-model", headers={},
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    monkeypatch.setattr(endpoint_resolver, "resolve_utility_fallback_candidates", lambda *a, **kw: [])
+
+    async def fake_llm_call_async(url, model, messages, **kwargs):
+        raise RuntimeError("endpoint down")
+
+    monkeypatch.setattr(llm_core, "llm_call_async", fake_llm_call_async)
+
+    router = troutes.setup_task_routes(MagicMock())
+    create_task = _endpoint(router, "POST", "/api/tasks")
+
+    request = _req("alice")
+    req = troutes.TaskCreate(
+        prompt="summarize my day please", task_type="llm", trigger_type="webhook",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="routes.task_routes"):
+        result = await (create_task(request, req))
+
+    assert result["name"] == "summarize my day please"[:50]
+    assert any(
+        "Task name generation failed" in rec.message and "endpoint down" in rec.message
+        for rec in caplog.records
+    )
 
 
 # ───────────────────── src/teacher_escalation.py:~417 ───────────────────────
@@ -335,11 +385,12 @@ async def test_improve_skill_md_with_owner_reaches_candidates_and_falls_back(mon
     assert result is not None
 
 
-async def test_improve_skill_md_without_owner_skips_the_chain(monkeypatch):
-    """Pin the teacher-escalation exception: owner=None (the default, and what
-    the teacher-rewrite call site passes) must make a single direct call on
-    (url, model) with no fallback chain consulted at all — a silent fallback
-    there would misattribute a teacher rewrite to a different model."""
+async def test_improve_skill_md_pin_model_skips_the_chain(monkeypatch):
+    """Pin the teacher-escalation exception: `pin_model=True` (what the
+    teacher-rewrite call site passes) must make a single direct call on
+    (url, model) with no fallback chain consulted at all — regardless of
+    `owner` — a silent fallback there would misattribute a teacher rewrite
+    to a different model."""
     import routes.skills_routes as sr
 
     calls = []
@@ -357,11 +408,30 @@ async def test_improve_skill_md_without_owner_skips_the_chain(monkeypatch):
 
     verdict = {"summary": "needs work", "issues": []}
     result = await (
-        sr._improve_skill_md("old md", verdict, "transcript", "http://teacher", "teacher-model", {})
+        sr._improve_skill_md("old md", verdict, "transcript", "http://teacher", "teacher-model", {},
+                             owner="alice", pin_model=True)
     )
 
     assert result == "teacher rewrite"
     assert calls == []  # utility fallback chain never consulted
+
+
+async def test_improve_skill_md_without_owner_uses_the_chain(monkeypatch):
+    """owner=None WITHOUT pin_model must still go through the utility
+    fallback chain (the chain resolver accepts owner=None just fine) —
+    only `pin_model=True` pins to a single model with no fallback."""
+    import routes.skills_routes as sr
+
+    owner_calls, llm_calls = _patch_fallback_chain(monkeypatch, success_text="# corrected SKILL.md\nname: x\n")
+
+    verdict = {"summary": "needs work", "issues": []}
+    result = await (
+        sr._improve_skill_md("old md", verdict, "transcript", "http://primary", "primary-model", {})
+    )
+
+    assert owner_calls == [None]
+    assert llm_calls == ["http://primary", "http://fallback"]
+    assert result is not None
 
 
 # ───────────────────── routes/history/history_routes.py:~680 ───────────────

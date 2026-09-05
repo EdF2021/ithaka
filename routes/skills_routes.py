@@ -750,15 +750,17 @@ async def _run_skill_test_once(md: str, task: str, url, model, headers, owner) -
 
 
 async def _improve_skill_md(skill_md: str, verdict: dict, transcript: str, url, model, headers,
-                            owner: Optional[str] = None):
+                            owner: Optional[str] = None, *, pin_model: bool = False):
     """Have a model rewrite SKILL.md to fix the reviewer's issues. Returns the
     corrected markdown, or None if it couldn't produce a usable change.
 
-    Pass `owner` to chain the configured utility fallbacks behind (url, model)
-    (#183 part B). Leave it None for the teacher-escalation call: that call
-    deliberately wants ONLY the configured teacher model — the audit record
-    stamps `by_teacher=True, teacher_model=...` on the result, so silently
-    falling back to a utility model would misattribute the rewrite.
+    By default this chains the configured utility fallbacks behind (url, model)
+    (#183 part B) — `owner` is passed straight to that chain resolver, which
+    accepts None just fine. Pass `pin_model=True` to call ONLY (url, model,
+    headers) with no fallback: the teacher-escalation call deliberately wants
+    ONLY the configured teacher model — the audit record stamps
+    `by_teacher=True, teacher_model=...` on the result, so silently falling
+    back to a utility model would misattribute the rewrite.
     """
     import re as _re
     from src.llm_core import llm_call_async, llm_call_async_with_fallback
@@ -785,15 +787,15 @@ async def _improve_skill_md(skill_md: str, verdict: dict, transcript: str, url, 
     messages = [{"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg}]
     try:
-        if owner is not None:
+        if pin_model:
+            raw = await llm_call_async(url, model, messages,
+                                       temperature=0.2, max_tokens=16384, headers=headers, timeout=180)
+        else:
             raw = await llm_call_async_with_fallback(
                 _utility_candidates(url, model, headers, owner),
                 messages,
                 temperature=0.2, max_tokens=16384, timeout=180,
             )
-        else:
-            raw = await llm_call_async(url, model, messages,
-                                       temperature=0.2, max_tokens=16384, headers=headers, timeout=180)
     except Exception as e:
         logger.warning(f"Audit: improve call failed: {e}")
         return None
@@ -947,11 +949,12 @@ async def _audit_one_skill(skills_manager, skill, url, model, headers,
         teacher_ran = True
         t_url, t_model, t_headers = teacher
         log(f"{name}: teacher {t_model} rewriting the skill…")
-        # No owner= here on purpose (#183 part B): this must run on the
-        # TEACHER model specifically — set_audit() below stamps
-        # by_teacher=True, teacher_model=t_model, so a silent utility
-        # fallback would misattribute the rewrite.
-        t_md = await _improve_skill_md(md, verdict, transcript, t_url, t_model, t_headers)
+        # pin_model=True here on purpose (#183 part B, twelve-rules review of
+        # #187): this must run on the TEACHER model specifically —
+        # set_audit() below stamps by_teacher=True, teacher_model=t_model, so
+        # a silent utility fallback would misattribute the rewrite.
+        t_md = await _improve_skill_md(md, verdict, transcript, t_url, t_model, t_headers,
+                                       owner=owner, pin_model=True)
         if t_md and t_md.strip() != md.strip() and _apply_skill_md(skills_manager, name, t_md, owner):
             md = t_md
         # Re-test with the STUDENT model (the model the skill runs under in use).
