@@ -67,13 +67,45 @@ def _fenced(data):
 def test_detects_bare_json_and_fence_as_v2():
     assert is_infographic_v2(json.dumps(_valid_data())) is True
     assert is_infographic_v2(_fenced(_valid_data())) is True
-    assert is_infographic_v2("  \n```json\n{\"a\":1}\n```") is True
+    # A fenced object that parses but isn't the v2 content model (no
+    # "blocks"/"title") is not a genuine v2 payload — see
+    # test_json_example_fence_in_legacy_markdown_is_not_v2 below for the
+    # full regression this guards against.
+    assert is_infographic_v2("  \n```json\n{\"a\":1}\n```") is False
 
 
 def test_detects_legacy_markdown_as_not_v2():
     assert is_infographic_v2("# Titel\n\n## Key numbers\n- **3** — x\n") is False
     assert is_infographic_v2("") is False
     assert is_infographic_v2(None) is False
+
+
+def test_json_example_fence_in_legacy_markdown_is_not_v2():
+    """A legacy poster that merely quotes a ```json example must still
+    render through the legacy path, not the v2 "kon niet worden gerenderd"
+    fallback — the fence has none of the v2 content-model shape
+    (no "blocks" list, no "title")."""
+    md = (
+        "# Voorbeeldconfiguratie\n\n"
+        "## Key numbers\n- **3** — panelen\n\n"
+        "## Sectie\n- Hier een voorbeeld van het dataformaat:\n\n"
+        "```json\n{\"a\": 1, \"b\": 2}\n```\n\n"
+        "> takeaway\n"
+    )
+    assert is_infographic_v2(md) is False
+    out = generate_infographic(title=None, markdown=md, notebook_name="NB", generated_at=datetime(2026, 9, 3))
+    assert 'class="ig-grid"' in out
+    assert "ig2-wrap" not in out
+
+
+def test_genuine_v2_payload_preceded_by_prose_is_still_detected():
+    """The model sometimes prefaces the fenced v2 JSON with a sentence —
+    that must still be detected as v2, not treated as legacy markdown."""
+    md = "Hier is de infographic, met wat uitleg vooraf over de aanpak:\n\n```json\n" + json.dumps(_valid_data()) + "\n```\n"
+    assert is_infographic_v2(md) is True
+    out = generate_infographic(title=None, markdown=md, notebook_name="NB", generated_at=datetime(2026, 9, 3))
+    assert 'class="ig2-wrap"' in out
+    assert "ig-grid\"" not in out
 
 
 # ---- extract_infographic: happy path -------------------------------------
@@ -153,6 +185,24 @@ def test_extract_rejects_schema_violations(mutate, fragment):
     with pytest.raises(ValueError) as exc:
         extract_infographic(json.dumps(raw))
     assert fragment.lower() in str(exc.value).lower()
+
+
+def test_extract_rejects_comparison_with_more_than_four_rows():
+    raw = _valid_data()
+    row = raw["blocks"][2]["rows"][0]
+    raw["blocks"][2]["rows"] = [copy.deepcopy(row) for _ in range(5)]
+    with pytest.raises(ValueError) as exc:
+        extract_infographic(json.dumps(raw))
+    assert "comparison heeft 2 tot 4 rows nodig" in str(exc.value)
+
+
+def test_extract_rejects_key_numbers_with_more_than_five_items():
+    raw = _valid_data()
+    item = raw["blocks"][3]["items"][0]
+    raw["blocks"][3]["items"] = [copy.deepcopy(item) for _ in range(6)]
+    with pytest.raises(ValueError) as exc:
+        extract_infographic(json.dumps(raw))
+    assert "key_numbers heeft 3 tot 5 items nodig" in str(exc.value)
 
 
 @pytest.mark.parametrize("prompt", [

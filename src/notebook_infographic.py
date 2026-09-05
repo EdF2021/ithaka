@@ -48,7 +48,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, NoReturn, Optional, Tuple
 
 from src.notebook_slides import _JSON_FENCE_RE
 
@@ -718,19 +718,55 @@ MIN_BLOCKS, MAX_BLOCKS = 5, 8
 MAX_COLUMNS = 2
 
 
+def _fence_body_looks_like_v2(raw: str) -> bool:
+    """True when a fenced JSON candidate is a v2 content model, or unparseable.
+
+    Only used for the ```json-fence-anywhere-in-content case: a legacy
+    markdown poster can legitimately contain a ```json example fence (e.g.
+    illustrating some unrelated data) that happens to parse to *some*
+    object without being the v2 content model at all — that must not be
+    mistaken for v2. So once the body parses successfully, require the
+    top-level shape extract_infographic itself needs: a "blocks" list and a
+    "title" string. A body that starts with "{" but fails to parse (e.g.
+    truncated model output) still counts as a v2 attempt so it reaches
+    extract_infographic and raises its normal (Dutch) validation error
+    instead of silently falling back to the legacy renderer.
+    """
+    raw = (raw or "").strip()
+    if not raw.startswith("{"):
+        return False
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return True
+    return isinstance(data, dict) and isinstance(data.get("blocks"), list) and isinstance(data.get("title"), str)
+
+
 def is_infographic_v2(content: Optional[str]) -> bool:
     """True when stored content is the v2 JSON model (bare object or ```json fence).
+
+    A bare object (the whole trimmed content starts with "{") is always
+    treated as a v2 attempt, valid or not — extract_infographic does the
+    real validation and its error is what should surface, not a silent
+    legacy fallback.
 
     The fence may be preceded by prose (the model sometimes prefaces the
     fenced block with a sentence), so this searches for the fence anywhere
     in the content rather than anchoring at the start of the string — same
-    approach as extract_infographic's own _JSON_FENCE_RE.search.
+    approach as extract_infographic's own _JSON_FENCE_RE.search. But an
+    unanchored search over legacy markdown can also land on an unrelated
+    ```json example fence that has nothing to do with the infographic
+    content model, so a fenced candidate additionally has to parse into an
+    object carrying the v2 top-level shape (see _fence_body_looks_like_v2)
+    before it counts as v2.
     """
     s = (content or "").strip()
     if s.startswith("{"):
         return True
     m = _JSON_FENCE_RE.search(content or "")
-    return bool(m and m.group(1).strip().startswith("{"))
+    if not m:
+        return False
+    return _fence_body_looks_like_v2(m.group(1))
 
 
 def _req_str(obj: dict, key: str, where: str, *, max_len: int, required: bool = True) -> Optional[str]:
@@ -836,7 +872,7 @@ def _validate_block(raw: object, where: str, *, nested: bool, seen_ids: set) -> 
     return block
 
 
-def _raise(msg: str):
+def _raise(msg: str) -> NoReturn:
     raise ValueError(msg)
 
 

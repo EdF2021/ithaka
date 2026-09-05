@@ -263,6 +263,27 @@ async def test_job_all_failed_ends_done_with_empty_map(monkeypatch):
     assert ill.load_illustrations(_content(doc_id)) == {}
 
 
+async def test_job_times_out_ends_done_with_error_increment(monkeypatch):
+    """asyncio.wait_for's TimeoutError branch in _run_job: whatever hasn't
+    landed yet is counted as an error, but the job still ends "done"
+    (never "error") — same recovery shape as a per-block failure."""
+    monkeypatch.setattr(ill, "JOB_TIMEOUT_SECONDS", 0.05)
+
+    async def hangs_forever(content, owner):
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(ill, "_generate_image", hangs_forever)
+    nb_id, art_id, doc_id = _make_rows(_data(1))
+    job_id = ill.start_illustration_job(nb_id, art_id, "own", _TS)
+    await ill._active_jobs[job_id]["task"]
+
+    job = ill.get_artifact_job(art_id, "own")
+    assert job["status"] == "done"
+    assert job["errors"] == 1
+    assert job["illustrations"] == {}
+    assert ill.load_illustrations(_content(doc_id)) == {}
+
+
 async def test_job_stops_when_artifact_deleted_mid_run(monkeypatch):
     nb_id, art_id, doc_id = _make_rows(_data(3))
     calls = []
