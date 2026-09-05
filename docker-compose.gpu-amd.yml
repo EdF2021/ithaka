@@ -74,6 +74,10 @@ services:
       - ITHAKA_MEETING_CHUNK_MAX_BYTES=${ITHAKA_MEETING_CHUNK_MAX_BYTES:-10485760}
       - ITHAKA_MEETING_AUDIO_MAX_BYTES=${ITHAKA_MEETING_AUDIO_MAX_BYTES:-524288000}
       - ITHAKA_ICS_MAX_BYTES=${ITHAKA_ICS_MAX_BYTES:-10485760}
+      # Pre-warm the tool index (FastEmbed load + 70 tool embeddings ≈ 14 s cold)
+      # so the first agent turn after a restart is not cut off by the 1.5 s
+      # tool-selection cap. Opt-in upstream; forwarded so .env can enable it.
+      - ITHAKA_STARTUP_WARMUPS=${ITHAKA_STARTUP_WARMUPS:-}
       # Allow CalDAV account URLs that resolve to private IPs (needed for the
       # bundled DavMail gateway reachable as http://davmail:1080 inside the
       # compose network). Set to 0 if you don't run the davmail service.
